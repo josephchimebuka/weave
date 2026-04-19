@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Identity ────────────────────────────────────────────────────────────────
+// Link-style user accounts. Cross-merchant recognition happens because the
+// widget sets the session cookie on its own origin; any merchant embedding
+// the widget reads the same session.
+
+model User {
+  id          String       @id @default(uuid())
+  email       String?      @unique
+  phoneE164   String?      @unique
+  kycLevel    String       @default("none") // "none" | "basic" | "verified"
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  sessions    Session[]
+  instruments Instrument[]
+  orders      Order[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model OtpChallenge {
+  id         String    @id @default(uuid())
+  channel    String    // "email" | "sms"
+  target     String    // email address or phoneE164
+  codeHash   String    // SHA-256 of the 6-digit code
+  purpose    String    // "login" | "verify_instrument"
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([target, purpose])
+}
+
+// ── Merchants ───────────────────────────────────────────────────────────────
+
+model Client {
+  id                        String       @id @default(uuid())
+  apiKey                    String       @unique
+  name                      String
+  defaultPayoutInstrumentId String?      // FK-ish (not enforced to avoid cycle with Instrument)
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+
+  orders                    Order[]
+  instruments               Instrument[]
+}
+
+// ── Instruments ─────────────────────────────────────────────────────────────
+// Unified model for "a thing money moves into/out of":
+//   • End-user funding sources (their bank, their wallet)
+//   • End-user personal payouts (where they want fiat/crypto sent)
+//   • Merchant payout destinations (merchant bank or wallet)
+//
+// assetKey encodes the rail + asset:
+//   "fiat:NGN" · "fiat:USD" · "crypto:BASE:USDC" · "crypto:STELLAR:USDC"
+
+model Instrument {
+  id                    String   @id @default(uuid())
+  ownerType             String   // "user" | "merchant"
+  userId                String?
+  user                  User?    @relation(fields: [userId],     references: [id], onDelete: Cascade)
+  merchantId            String?
+  merchant              Client?  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  kind                  String   // "bank_account" | "crypto_wallet"
+  assetKey              String
+  label                 String?
+
+  // Bank fields (null when kind = crypto_wallet)
+  bankInstitution       String?
+  bankAccountIdentifier String?
+  bankAccountName       String?
+
+  // Crypto fields (null when kind = bank_account)
+  walletAddress         String?
+
+  verifiedAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  sourceOrders          Order[]   @relation("OrderSource")
+  destOrders            Order[]   @relation("OrderDest")
+
+  @@index([userId])
+  @@index([merchantId])
+  @@index([ownerType, assetKey])
+}
+
+// ── Orders + Route steps ────────────────────────────────────────────────────
+
+model Order {
+  id                 String       @id @default(uuid())
+  clientId           String
+  client             Client       @relation(fields: [clientId], references: [id])
+
+  userId             String?
+  user               User?        @relation(fields: [userId], references: [id])
+
+  sourceInstrumentId String
+  sourceInstrument   Instrument   @relation("OrderSource", fields: [sourceInstrumentId], references: [id])
+  destInstrumentId   String
+  destInstrument     Instrument   @relation("OrderDest",   fields: [destInstrumentId],   references: [id])
+
+  sourceAssetKey     String       // denormalized for quick filtering
+  destAssetKey       String
+  sourceAmount       Float
+  destAmount         Float?       // expected payout, filled after route plan
+  quoteRate          Float?       // source→dest rate snapshot at creation
+
+  status             String       // "awaiting_deposit" | "processing" | "completed" | "failed" | "refunded"
+  routePlan          Json?        // RoutePlan snapshot from the router
+  reference          String?      // merchant-supplied reference
+  senderFeeUsd       Float?
+  appFeeUsd          Float?
+  bridgeFeeUsd       Float?
+
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  steps              RouteStep[]
+  webhookLogs        WebhookLog[]
+
+  @@index([clientId])
+  @@index([userId])
+  @@index([status])
+}
+
+model RouteStep {
+  id          String    @id @default(uuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sequence    Int
+  provider    String    // "paycrest" | "chainrails" | "stellar_anchor" | "direct"
+  fromAsset   String
+  toAsset     String
+  amountIn    Float?
+  amountOut   Float?
+  feeUsd      Float?
+  status      String    // "pending" | "awaiting_deposit" | "in_flight" | "done" | "failed"
+  externalId  String?   // provider-side id (Paycrest orderId, ChainRails intent id, ...)
+  depositAddress String? // for crypto steps: where the user (or prior hop) sends funds
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([orderId, sequence])
+  @@index([externalId])
+  @@index([provider, externalId])
+}
+
+// ── Webhooks ────────────────────────────────────────────────────────────────
+
+model WebhookLog {
+  id         String   @id @default(uuid())
+  orderId    String?
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  source     String   // "chainrails" | "paycrest" | "stellar_anchor"
+  event      String
+  externalId String?
+  payload    Json
+  processed  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@unique([source, event, externalId])
+}
