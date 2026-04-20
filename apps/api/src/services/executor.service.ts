@@ -9,6 +9,7 @@
 import { prisma } from '../lib/prisma';
 import { paycrest } from './paycrest.service';
 import { chainRails } from './chainrails.service';
+import { nearIntents } from './nearintents.service';
 import { parseAsset } from '../lib/assets';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 
@@ -16,6 +17,11 @@ export interface ExecutorInput {
   orderId:          string;
   plan:             RoutePlan;
   sourceAmount:     number;
+  // USD-equivalent of sourceAmount. Used as the amountIn for every step past
+  // the first, since all intermediate legs are USDC on Base (≈ USD). Without
+  // it, a SOL→USDC→NGN route would hand Paycrest the SOL figure (0.006)
+  // instead of the USDC figure (~0.52) and Paycrest's rate validation fails.
+  usdEquivalent:    number;
   reference:        string;
   merchantMemo:     string;
   // Source-side context, set per source-asset kind:
@@ -30,6 +36,7 @@ export interface ExecutorInput {
 export interface FirstStepAction {
   screen:         'collect_crypto' | 'collect_fiat';
   depositAddress?: string;                // crypto
+  depositMemo?:    string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
   amount?:         number;                // crypto
   token?:          string;                // crypto
   chain?:          string;                // crypto
@@ -52,8 +59,21 @@ export interface ExecuteResult {
   feeSummary:  { senderFeeUsd: number; appFeeUsd: number; bridgeFeeUsd: number };
 }
 
-const SENDER_FEE_BPS = Number(process.env.SENDER_FEE_BPS ?? 75);
-const APP_FEE_BPS    = Number(process.env.APP_FEE_BPS    ?? 10);
+const SENDER_FEE_BPS      = Number(process.env.SENDER_FEE_BPS      ?? 75);
+const APP_FEE_BPS         = Number(process.env.APP_FEE_BPS         ?? 10);
+// Matches the same env the quote endpoint uses for its gross-up. NEAR will
+// abort the swap if it can't deliver amountOut within this tolerance of the
+// quoted figure, so the buffer the quote baked in must equal (or exceed) what
+// we ask NEAR to honour here — otherwise the order can complete with less
+// USDC than we priced for and the merchant underpays.
+const SLIPPAGE_BUFFER_BPS = Number(process.env.SLIPPAGE_BUFFER_BPS ?? 200);
+
+// Paycrest validates refundAddress as an EVM address because its refund leg
+// sits on Base (USDC). The user's origin-chain refund address (e.g. Solana)
+// is not acceptable there — we route Paycrest refunds to a system-owned Base
+// wallet instead. The user's own refundAddress still flows to NEAR Intents,
+// which needs it valid on the origin chain.
+const WEAVE_EVM_REFUND_ADDRESS = process.env.WEAVE_EVM_REFUND_ADDRESS ?? '';
 
 // ── Provider dispatchers ────────────────────────────────────────────────────
 
@@ -62,6 +82,7 @@ interface StepExecution {
   amountIn:       number;
   amountOut:      number;
   depositAddress: string | null;
+  depositMemo:    string | null;
   expiresAt:      string | null;
   feeUsd:         number;
   bankDetails?:   FirstStepAction['bankDetails'];
@@ -98,11 +119,15 @@ async function runPaycrestOfframp(
 
   const prov = pc.providerAccount as { receiveAddress: string; validUntil: string };
   const senderFeeUsd = amountIn * (SENDER_FEE_BPS / 10000);
+  // pc.amount is the net crypto figure (post-senderFee); pc.rate is fiat/crypto.
+  // Their product is the fiat amount the merchant receives.
+  const fiatSettled = Number(pc.amount) * Number(pc.rate);
   return {
     externalId:     pc.id,
     amountIn,
-    amountOut:      Number(pc.amount) || amountIn,           // fiat amount settled
+    amountOut:      Number.isFinite(fiatSettled) && fiatSettled > 0 ? fiatSettled : amountIn,
     depositAddress: prov.receiveAddress,
+    depositMemo:    null,
     expiresAt:      prov.validUntil,
     feeUsd:         senderFeeUsd,
   };
@@ -139,6 +164,7 @@ async function runPaycrestOnramp(
     amountIn,
     amountOut:      Number(prov.amountToTransfer) || amountIn,
     depositAddress: null,
+    depositMemo:    null,
     expiresAt:      prov.validUntil,
     feeUsd:         senderFeeUsd,
     bankDetails: {
@@ -179,8 +205,52 @@ async function runChainRailsBridge(
     amountIn,
     amountOut:      amountIn, // bridge fees accounted separately
     depositAddress: intent.intent_address,
+    depositMemo:    null,
     expiresAt:      intent.expires_at,
     feeUsd:         Number(intent.fees_in_usd) || 0,
+  };
+}
+
+// NEAR Intents cross-chain swap. Each quote returns a deposit address (+ memo
+// on some chains) where the funder sends the source token. NEAR routes, swaps
+// and bridges in the background, then delivers the destination asset to our
+// provided `recipient` (the next hop — Paycrest's receive address, or the
+// merchant wallet for crypto payouts).
+async function runNearIntentsSwap(
+  step:                RoutePlanStep,
+  amountIn:            number,
+  downstreamRecipient: string,
+  refundAddress:       string,
+  ref:                 string,
+): Promise<StepExecution> {
+  const from = parseAsset(step.fromAsset);
+  const to   = parseAsset(step.toAsset);
+  if (from.kind !== 'crypto' || to.kind !== 'crypto') throw new Error('nearintents: asset mismatch');
+  if (!downstreamRecipient) throw new Error('nearintents: missing downstream recipient');
+  if (!refundAddress)       throw new Error('nearintents: missing refundTo');
+
+  const resp = await nearIntents.createQuote({
+    sourceAssetKey: step.fromAsset,
+    destAssetKey:   step.toAsset,
+    amount:         amountIn,
+    refundTo:       refundAddress,
+    recipient:      downstreamRecipient,
+    slippageBps:    SLIPPAGE_BUFFER_BPS,
+    referral:       `weave-${ref}`.toLowerCase().slice(0, 32),
+  });
+
+  // NEAR expresses amounts in smallest units; amountOutFormatted is the human
+  // figure. Fall back to amountIn if the field is missing on a non-dry quote.
+  const amountOut = Number(resp.quote.amountOutFormatted) || amountIn;
+
+  return {
+    externalId:     resp.quote.depositAddress, // status lookups are keyed by depositAddress, not correlationId
+    amountIn,
+    amountOut,
+    depositAddress: resp.quote.depositAddress,
+    depositMemo:    resp.quote.depositMemo ?? null,
+    expiresAt:      resp.quote.deadline,
+    feeUsd:         Math.max(0, Number(resp.quote.amountInUsd) - Number(resp.quote.amountOutUsd)) || 0,
   };
 }
 
@@ -196,7 +266,10 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
   for (let i = last; i >= 0; i--) {
     const step     = plan.steps[i];
-    const amountIn = i === 0 ? input.sourceAmount : (executions[i + 1]?.amountOut ?? input.sourceAmount);
+    // Step 0 consumes the user's source-asset deposit. Downstream steps operate
+    // on USDC-on-Base (the only intermediate we route through today), so the
+    // USD-equivalent is the correct figure to hand them.
+    const amountIn = i === 0 ? input.sourceAmount : input.usdEquivalent;
 
     let exec: StepExecution;
 
@@ -204,7 +277,8 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       const from = parseAsset(step.fromAsset);
       if (from.kind === 'crypto') {
         if (!input.destBank) throw new Error('paycrest offramp requires destBank');
-        exec = await runPaycrestOfframp(step, amountIn, input.reference, input.merchantMemo, input.refundAddress ?? '', input.destBank);
+        if (!WEAVE_EVM_REFUND_ADDRESS) throw new Error('paycrest offramp requires WEAVE_EVM_REFUND_ADDRESS');
+        exec = await runPaycrestOfframp(step, amountIn, input.reference, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
       } else {
         if (!input.refundAccount) throw new Error('paycrest onramp requires refundAccount');
         if (!input.destWallet)    throw new Error('paycrest onramp requires destWallet');
@@ -213,6 +287,12 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     } else if (step.provider === 'chainrails') {
       if (!downstreamRecipient) throw new Error('chainrails step needs downstreamRecipient');
       exec = await runChainRailsBridge(step, amountIn, downstreamRecipient, input.refundAddress ?? '', input.reference);
+    } else if (step.provider === 'nearintents') {
+      // For the external-wallet flow the user may not have a refund address
+      // until they pick one. Fall back to destWallet — if the swap fails, at
+      // least the refund lands somewhere the merchant can recover from.
+      const refundTo = input.refundAddress || input.destWallet || downstreamRecipient || '';
+      exec = await runNearIntentsSwap(step, amountIn, downstreamRecipient ?? input.destWallet ?? '', refundTo, input.reference);
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');
@@ -222,6 +302,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         amountIn,
         amountOut:      amountIn,
         depositAddress: input.destWallet,
+        depositMemo:    null,
         expiresAt:      new Date(Date.now() + 30 * 60 * 1000).toISOString(),
         feeUsd:         0,
       };
@@ -249,6 +330,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
           feeUsd:      executions[i].feeUsd,
           externalId:  executions[i].externalId,
           depositAddress: executions[i].depositAddress,
+          depositMemo:    executions[i].depositMemo,
           status:      'awaiting_deposit',
           startedAt:   new Date(),
         },
@@ -265,6 +347,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       ? {
           screen:         'collect_crypto',
           depositAddress: firstExec.depositAddress ?? undefined,
+          depositMemo:    firstExec.depositMemo ?? undefined,
           amount:         firstExec.amountIn,
           token:          firstFrom.token,
           chain:          firstFrom.chain,
@@ -276,11 +359,17 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
           expiresAt:   firstExec.expiresAt ?? undefined,
         };
 
-  // Fee rollup.
-  const totalBridgeFee = executions.reduce((s, e, i) =>
-    s + (plan.steps[i].provider === 'chainrails' ? e.feeUsd : 0), 0);
-  const senderFeeUsd = input.sourceAmount * (SENDER_FEE_BPS / 10000);
-  const appFeeUsd    = input.sourceAmount * (APP_FEE_BPS    / 10000);
+  // Fee rollup. Bridge-category fees come from either ChainRails (EVM bridge)
+  // or NEAR Intents (any-chain swap+bridge). Paycrest fees flow through
+  // senderFee/appFee so they're excluded here.
+  const totalBridgeFee = executions.reduce((s, e, i) => {
+    const p = plan.steps[i].provider;
+    return s + ((p === 'chainrails' || p === 'nearintents') ? e.feeUsd : 0);
+  }, 0);
+  // Fee basis is the USD-equivalent of the order, not sourceAmount (which is
+  // in source-asset units — e.g. SOL — and would produce meaningless figures).
+  const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
+  const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS    / 10000);
 
   return {
     firstStep:  { sequence: 0, provider: firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },

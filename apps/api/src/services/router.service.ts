@@ -4,8 +4,16 @@
 // anchors, direct bank partnerships) drop in as additional edges.
 
 import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
+import { nearIntents } from './nearintents.service';
 
-export type Provider = 'paycrest' | 'chainrails' | 'stellar_anchor' | 'direct';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct';
+
+// Which checkout flow the caller is in. 'self' means the user signs with a
+// connected wallet (ChainRails can do this once it's fully wired). 'external'
+// means the widget shows a deposit address for a third party to pay — this
+// is what NEAR Intents is built for. Default is 'external' because CR is
+// not yet integrated.
+export type Flow = 'self' | 'external';
 
 export interface RoutePlanStep {
   provider:        Provider;
@@ -21,6 +29,7 @@ export interface RouteRequest {
   destAsset:   AssetKey;
   amount:      number; // denominated in sourceAsset
   urgency?:    'cheapest' | 'fastest';
+  flow?:       Flow;   // selects which cross-chain provider handles the crypto leg
 }
 
 export interface RoutePlan {
@@ -39,12 +48,14 @@ type Edge = {
   expectedFeeBps: number;
   expectedSecs:   number;
   note?:          string;
+  // Which checkout flow this edge is valid for. Omit = both.
+  flows?:         Flow[];
 };
 
 const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM'];
 
 const EDGES: Edge[] = [
-  // Paycrest offramp: any supported EVM USDC → fiat.
+  // Paycrest offramp: any supported EVM USDC → fiat. Terminal edge; flow-agnostic.
   {
     provider:       'paycrest',
     from:           (a) => a.kind === 'crypto' && a.token === 'USDC' && EVM_CHAINS.includes(a.chain),
@@ -62,7 +73,21 @@ const EDGES: Edge[] = [
     expectedSecs:   180,
     note:           'paycrest fiat→USDC',
   },
-  // ChainRails: any EVM USDC → USDC on Base (Paycrest's settlement chain).
+  // NEAR Intents: anything NEAR supports → USDC on Base. External-wallet flow.
+  // This is the primary cross-chain edge today. Coverage spans ~30 chains so
+  // we gate on nearIntents.chainIsKnown rather than an EVM allowlist.
+  {
+    provider:       'nearintents',
+    from:           (a) => a.kind === 'crypto' && nearIntents.chainIsKnown(a.chain),
+    to:             (a) => a.kind === 'crypto' && a.chain === 'BASE' && a.token === 'USDC',
+    expectedFeeBps: 25,
+    expectedSecs:   90,
+    note:           'nearintents → USDC on Base',
+    flows:          ['external'],
+  },
+  // ChainRails: any EVM USDC → USDC on Base. Self-wallet flow (user signs).
+  // Kept in the graph so the route planner is ready for when ChainRails is
+  // fully wired; it never fires today because no caller passes flow: 'self'.
   {
     provider:       'chainrails',
     from:           (a) => a.kind === 'crypto' && a.token === 'USDC' && EVM_CHAINS.includes(a.chain),
@@ -70,6 +95,7 @@ const EDGES: Edge[] = [
     expectedFeeBps: 15,
     expectedSecs:   60,
     note:           'chainrails USDC bridge → Base',
+    flows:          ['self'],
   },
   // Direct: same asset, no hop.
   {
@@ -87,6 +113,7 @@ const EDGES: Edge[] = [
 export function planRoute(req: RouteRequest): RoutePlan {
   const src = parseAsset(req.sourceAsset);
   const dst = parseAsset(req.destAsset);
+  const flow: Flow = req.flow ?? 'external';
 
   if (req.sourceAsset === req.destAsset) {
     return summarize([{
@@ -99,6 +126,10 @@ export function planRoute(req: RouteRequest): RoutePlan {
     }]);
   }
 
+  // Pre-filter edges by flow so the BFS traversal never considers a bridge
+  // that doesn't match the caller's checkout mode.
+  const edges = EDGES.filter(e => !e.flows || e.flows.includes(flow));
+
   // BFS with depth ≤ 3. Small edge set; swap for Dijkstra when
   // expectedFeeBps/expectedSecs start mattering across many providers.
   type Node = { asset: ParsedAsset; key: AssetKey; path: RoutePlanStep[] };
@@ -109,7 +140,7 @@ export function planRoute(req: RouteRequest): RoutePlan {
     const cur = queue.shift()!;
     if (cur.path.length >= 3) continue;
 
-    for (const edge of EDGES) {
+    for (const edge of edges) {
       if (!edge.from(cur.asset)) continue;
 
       // Candidate downstream assets: the destination, or a known intermediate.

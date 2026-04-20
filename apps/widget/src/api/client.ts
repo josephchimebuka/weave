@@ -28,6 +28,10 @@ export const cryptoKey = (chain: string, token: string)      => `crypto:${chain.
 
 export interface QuoteBreakdown {
   usdEquivalent: number;
+  // Amount the user must deposit, denominated in the source asset. Equal to
+  // usdEquivalent for stablecoins; for SOL/ETH/etc it's the USD figure
+  // divided by the live NEAR Intents token price.
+  sourceAmount:  number;
   senderFeeUsd:  number;
   appFeeUsd:     number;
   bridgeFeeUsd:  number;
@@ -79,6 +83,7 @@ export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstru
 export interface NextAction {
   screen:         'collect_crypto' | 'collect_fiat';
   depositAddress?: string;
+  depositMemo?:    string;    // required on XRP/TON/XLM/NEAR when routing via NEAR Intents
   amount?:         number;
   token?:          string;
   chain?:          string;
@@ -93,6 +98,8 @@ export interface NextAction {
   expiresAt?:     string;
 }
 
+export type Flow = 'self' | 'external';
+
 export interface CreateOrderResponse {
   order:      { id: string; status: string; sourceAssetKey: string; destAssetKey: string; sourceAmount: number; destAmount: number | null };
   nextAction: NextAction;
@@ -101,7 +108,17 @@ export interface CreateOrderResponse {
 
 export async function createOrder(
   apiKey: string,
-  payload: { source: InstrumentRef; dest?: InstrumentRef; amount: number; reference?: string },
+  payload: {
+    source: InstrumentRef;
+    dest?: InstrumentRef;
+    amount: number;
+    reference?: string;
+    flow?: Flow;
+    // Where refunds should go if the cross-chain swap fails. For the external
+    // flow this is the user's own wallet on the origin chain, collected in the
+    // widget — NOT the sender's own-chain balance, since we don't know it.
+    refundAddress?: string;
+  },
 ): Promise<CreateOrderResponse> {
   return apiFetch('/orders', apiKey, {
     method: 'POST',

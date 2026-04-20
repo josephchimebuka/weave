@@ -817,20 +817,93 @@ function ScreenError({ onNext, onBack }: { onNext: (s: string) => void; onBack: 
 
 // ── Deposit ──────────────────────────────────────────────────────────────────
 
+// Chain ids match the backend's canonical uppercase names (NearIntentsService.CHAIN_TO_NEAR keys)
+// so they flow straight through to NEAR Intents without a secondary mapping. Both native and
+// stablecoin entries are listed per chain where NEAR Intents has liquidity on each.
 const DEPOSIT_CHAINS = [
-  { id: 'BASE',    name: 'Base',      token: 'USDC', tint: '#1C4FE0', icon: '$', network: 'Base' },
-  { id: 'OP',      name: 'Optimism',  token: 'ETH',  tint: '#ff3f57', icon: 'Ξ', network: 'Optimism' },
-  { id: 'ARB',     name: 'Arbitrum',  token: 'USDC', tint: '#28A0F0', icon: '$', network: 'Arbitrum One' },
-  { id: 'POLYGON', name: 'Polygon',   token: 'USDC', tint: '#7B3FE4', icon: '$', network: 'Polygon' },
-  { id: 'STRK',    name: 'Starknet',  token: 'STRK', tint: '#EC796B', icon: 'S', network: 'Starknet' },
-  { id: 'BNB',     name: 'BNB Chain', token: 'USDT', tint: '#F0B90B', icon: 'T', network: 'BNB Smart Chain' },
+  // Base (our primary rail — USDC first)
+  { id: 'BASE',      name: 'Base',         token: 'USDC', tint: '#1C4FE0', icon: '$', network: 'Base' },
+  { id: 'BASE',      name: 'Base',         token: 'ETH',  tint: '#1C4FE0', icon: 'Ξ', network: 'Base' },
+  // Ethereum
+  { id: 'ETHEREUM',  name: 'Ethereum',     token: 'ETH',  tint: '#627EEA', icon: 'Ξ', network: 'Ethereum' },
+  { id: 'ETHEREUM',  name: 'Ethereum',     token: 'USDC', tint: '#627EEA', icon: '$', network: 'Ethereum' },
+  { id: 'ETHEREUM',  name: 'Ethereum',     token: 'USDT', tint: '#627EEA', icon: 'T', network: 'Ethereum' },
+  // Arbitrum / Optimism
+  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'ETH',  tint: '#28A0F0', icon: 'Ξ', network: 'Arbitrum One' },
+  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'USDC', tint: '#28A0F0', icon: '$', network: 'Arbitrum One' },
+  { id: 'OPTIMISM',  name: 'Optimism',     token: 'ETH',  tint: '#FF0420', icon: 'Ξ', network: 'Optimism' },
+  { id: 'OPTIMISM',  name: 'Optimism',     token: 'USDC', tint: '#FF0420', icon: '$', network: 'Optimism' },
+  // Polygon / BSC / Avalanche
+  { id: 'POLYGON',   name: 'Polygon',      token: 'POL',  tint: '#7B3FE4', icon: 'P', network: 'Polygon' },
+  { id: 'POLYGON',   name: 'Polygon',      token: 'USDC', tint: '#7B3FE4', icon: '$', network: 'Polygon' },
+  { id: 'BSC',       name: 'BNB Chain',    token: 'BNB',  tint: '#F0B90B', icon: 'B', network: 'BNB Smart Chain' },
+  { id: 'BSC',       name: 'BNB Chain',    token: 'USDT', tint: '#F0B90B', icon: 'T', network: 'BNB Smart Chain' },
+  { id: 'AVALANCHE', name: 'Avalanche',    token: 'AVAX', tint: '#E84142', icon: 'A', network: 'Avalanche C-Chain' },
+  { id: 'AVALANCHE', name: 'Avalanche',    token: 'USDC', tint: '#E84142', icon: '$', network: 'Avalanche C-Chain' },
+  // Other EVM L2s
+  { id: 'GNOSIS',    name: 'Gnosis',       token: 'USDC', tint: '#04795B', icon: '$', network: 'Gnosis Chain' },
+  { id: 'SCROLL',    name: 'Scroll',       token: 'USDC', tint: '#D9A26C', icon: '$', network: 'Scroll' },
+  { id: 'XLAYER',    name: 'X Layer',      token: 'USDT', tint: '#1E1E1E', icon: 'T', network: 'X Layer' },
+  { id: 'BERA',      name: 'Berachain',    token: 'BERA', tint: '#814625', icon: 'B', network: 'Berachain' },
+  // Non-EVM
+  { id: 'SOLANA',    name: 'Solana',       token: 'SOL',  tint: '#14F195', icon: 'S', network: 'Solana' },
+  { id: 'SOLANA',    name: 'Solana',       token: 'USDC', tint: '#14F195', icon: '$', network: 'Solana' },
+  { id: 'TRON',      name: 'Tron',         token: 'TRX',  tint: '#EF0027', icon: 'T', network: 'Tron' },
+  { id: 'TRON',      name: 'Tron',         token: 'USDT', tint: '#EF0027', icon: 'T', network: 'Tron' },
+  { id: 'NEAR',      name: 'NEAR',         token: 'NEAR', tint: '#111111', icon: 'N', network: 'NEAR' },
+  { id: 'NEAR',      name: 'NEAR',         token: 'USDC', tint: '#111111', icon: '$', network: 'NEAR' },
+  { id: 'TON',       name: 'TON',          token: 'TON',  tint: '#0098EA', icon: 'T', network: 'TON' },
+  { id: 'TON',       name: 'TON',          token: 'USDT', tint: '#0098EA', icon: 'T', network: 'TON' },
+  { id: 'SUI',       name: 'Sui',          token: 'SUI',  tint: '#4DA2FF', icon: 'S', network: 'Sui' },
+  { id: 'APTOS',     name: 'Aptos',        token: 'APT',  tint: '#111111', icon: 'A', network: 'Aptos' },
+  { id: 'STARKNET',  name: 'Starknet',     token: 'STRK', tint: '#EC796B', icon: 'S', network: 'Starknet' },
+  // Native-coin L1s
+  { id: 'BITCOIN',   name: 'Bitcoin',      token: 'BTC',  tint: '#F7931A', icon: '₿', network: 'Bitcoin' },
+  { id: 'XRP',       name: 'XRP Ledger',   token: 'XRP',  tint: '#23292F', icon: 'X', network: 'XRP Ledger' },
+  { id: 'STELLAR',   name: 'Stellar',      token: 'XLM',  tint: '#111111', icon: '★', network: 'Stellar' },
+  { id: 'CARDANO',   name: 'Cardano',      token: 'ADA',  tint: '#0033AD', icon: '₳', network: 'Cardano' },
+  { id: 'DOGE',      name: 'Dogecoin',     token: 'DOGE', tint: '#C2A633', icon: 'D', network: 'Dogecoin' },
+  { id: 'LITECOIN',  name: 'Litecoin',     token: 'LTC',  tint: '#345D9D', icon: 'L', network: 'Litecoin' },
+  { id: 'BCH',       name: 'Bitcoin Cash', token: 'BCH',  tint: '#8DC351', icon: 'B', network: 'Bitcoin Cash' },
+  { id: 'ZEC',       name: 'Zcash',        token: 'ZEC',  tint: '#F4B728', icon: 'Z', network: 'Zcash' },
+  { id: 'DASH',      name: 'Dash',         token: 'DASH', tint: '#008CE7', icon: 'D', network: 'Dash' },
 ];
 
-const DEPOSIT_CHAIN_TO_API: Record<string, string> = {
-  BASE:    'BASE',
-  OP:      'OPTIMISM',
-  ARB:     'ARBITRUM',
-  POLYGON: 'POLYGON',
+// Chains where the deposit destination tag/memo is part of the address — dropping
+// it sends the funds into the provider's pooled account and they become unrecoverable.
+const MEMO_REQUIRED_CHAINS = new Set(['XRP', 'TON', 'STELLAR', 'NEAR']);
+
+// Placeholder shown for the sender-wallet input per chain. Address shapes differ
+// enough that a single hint misleads users; these are the most common formats.
+const REFUND_ADDRESS_PLACEHOLDER: Record<string, string> = {
+  BASE:      '0x…',
+  ETHEREUM:  '0x…',
+  ARBITRUM:  '0x…',
+  OPTIMISM:  '0x…',
+  POLYGON:   '0x…',
+  BSC:       '0x…',
+  AVALANCHE: '0x…',
+  GNOSIS:    '0x…',
+  SCROLL:    '0x…',
+  XLAYER:    '0x…',
+  MONAD:     '0x…',
+  BERA:      '0x…',
+  SOLANA:    'e.g. 5Gh8…base58',
+  TRON:      'T…',
+  NEAR:      'alice.near or 64-hex',
+  TON:       'UQ… / EQ…',
+  SUI:       '0x… (64 chars)',
+  APTOS:     '0x… (64 chars)',
+  STARKNET:  '0x…',
+  BITCOIN:   'bc1… or 1…',
+  XRP:       'r…',
+  STELLAR:   'G…',
+  CARDANO:   'addr1…',
+  DOGE:      'D…',
+  LITECOIN:  'ltc1… or L…',
+  BCH:       'bitcoincash:q… or q…',
+  ZEC:       't1… or zs1…',
+  DASH:      'X…',
 };
 
 // EIP-681 deep-link params for ERC-20 `transfer` on EVM chains. Only populated for
@@ -857,39 +930,68 @@ const buildDepositQRPayload = (
 };
 
 function ScreenDeposit({
-  onNext, merchant, depositAddress, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, ready, apiKey, orderId,
+  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, ready, apiKey, orderId,
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
   depositAddress: string | null;
+  depositMemo: string | null;
   amountToSend: number | null;
   sourceToken: string | null;
   sourceChain: string | null;
   loading: boolean;
   error: string | null;
   ready: boolean;
-  onChainChange: (apiChain: string, token: string) => void;
+  onChainChange: (apiChain: string, token: string, refundAddress: string) => void;
   apiKey: string;
   orderId: string | null;
 }) {
-  const [chainIdx, setChainIdx] = useState(0);
+  // chainIdx stays null until the user picks a network — we don't want to
+  // spin up a NEAR Intents quote / Paycrest order on mount with an arbitrary default.
+  const [chainIdx, setChainIdx] = useState<number | null>(null);
   const [chainPickerOpen, setChainPickerOpen] = useState(false);
+  const [chainSearch, setChainSearch] = useState('');
+  const [refundAddress, setRefundAddress] = useState('');
+  const [orderSubmitted, setOrderSubmitted] = useState(false);
   const [copied, setCopied] = useState(false);
-  const chain = DEPOSIT_CHAINS[chainIdx];
+  const [memoCopied, setMemoCopied] = useState(false);
+  const filteredChains = chainSearch.trim()
+    ? DEPOSIT_CHAINS.map((c, i) => ({ c, i }))
+        .filter(({ c }) => {
+          const q = chainSearch.trim().toLowerCase();
+          return (
+            c.name.toLowerCase().includes(q) ||
+            c.token.toLowerCase().includes(q) ||
+            c.network.toLowerCase().includes(q) ||
+            c.id.toLowerCase().includes(q)
+          );
+        })
+    : DEPOSIT_CHAINS.map((c, i) => ({ c, i }));
+  const chain = chainIdx != null ? DEPOSIT_CHAINS[chainIdx] : null;
   const address = depositAddress ?? '';
-  const supported = DEPOSIT_CHAIN_TO_API[chain.id];
-  const displayToken = sourceToken ?? chain.token;
+  const memo = depositMemo ?? '';
+  const displayToken = sourceToken ?? chain?.token ?? '';
   const fallbackUsdc = merchant.amount / CURRENCIES[merchant.currency].rate;
   const displayAmount = amountToSend ?? fallbackUsdc;
   const qrPayload = buildDepositQRPayload(address, amountToSend, sourceChain, sourceToken);
   const lastFired = useRef<string | null>(null);
+  const memoRequired = chain ? MEMO_REQUIRED_CHAINS.has(chain.id) : false;
 
-  useEffect(() => {
-    if (!supported) return;
-    const key = `${supported}:${chain.token}`;
+  const submitRefundAndGenerate = () => {
+    if (!chain || !refundAddress.trim()) return;
+    const key = `${chain.id}:${chain.token}:${refundAddress.trim()}`;
     if (lastFired.current === key) return;
     lastFired.current = key;
-    onChainChange(supported, chain.token);
+    setOrderSubmitted(true);
+    onChainChange(chain.id, chain.token, refundAddress.trim());
+  };
+
+  // When the user changes the selected chain we invalidate the previous submission
+  // so they can enter a chain-appropriate refund address.
+  useEffect(() => {
+    setOrderSubmitted(false);
+    setRefundAddress('');
+    lastFired.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainIdx]);
 
@@ -923,6 +1025,96 @@ function ScreenDeposit({
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const copyMemo = () => {
+    if (!memo) return;
+    navigator.clipboard?.writeText(memo);
+    setMemoCopied(true);
+    setTimeout(() => setMemoCopied(false), 1500);
+  };
+
+  // When the picker is open, the whole body swaps to a dedicated selection
+  // sub-screen with its own search. This avoids the dropdown getting clipped
+  // by the widget's outer `overflow: hidden` and fits naturally within the 400px frame.
+  if (chainPickerOpen) {
+    return (
+      <Stack gap={12} style={{ padding: '16px 20px 6px' }}>
+        <Stack gap={8}>
+          <button
+            onClick={() => { setChainPickerOpen(false); setChainSearch(''); }}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '4px 0', background: 'transparent', border: 'none', cursor: 'pointer',
+              fontSize: 12, color: WEAVE.mute, fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            Back
+          </button>
+          <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>
+            Select a network
+          </div>
+          <div style={{ fontSize: 12.5, color: WEAVE.mute, lineHeight: 1.5 }}>
+            We'll generate a deposit address for the network you choose.
+          </div>
+        </Stack>
+
+        <div style={{ position: 'relative' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{
+            position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+            pointerEvents: 'none',
+          }}>
+            <circle cx="11" cy="11" r="7" stroke={WEAVE.mute} strokeWidth="2"/>
+            <path d="M20 20L16 16" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          <input
+            autoFocus
+            placeholder="Search networks or tokens…"
+            value={chainSearch}
+            onChange={(e) => setChainSearch(e.target.value)}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              padding: '10px 12px 10px 34px', borderRadius: 10,
+              border: `1px solid ${WEAVE.hair}`, background: '#fff',
+              fontSize: 13, fontFamily: 'inherit', color: WEAVE.ink, outline: 'none',
+            }}
+          />
+        </div>
+
+        <div style={{
+          maxHeight: 360, overflowY: 'auto',
+          border: `1px solid ${WEAVE.hair}`, borderRadius: 10,
+          background: '#fff', padding: 4,
+          display: 'flex', flexDirection: 'column', gap: 1,
+        }}>
+          {filteredChains.length === 0 ? (
+            <div style={{ padding: '24px 10px', fontSize: 12, color: WEAVE.mute, textAlign: 'center' }}>
+              No matches for "{chainSearch.trim()}"
+            </div>
+          ) : (
+            filteredChains.map(({ c, i }) => (
+              <button key={`${c.id}:${c.token}`} onClick={() => { setChainIdx(i); setChainPickerOpen(false); setChainSearch(''); }} style={{
+                width: '100%', padding: '10px 10px', borderRadius: 7,
+                background: i === chainIdx ? WEAVE.accentSoft : 'transparent',
+                border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+              }}>
+                <IconDot bg={c.tint} size={24}>{c.icon}</IconDot>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{c.token} on {c.name}</div>
+                  <div style={{ fontSize: 10.5, color: WEAVE.mute }}>{c.network}</div>
+                </div>
+                {i === chainIdx && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke={WEAVE.accent} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      </Stack>
+    );
+  }
+
   return (
     <Stack gap={14} style={{ padding: '16px 20px 6px' }}>
       <Stack gap={4}>
@@ -934,158 +1126,252 @@ function ScreenDeposit({
         </div>
       </Stack>
 
-      <Stack gap={6} style={{ position: 'relative' }}>
+      <Stack gap={6}>
         <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>Network</div>
-        <button onClick={() => setChainPickerOpen(!chainPickerOpen)} style={{
+        <button onClick={() => setChainPickerOpen(true)} style={{
           padding: '10px 12px', borderRadius: 10, border: `1px solid ${WEAVE.hair}`,
           background: '#fff', cursor: 'pointer', fontFamily: 'inherit',
           display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
         }}>
-          <IconDot bg={chain.tint} size={26}>{chain.icon}</IconDot>
-          <Stack gap={1} style={{ flex: 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 500 }}>{chain.token} on {chain.name}</div>
-            <div style={{ fontSize: 11, color: WEAVE.mute }}>Also accepts USDT, DAI, ETH on this network</div>
-          </Stack>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9L12 15L18 9" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          {chain ? (
+            <>
+              <IconDot bg={chain.tint} size={26}>{chain.icon}</IconDot>
+              <Stack gap={1} style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500 }}>{chain.token} on {chain.name}</div>
+                <div style={{ fontSize: 11, color: WEAVE.mute }}>{chain.network}</div>
+              </Stack>
+              <div style={{ fontSize: 11, color: WEAVE.mute }}>Change</div>
+            </>
+          ) : (
+            <>
+              <div style={{
+                width: 26, height: 26, borderRadius: 13,
+                border: `1px dashed ${WEAVE.hair}`, background: WEAVE.panel,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: WEAVE.mute, fontSize: 13,
+              }}>?</div>
+              <Stack gap={1} style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500, color: WEAVE.ink }}>Choose a network</div>
+                <div style={{ fontSize: 11, color: WEAVE.mute }}>30+ chains supported · powered by NEAR Intents</div>
+              </Stack>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9L12 15L18 9" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </>
+          )}
         </button>
-        {chainPickerOpen && (
+      </Stack>
+
+      {!chain ? (
+        <div style={{
+          background: WEAVE.panel, border: `1px dashed ${WEAVE.hair}`,
+          borderRadius: 12, padding: '28px 16px', textAlign: 'center',
+          fontSize: 12.5, color: WEAVE.mute, lineHeight: 1.5,
+        }}>
+          Pick a network above to generate your deposit address.
+        </div>
+      ) : !orderSubmitted ? (
+        <Stack gap={10}>
+          <Stack gap={6}>
+            <label style={{ fontSize: 10.5, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+              Your refund wallet on {chain.name}
+            </label>
+            <input
+              autoFocus
+              placeholder={REFUND_ADDRESS_PLACEHOLDER[chain.id] ?? 'Paste your wallet address'}
+              value={refundAddress}
+              onChange={(e) => setRefundAddress(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitRefundAndGenerate(); }}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                padding: '11px 14px', borderRadius: 10,
+                border: `1px solid ${WEAVE.hair}`, background: '#fff',
+                fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                color: WEAVE.ink, outline: 'none', letterSpacing: -0.2,
+              }}
+            />
+            <div style={{ fontSize: 11, color: WEAVE.mute, lineHeight: 1.5 }}>
+              If the swap fails or you send the wrong amount, funds are returned to this address. Must be a valid address on <b>{chain.name}</b>.
+            </div>
+          </Stack>
+          <button
+            onClick={submitRefundAndGenerate}
+            disabled={!refundAddress.trim()}
+            style={{
+              ...primaryBtn,
+              opacity: refundAddress.trim() ? 1 : 0.5,
+              cursor: refundAddress.trim() ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Generate deposit address
+          </button>
+        </Stack>
+      ) : (
+        <>
           <div style={{
-            position: 'absolute', top: 70, left: 0, right: 0, zIndex: 20,
-            background: '#fff', border: `1px solid ${WEAVE.hair}`,
-            borderRadius: 10, padding: 4, boxShadow: '0 14px 40px rgba(0,0,0,0.12)',
-            maxHeight: 260, overflowY: 'auto',
+            background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`,
+            borderRadius: 12, padding: '16px', display: 'flex', gap: 14, alignItems: 'center',
           }}>
-            {DEPOSIT_CHAINS.map((c, i) => (
-              <button key={c.id} onClick={() => { setChainIdx(i); setChainPickerOpen(false); }} style={{
-                width: '100%', padding: '8px 10px', borderRadius: 7,
-                background: i === chainIdx ? WEAVE.accentSoft : 'transparent',
-                border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
-              }}>
-                <IconDot bg={c.tint} size={22}>{c.icon}</IconDot>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 500 }}>{c.name}</div>
-                  <div style={{ fontSize: 10.5, color: WEAVE.mute }}>{c.token} · {c.network}</div>
+            <div style={{ padding: 8, background: '#fff', borderRadius: 10, border: `1px solid ${WEAVE.hair}`, flexShrink: 0 }}>
+              {qrPayload ? (
+                <QRCodeSVG value={qrPayload} size={120} level="M" includeMargin={false}/>
+              ) : (
+                <div style={{
+                  width: 120, height: 120, borderRadius: 6,
+                  background: WEAVE.panel, border: `1px dashed ${WEAVE.hair}`,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
+                }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" style={{ animation: 'wspin 1s linear infinite' }}>
+                    <circle cx="12" cy="12" r="9" stroke={WEAVE.hair} strokeWidth="2.5" fill="none"/>
+                    <circle cx="12" cy="12" r="9" stroke={WEAVE.accent} strokeWidth="2.5" fill="none"
+                      strokeDasharray="18 60" strokeLinecap="round"/>
+                  </svg>
+                  <div style={{ fontSize: 10.5, color: WEAVE.mute, letterSpacing: 0.3 }}>Preparing QR…</div>
                 </div>
-                {i === chainIdx && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke={WEAVE.accent} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              )}
+            </div>
+            <Stack gap={8} style={{ flex: 1, minWidth: 0 }}>
+              <Stack gap={2}>
+                <div style={{ fontSize: 10.5, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>Amount</div>
+                <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>
+                  {fmtCrypto(displayAmount, 8)} {displayToken}
+                </div>
+                <div style={{ fontSize: 11, color: WEAVE.mute }}>
+                  on {chain.name}
+                </div>
+              </Stack>
+              <div style={{ fontSize: 10.5, color: WEAVE.mute, lineHeight: 1.4 }}>
+                Rate locked for <span style={{ color: WEAVE.ink, fontWeight: 500 }}>9:42</span>
+              </div>
+            </Stack>
+          </div>
+
+          <Stack gap={6}>
+            <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>Deposit address</div>
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              border: `1px solid ${WEAVE.hair}`, borderRadius: 10,
+              background: '#fff', overflow: 'hidden',
+            }}>
+              <div style={{
+                flex: 1, padding: '10px 12px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                fontSize: 12.5, color: address ? WEAVE.ink : WEAVE.mute, letterSpacing: -0.2,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {loading ? 'Generating address…' : address || '—'}
+              </div>
+              <button onClick={copy} disabled={!address} style={{
+                height: 40, padding: '0 14px', border: 'none',
+                borderLeft: `1px solid ${WEAVE.hair}`,
+                background: copied ? WEAVE.accentSoft : '#fff',
+                color: copied ? WEAVE.accent : (address ? WEAVE.ink : WEAVE.mute),
+                fontSize: 12, fontWeight: 500, cursor: address ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}>
+                {copied ? (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 8V5C16 4.45 15.55 4 15 4H5C4.45 4 4 4.45 4 5V15C4 15.55 4.45 16 5 16H8" stroke="currentColor" strokeWidth="2"/></svg>
+                    Copy
+                  </>
                 )}
               </button>
-            ))}
-          </div>
-        )}
-      </Stack>
-
-      <div style={{
-        background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`,
-        borderRadius: 12, padding: '16px', display: 'flex', gap: 14, alignItems: 'center',
-      }}>
-        <div style={{ padding: 8, background: '#fff', borderRadius: 10, border: `1px solid ${WEAVE.hair}`, flexShrink: 0 }}>
-          {qrPayload ? (
-            <QRCodeSVG value={qrPayload} size={120} level="M" includeMargin={false}/>
-          ) : (
-            <div style={{
-              width: 120, height: 120, borderRadius: 6,
-              background: WEAVE.panel, border: `1px dashed ${WEAVE.hair}`,
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
-            }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" style={{ animation: 'wspin 1s linear infinite' }}>
-                <circle cx="12" cy="12" r="9" stroke={WEAVE.hair} strokeWidth="2.5" fill="none"/>
-                <circle cx="12" cy="12" r="9" stroke={WEAVE.accent} strokeWidth="2.5" fill="none"
-                  strokeDasharray="18 60" strokeLinecap="round"/>
-              </svg>
-              <div style={{ fontSize: 10.5, color: WEAVE.mute, letterSpacing: 0.3 }}>Preparing QR…</div>
             </div>
-          )}
-        </div>
-        <Stack gap={8} style={{ flex: 1, minWidth: 0 }}>
-          <Stack gap={2}>
-            <div style={{ fontSize: 10.5, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>Amount</div>
-            <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>
-              {fmtCrypto(displayAmount, 4)} {displayToken}
-            </div>
-            <div style={{ fontSize: 11, color: WEAVE.mute }}>
-              on {chain.name}
-            </div>
-          </Stack>
-          <div style={{ fontSize: 10.5, color: WEAVE.mute, lineHeight: 1.4 }}>
-            Rate locked for <span style={{ color: WEAVE.ink, fontWeight: 500 }}>9:42</span>
-          </div>
-        </Stack>
-      </div>
-
-      <Stack gap={6}>
-        <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>Deposit address</div>
-        <div style={{
-          display: 'flex', alignItems: 'center',
-          border: `1px solid ${WEAVE.hair}`, borderRadius: 10,
-          background: '#fff', overflow: 'hidden',
-        }}>
-          <div style={{
-            flex: 1, padding: '10px 12px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            fontSize: 12.5, color: address ? WEAVE.ink : WEAVE.mute, letterSpacing: -0.2,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {!supported
-              ? `${chain.name} not available in this demo`
-              : loading
-                ? 'Generating address…'
-                : address || '—'}
-          </div>
-          <button onClick={copy} disabled={!address} style={{
-            height: 40, padding: '0 14px', border: 'none',
-            borderLeft: `1px solid ${WEAVE.hair}`,
-            background: copied ? WEAVE.accentSoft : '#fff',
-            color: copied ? WEAVE.accent : (address ? WEAVE.ink : WEAVE.mute),
-            fontSize: 12, fontWeight: 500, cursor: address ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            {copied ? (
-              <>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                Copied
-              </>
-            ) : (
-              <>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 8V5C16 4.45 15.55 4 15 4H5C4.45 4 4 4.45 4 5V15C4 15.55 4.45 16 5 16H8" stroke="currentColor" strokeWidth="2"/></svg>
-                Copy
-              </>
+            {error && (
+              <Stack gap={6}>
+                <div style={{ fontSize: 11.5, color: WEAVE.err }}>{error}</div>
+                <button
+                  onClick={() => { setOrderSubmitted(false); lastFired.current = null; }}
+                  style={{
+                    alignSelf: 'flex-start',
+                    padding: '6px 10px', borderRadius: 7,
+                    background: 'transparent', border: `1px solid ${WEAVE.hair}`,
+                    cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, color: WEAVE.ink,
+                  }}
+                >
+                  Edit refund address
+                </button>
+              </Stack>
             )}
-          </button>
-        </div>
-        {error && (
-          <div style={{ fontSize: 11.5, color: WEAVE.err }}>{error}</div>
-        )}
-      </Stack>
+          </Stack>
 
-      <div style={{
-        background: WEAVE.warnSoft, border: `1px solid ${WEAVE.warn}22`,
-        borderRadius: 10, padding: '10px 12px',
-        display: 'flex', gap: 10, fontSize: 11.5, color: WEAVE.warn, lineHeight: 1.5,
-      }}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 2L2 20H22L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M12 10V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-        <span>Only send <b>{chain.token}</b> on the <b>{chain.name}</b> network. Sending other assets or from a different network may result in loss.</span>
-      </div>
+          {(memo || memoRequired) && (
+            <Stack gap={6}>
+              <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                {chain.id === 'XRP' ? 'Destination tag' : 'Memo'}
+                <span style={{ fontSize: 10, color: WEAVE.warn, fontWeight: 600, letterSpacing: 0.4 }}>REQUIRED</span>
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'center',
+                border: `1px solid ${WEAVE.hair}`, borderRadius: 10,
+                background: '#fff', overflow: 'hidden',
+              }}>
+                <div style={{
+                  flex: 1, padding: '10px 12px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: 12.5, color: memo ? WEAVE.ink : WEAVE.mute, letterSpacing: -0.2,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {loading ? 'Generating memo…' : memo || '—'}
+                </div>
+                <button onClick={copyMemo} disabled={!memo} style={{
+                  height: 40, padding: '0 14px', border: 'none',
+                  borderLeft: `1px solid ${WEAVE.hair}`,
+                  background: memoCopied ? WEAVE.accentSoft : '#fff',
+                  color: memoCopied ? WEAVE.accent : (memo ? WEAVE.ink : WEAVE.mute),
+                  fontSize: 12, fontWeight: 500, cursor: memo ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                  {memoCopied ? (
+                    <>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 8V5C16 4.45 15.55 4 15 4H5C4.45 4 4 4.45 4 5V15C4 15.55 4.45 16 5 16H8" stroke="currentColor" strokeWidth="2"/></svg>
+                      Copy
+                    </>
+                  )}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: WEAVE.warn, lineHeight: 1.5 }}>
+                You must include this {chain.id === 'XRP' ? 'destination tag' : 'memo'} when you send — without it the funds can't be credited and may be lost.
+              </div>
+            </Stack>
+          )}
 
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        padding: '10px 12px', background: '#fff',
-        border: `1px solid ${WEAVE.hair}`, borderRadius: 10,
-      }}>
-        <div style={{ position: 'relative', width: 10, height: 10 }}>
-          <div style={{ position: 'absolute', inset: 0, borderRadius: 5, background: WEAVE.accent }}/>
-          <div style={{ position: 'absolute', inset: -3, borderRadius: 8, background: WEAVE.accent, opacity: 0.25, animation: 'wpulse 1.6s ease-in-out infinite' }}/>
-        </div>
-        <div style={{ flex: 1, fontSize: 12, color: WEAVE.ink2 }}>
-          Watching for deposit on {chain.name}…
-        </div>
-        <button onClick={() => ready && onNext('processing')} disabled={!ready} style={{
-          fontSize: 11, color: ready ? WEAVE.mute : WEAVE.hair, background: 'transparent',
-          border: 'none', cursor: ready ? 'pointer' : 'not-allowed', fontFamily: 'inherit', textDecoration: 'underline',
-        }}>
-          Simulate
-        </button>
-      </div>
+          <div style={{
+            background: WEAVE.warnSoft, border: `1px solid ${WEAVE.warn}22`,
+            borderRadius: 10, padding: '10px 12px',
+            display: 'flex', gap: 10, fontSize: 11.5, color: WEAVE.warn, lineHeight: 1.5,
+          }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 2L2 20H22L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M12 10V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+            <span>Only send <b>{chain.token}</b> on the <b>{chain.name}</b> network. Sending other assets or from a different network may result in loss.</span>
+          </div>
+
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 12px', background: '#fff',
+            border: `1px solid ${WEAVE.hair}`, borderRadius: 10,
+          }}>
+            <div style={{ position: 'relative', width: 10, height: 10 }}>
+              <div style={{ position: 'absolute', inset: 0, borderRadius: 5, background: WEAVE.accent }}/>
+              <div style={{ position: 'absolute', inset: -3, borderRadius: 8, background: WEAVE.accent, opacity: 0.25, animation: 'wpulse 1.6s ease-in-out infinite' }}/>
+            </div>
+            <div style={{ flex: 1, fontSize: 12, color: WEAVE.ink2 }}>
+              Watching for deposit on {chain.name}…
+            </div>
+            <button onClick={() => ready && onNext('processing')} disabled={!ready} style={{
+              fontSize: 11, color: ready ? WEAVE.mute : WEAVE.hair, background: 'transparent',
+              border: 'none', cursor: ready ? 'pointer' : 'not-allowed', fontFamily: 'inherit', textDecoration: 'underline',
+            }}>
+              Simulate
+            </button>
+          </div>
+        </>
+      )}
     </Stack>
   );
 }
@@ -1464,6 +1750,7 @@ export function WeaveCheckout({
   const [orderId, setOrderId] = useState<string | null>(null);
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
   const [depositAddress, setDepositAddress] = useState<string | null>(null);
+  const [depositMemo, setDepositMemo] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState<number | null>(null);
   const [depositToken, setDepositToken] = useState<string | null>(null);
   const [depositChain, setDepositChain] = useState<string | null>(null);
@@ -1480,6 +1767,7 @@ export function WeaveCheckout({
     setApiError(null);
     setOrderId(null);
     setDepositAddress(null);
+    setDepositMemo(null);
     setDepositError(null);
     setBankDetails(null);
     setQuote(null);
@@ -1495,11 +1783,12 @@ export function WeaveCheckout({
     }
   };
 
-  const onDepositChainChange = async (apiChain: string, token: string) => {
+  const onDepositChainChange = async (apiChain: string, token: string, refundAddr: string) => {
     const myReq = ++depositReq.current;
     setDepositLoading(true);
     setDepositError(null);
     setDepositAddress(null);
+    setDepositMemo(null);
     setDepositAmount(null);
     setDepositToken(null);
     setDepositChain(null);
@@ -1511,13 +1800,24 @@ export function WeaveCheckout({
       const q = await fetchQuote(apiKey, {
         from, to, amount: merchant.amount, amountIn: 'dest',
       });
+      // External flow: sender identity is unknown at order-creation time. We
+      // omit walletAddress on the source instrument and pass the user-provided
+      // refund wallet as a dedicated top-level field so the backend wires it
+      // straight into NEAR Intents' refundTo without conflating the two roles.
       const source: { inline: InlineWalletInstrument } = {
-        inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: userAddress },
+        inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: '' },
       };
-      const res = await createOrder(apiKey, { source, amount: q.breakdown.usdEquivalent });
+      const res = await createOrder(apiKey, {
+        source,
+        // Deposit amount is source-asset-denominated (e.g. SOL), NOT USD.
+        // The backend feeds this straight into NEAR Intents as amountIn.
+        amount: q.breakdown.sourceAmount,
+        refundAddress: refundAddr,
+      });
       if (depositReq.current !== myReq) return;
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
+      setDepositMemo(res.nextAction.depositMemo ?? null);
       setDepositAmount(typeof res.nextAction.amount === 'number' ? res.nextAction.amount : null);
       setDepositToken(res.nextAction.token ?? token);
       setDepositChain(res.nextAction.chain ?? apiChain);
@@ -1612,7 +1912,7 @@ export function WeaveCheckout({
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: userAddress },
       };
-      const res = await createOrder(apiKey, { source, amount: q.breakdown.usdEquivalent });
+      const res = await createOrder(apiKey, { source, amount: q.breakdown.sourceAmount });
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
       setScreen('processing');
@@ -1647,6 +1947,7 @@ export function WeaveCheckout({
     setApiError(null);
     setBankDetails(null);
     setDepositAddress(null);
+    setDepositMemo(null);
     setDepositError(null);
     setQuote(null);
     setScreen(target);
@@ -1661,7 +1962,7 @@ export function WeaveCheckout({
       if (screen === 'success')    return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId}/>;
       if (screen === 'error')      return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')}/>;
     } else {
-      if (screen === 'deposit')    return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId}/>;
+      if (screen === 'deposit')    return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId}/>;
       if (screen === 'wallet')     return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance}/>;
       if (screen === 'quote')      return <ScreenQuote merchant={merchant} balance={balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading}/>;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId}/>;

@@ -2,10 +2,11 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { requireApiKey } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
-import { planRoute } from '../services/router.service';
+import { planRoute, type Flow } from '../services/router.service';
 import { executeOrder } from '../services/executor.service';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
+import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 
 const router = Router();
 
@@ -14,6 +15,12 @@ interface CreateOrderBody {
   dest?:      InstrumentRef;   // merchant payout; falls back to Client.defaultPayoutInstrumentId
   amount:     number;          // denominated in the source asset
   reference?: string;          // optional merchant-supplied ref
+  flow?:      Flow;            // 'self' (connected wallet, future ChainRails) | 'external' (send-from-another-wallet, NEAR Intents); default 'external'
+  // Explicit refund destination on the origin chain. In the external flow we
+  // don't know who'll actually pay the deposit address, so the widget collects
+  // a refund wallet from the user and sends it here. Takes precedence over the
+  // source instrument's walletAddress when both are set.
+  refundAddress?: string;
 }
 
 // POST /api/v1/orders — direction-agnostic order creation.
@@ -46,23 +53,35 @@ router.post('/', requireApiKey, async (req, res) => {
       if (!destInstrument) return res.status(500).json({ success: false, error: 'Default payout instrument missing' });
     }
 
-    // 2. Plan route across provider edges.
+    // 2. Plan route across provider edges. Flow defaults to 'external' so
+    //    NEAR Intents handles the cross-chain leg via deposit address; pass
+    //    'self' to bias toward ChainRails (wired-in-wallet flow) once ready.
     const plan = planRoute({
       sourceAsset: sourceInstrument.assetKey,
       destAsset:   destInstrument.assetKey,
       amount:      body.amount,
+      flow:        body.flow ?? 'external',
     });
 
     // 3. Snapshot a Paycrest rate when the route touches fiat (for the quote
-    //    figure the widget shows). Best-effort — non-fiat routes skip it.
+    //    figure the widget shows) AND compute the USD-equivalent of the
+    //    source-asset-denominated amount the widget sent. The executor needs
+    //    both: sourceAmount drives the first-hop deposit, usdEquivalent drives
+    //    the USDC-on-Base intermediate legs.
+    const srcP = parseAsset(sourceInstrument.assetKey);
+    const dstP = parseAsset(destInstrument.assetKey);
     let quoteRate: number | null = null;
+    let usdEquivalent = body.amount;
     try {
-      const srcP = parseAsset(sourceInstrument.assetKey);
-      const dstP = parseAsset(destInstrument.assetKey);
       const fiat = srcP.kind === 'fiat' ? srcP.currency : dstP.kind === 'fiat' ? dstP.currency : null;
       if (fiat) {
         const r = await paycrest.getRate('base', 'USDC', 1, fiat);
         quoteRate = Number(srcP.kind === 'fiat' ? r.buy.rate : r.sell.rate) || null;
+        if (srcP.kind === 'fiat' && quoteRate) usdEquivalent = body.amount / quoteRate;
+      }
+      if (srcP.kind === 'crypto') {
+        const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
+        if (token.price > 0) usdEquivalent = body.amount * token.price;
       }
     } catch {}
 
@@ -85,10 +104,13 @@ router.post('/', requireApiKey, async (req, res) => {
 
     // 5. Execute: create provider resources (reverse order), persist RouteSteps,
     //    return nextAction for the widget.
-    const srcP = parseAsset(sourceInstrument.assetKey);
-    const dstP = parseAsset(destInstrument.assetKey);
 
-    const refundAddress = srcP.kind === 'crypto' ? (sourceInstrument.walletAddress ?? '') : undefined;
+    // Prefer the explicit user-provided refundAddress. The source instrument's
+    // walletAddress is a fallback for the 'self' flow where the user's connected
+    // wallet IS both sender and refund target.
+    const refundAddress = srcP.kind === 'crypto'
+      ? (body.refundAddress || sourceInstrument.walletAddress || '')
+      : undefined;
     const refundAccount = srcP.kind === 'fiat'   ? (bankFromInstrument(sourceInstrument) ?? undefined) : undefined;
     const destBank      = dstP.kind === 'fiat'   ? (bankFromInstrument(destInstrument)   ?? undefined) : undefined;
     const destWallet    = dstP.kind === 'crypto' ? (destInstrument.walletAddress ?? '') : undefined;
@@ -97,6 +119,7 @@ router.post('/', requireApiKey, async (req, res) => {
       orderId:       order.id,
       plan,
       sourceAmount:  body.amount,
+      usdEquivalent,
       reference:     order.id,
       merchantMemo:  `Weave ${order.id}`,
       refundAddress,
@@ -164,6 +187,7 @@ router.get('/:id', requireApiKey, async (req, res) => {
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
 
     let paycrestStatus: string | null = null;
+    let nearStatus:     string | null = null;
     if (!TERMINAL.has(order.status)) {
       // Find the earliest not-done step that has a Paycrest externalId — that's
       // the one currently gating order progress.
@@ -187,9 +211,32 @@ router.get('/:id', requireApiKey, async (req, res) => {
           console.warn('paycrest poll failed:', e.message);
         }
       }
+
+      // Same shape for NEAR Intents: safety net for the nearintents_poller
+      // worker so a stale GET-by-id still forces a status sync.
+      const activeNearStep = order.steps.find(s => s.provider === 'nearintents' && s.status !== 'done' && s.depositAddress);
+      if (activeNearStep?.depositAddress) {
+        try {
+          const st = await nearIntents.getStatus(activeNearStep.depositAddress, activeNearStep.depositMemo ?? undefined);
+          nearStatus = st.status;
+          const outcome = classifyNearStatus(st.status);
+          const bridged = outcome === 'done' || order.steps.some(s => s.status === 'done' && s.provider === 'nearintents');
+          const anyFail = outcome === 'failed';
+          const nextStatus = anyFail ? 'failed' : bridged ? 'processing' : order.status;
+          if (nextStatus !== order.status) {
+            order = await prisma.order.update({
+              where:   { id: order.id },
+              data:    { status: nextStatus },
+              include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
+            });
+          }
+        } catch (e: any) {
+          console.warn('nearintents poll failed:', e.message);
+        }
+      }
     }
 
-    res.json({ success: true, data: { ...order, paycrestStatus } });
+    res.json({ success: true, data: { ...order, paycrestStatus, nearStatus } });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

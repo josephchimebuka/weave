@@ -155,8 +155,9 @@ model RouteStep {
   amountOut   Float?
   feeUsd      Float?
   status      String    // "pending" | "awaiting_deposit" | "in_flight" | "done" | "failed"
-  externalId  String?   // provider-side id (Paycrest orderId, ChainRails intent id, ...)
+  externalId  String?   // provider-side id (Paycrest orderId, ChainRails intent id, NEAR Intents depositAddress, ...)
   depositAddress String? // for crypto steps: where the user (or prior hop) sends funds
+  depositMemo    String? // some chains (XRP, TON, XLM, NEAR) require a memo alongside the address
   startedAt   DateTime?
   completedAt DateTime?
   createdAt   DateTime  @default(now())

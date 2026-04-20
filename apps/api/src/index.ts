@@ -10,8 +10,9 @@ import countriesRouter    from './routes/countries';
 
 import { ensureMerchantDefaultInstruments } from './lib/merchant';
 
-// Start BullMQ worker
+// Start BullMQ workers (webhook-driven + NEAR Intents poller)
 import './queues/webhooks';
+import './queues/nearintents_poller';
 
 const app = express();
 

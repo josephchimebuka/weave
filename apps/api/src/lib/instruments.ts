@@ -36,9 +36,9 @@ export async function resolveInstrument(
   if (d.kind === 'bank_account' && (!d.bankInstitution || !d.bankAccountIdentifier || !d.bankAccountName)) {
     throw new Error('inline bank_account requires bankInstitution, bankAccountIdentifier, bankAccountName');
   }
-  if (d.kind === 'crypto_wallet' && !d.walletAddress) {
-    throw new Error('inline crypto_wallet requires walletAddress');
-  }
+  // walletAddress is optional for crypto_wallet: the 'external' flow doesn't
+  // know the sender's address at order-creation time. Callers that need it
+  // (e.g. ChainRails in the 'self' flow) validate at their own boundary.
 
   return prisma.instrument.create({
     data: {
