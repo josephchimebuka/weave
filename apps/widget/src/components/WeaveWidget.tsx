@@ -592,6 +592,7 @@ function ScreenProcessing({
         const order = await fetchOrder(apiKey, orderId);
         const status = String(order.status ?? '').toLowerCase();
         const pcStatus = String(order.paycrestStatus ?? '').toLowerCase();
+        const nearStatus = String(order.nearStatus ?? '').toLowerCase();
         if (TERMINAL_OK.has(status)) {
           pollTerminated.current = true;
           onNext('success');
@@ -605,7 +606,9 @@ function ScreenProcessing({
         // Advance to the confirming-payment stage once Paycrest has validated the
         // deposit (immediately before settlement). Earlier states stay on
         // "detecting on-chain".
-        if (pcStatus === 'validated' || pcStatus === 'settling') {
+        if (mode === 'crypto' && nearStatus === 'processing') {
+          setStage(1);
+        } else if (pcStatus === 'validated' || pcStatus === 'settling') {
           setStage(1);
         }
       } catch {
@@ -711,8 +714,6 @@ function ScreenSuccess({
         : CURRENCIES[merchant.currency].bank)
     : merchant.name;
 
-  const reference = order?.id ? `wv_${String(order.id).slice(0, 10)}` : 'wv_—';
-
   const completedInSec = order?.createdAt && order?.updatedAt
     ? Math.max(1, Math.round((new Date(order.updatedAt).getTime() - new Date(order.createdAt).getTime()) / 1000))
     : null;
@@ -765,11 +766,6 @@ function ScreenSuccess({
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
           <span style={{ color: WEAVE.mute }}>{direction === 'offramp' ? 'Settled to' : 'Paid to'}</span>
           <span style={{ fontWeight: 500 }}>{settledTo}</span>
-        </Row>
-        <Hair/>
-        <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
-          <span style={{ color: WEAVE.mute }}>Reference</span>
-          <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}>{reference}</span>
         </Row>
         <Hair/>
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
@@ -1004,7 +1000,8 @@ function ScreenDeposit({
       try {
         const order = await fetchOrder(apiKey, orderId);
         const status = String(order.status ?? '').toLowerCase();
-        if (status && status !== 'awaiting_deposit') {
+        const nearStatus = String(order.nearStatus ?? '').toLowerCase();
+        if ((status && status !== 'awaiting_deposit') || nearStatus === 'processing') {
           stopped = true;
           if (status === 'completed') onNext('success');
           else if (['failed', 'refunded'].includes(status)) onNext('error');
@@ -1512,11 +1509,10 @@ interface VirtualAccount {
   bank: string;
   accountNumber: string;
   accountName: string;
-  ref: string;
 }
 
 const VA_BY_CUR: Record<string, VirtualAccount> = {
-  NGN: { bank: 'Wema Bank', accountNumber: '8203 7461 92', accountName: 'Weave / Afriloom-0481', ref: 'WV-8F3A-21BC' },
+  NGN: { bank: 'Wema Bank', accountNumber: '8203 7461 92', accountName: 'Weave / Afriloom-0481' },
 };
 
 export interface BankDetails {
@@ -1526,7 +1522,6 @@ export interface BankDetails {
   amountToTransfer?: string;
   currency?:         string;
   validUntil?:       string;
-  reference?:        string;
 }
 
 function institutionName(currency: string, code: string): string {
@@ -1549,7 +1544,6 @@ function ScreenVirtualAccount({
         bank:          institutionName(merchant.currency, bankDetails.institution),
         accountNumber: bankDetails.accountIdentifier,
         accountName:   bankDetails.accountName,
-        ref:           bankDetails.reference ?? VA_BY_CUR[merchant.currency].ref,
       }
     : VA_BY_CUR[merchant.currency];
   const displayAmount = bankDetails?.amountToTransfer
@@ -1664,8 +1658,6 @@ function ScreenVirtualAccount({
         <Field label="Account name" value={va.accountName} k="name" mono={false}/>
         <Hair/>
         <Field label="Amount" value={displayAmount} k="amt" mono={false}/>
-        <Hair/>
-        <Field label="Reference (required)" value={va.ref} k="ref"/>
       </div>
 
       <div style={{
@@ -1674,7 +1666,7 @@ function ScreenVirtualAccount({
         display: 'flex', gap: 10, fontSize: 11.5, color: WEAVE.warn, lineHeight: 1.5,
       }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 2L2 20H22L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M12 10V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-        <span>Send the exact amount and include the reference. Any difference or missing reference will delay delivery.</span>
+        <span>Send the exact amount. Any difference may delay delivery.</span>
       </div>
 
       <div style={{

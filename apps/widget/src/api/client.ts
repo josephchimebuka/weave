@@ -93,7 +93,6 @@ export interface NextAction {
     accountName:       string;
     amountToTransfer:  string;
     currency:          string;
-    reference:         string;
   };
   expiresAt?:     string;
 }
@@ -112,7 +111,6 @@ export async function createOrder(
     source: InstrumentRef;
     dest?: InstrumentRef;
     amount: number;
-    reference?: string;
     flow?: Flow;
     // Where refunds should go if the cross-chain swap fails. For the external
     // flow this is the user's own wallet on the origin chain, collected in the

@@ -46,7 +46,6 @@ export interface FirstStepAction {
     accountName:       string;
     amountToTransfer:  string;
     currency:          string;
-    reference:         string;
   };
   expiresAt?:      string;
 }
@@ -173,7 +172,6 @@ async function runPaycrestOnramp(
       accountName:       prov.accountName,
       amountToTransfer:  prov.amountToTransfer,
       currency:          prov.currency,
-      reference:         ref,
     },
   };
 }

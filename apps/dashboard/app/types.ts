@@ -29,7 +29,6 @@ export interface Order {
   destAmount:         number | null;
   quoteRate:          number | null;
   status:             string;    // 'awaiting_deposit' | 'processing' | 'completed' | 'failed' | 'refunded'
-  reference:          string | null;
   senderFeeUsd:       number | null;
   appFeeUsd:          number | null;
   bridgeFeeUsd:       number | null;
