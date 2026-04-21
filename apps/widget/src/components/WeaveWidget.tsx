@@ -592,7 +592,6 @@ function ScreenProcessing({
         const order = await fetchOrder(apiKey, orderId);
         const status = String(order.status ?? '').toLowerCase();
         const pcStatus = String(order.paycrestStatus ?? '').toLowerCase();
-        const nearStatus = String(order.nearStatus ?? '').toLowerCase();
         if (TERMINAL_OK.has(status)) {
           pollTerminated.current = true;
           onNext('success');
@@ -603,12 +602,9 @@ function ScreenProcessing({
           onNext('error');
           return;
         }
-        // Advance to the confirming-payment stage once Paycrest has validated the
-        // deposit (immediately before settlement). Earlier states stay on
-        // "detecting on-chain".
-        if (mode === 'crypto' && nearStatus === 'processing') {
-          setStage(1);
-        } else if (pcStatus === 'validated' || pcStatus === 'settling') {
+        // Keep users on "detecting on-chain" until Paycrest reports `fulfilled`,
+        // then advance to confirming fiat settlement.
+        if (pcStatus === 'fulfilled') {
           setStage(1);
         }
       } catch {
@@ -1001,7 +997,9 @@ function ScreenDeposit({
         const order = await fetchOrder(apiKey, orderId);
         const status = String(order.status ?? '').toLowerCase();
         const nearStatus = String(order.nearStatus ?? '').toLowerCase();
-        if ((status && status !== 'awaiting_deposit') || nearStatus === 'processing') {
+        const hasNearStep = Array.isArray(order.steps) && order.steps.some((s: any) => s?.provider === 'nearintents');
+        const nearProcessing = hasNearStep && nearStatus === 'processing';
+        if ((status && status !== 'awaiting_deposit') || nearProcessing) {
           stopped = true;
           if (status === 'completed') onNext('success');
           else if (['failed', 'refunded'].includes(status)) onNext('error');
