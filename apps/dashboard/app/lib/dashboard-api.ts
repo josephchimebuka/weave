@@ -16,6 +16,12 @@ export type OrderWithProviderStatus = Order & {
   nearStatus?: string | null;
 };
 
+export function toSearchQuery(params: Record<string, string | undefined>): string {
+  return new URLSearchParams(
+    Object.entries(params).filter(([, v]) => typeof v === 'string' && v.length > 0) as Array<[string, string]>,
+  ).toString();
+}
+
 function orderMatches(order: Order, filter: OrderFilter): boolean {
   const q = (filter.q || '').trim().toLowerCase();
   if (q) {
@@ -48,7 +54,7 @@ export async function fetchOrders(revalidateSeconds = 10): Promise<Order[]> {
   try {
     const res = await fetch(`${API_BASE}/orders`, {
       headers: { 'x-api-key': API_KEY },
-      next: { revalidate: revalidateSeconds },
+      ...(revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } }),
     });
     if (!res.ok) return [];
     const json = await res.json();
@@ -62,7 +68,7 @@ export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<Or
   try {
     const res = await fetch(`${API_BASE}/orders/${id}`, {
       headers: { 'x-api-key': API_KEY },
-      next: { revalidate: revalidateSeconds },
+      ...(revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } }),
     });
     if (!res.ok) return null;
     const json = await res.json();

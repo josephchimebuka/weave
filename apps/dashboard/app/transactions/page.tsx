@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { applyOrderFilter, fetchOrders } from '../lib/dashboard-api';
+import { applyOrderFilter, fetchOrders, toSearchQuery } from '../lib/dashboard-api';
 import { assetLabel, directionOf, parseAsset } from '../types';
 
 const STATUS_STYLES: Record<string, string> = {
@@ -49,9 +49,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams?
   const rawOrders = await fetchOrders(10);
   const providerOptions = Array.from(new Set(rawOrders.flatMap((o) => (o.steps ?? []).map((s) => s.provider)))).sort();
   const orders = applyOrderFilter(rawOrders, params);
-  const qs = new URLSearchParams(
-    Object.entries(params).filter(([, v]) => typeof v === 'string' && v.length > 0) as Array<[string, string]>,
-  ).toString();
+  const qs = toSearchQuery(params);
 
   return (
     <main className="max-w-6xl mx-auto space-y-8">

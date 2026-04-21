@@ -4,7 +4,7 @@ import { directionOf } from '../../types';
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const orders = applyOrderFilter(await fetchOrders(10), {
+  const orders = applyOrderFilter(await fetchOrders(0), {
     q: sp.get('q') || undefined,
     status: sp.get('status') || undefined,
     direction: sp.get('direction') || undefined,
@@ -54,4 +54,3 @@ export async function GET(req: NextRequest) {
     },
   });
 }
-
