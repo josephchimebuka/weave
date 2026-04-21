@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     o.senderFeeUsd ?? '',
     o.appFeeUsd ?? '',
     o.bridgeFeeUsd ?? '',
-    (o.steps || []).map((s) => s.provider).join(' -> '),
+    (o.steps || []).map((s) => s.provider).join(' → '),
   ]));
 
   const csv = [header, ...rows]

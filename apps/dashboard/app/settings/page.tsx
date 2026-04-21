@@ -1,3 +1,5 @@
+const ROLE_OPTIONS = ['owner', 'admin', 'finance', 'developer', 'read-only'] as const;
+
 export default function SettingsPage() {
   return (
     <main className="max-w-6xl mx-auto space-y-8">
@@ -29,7 +31,7 @@ export default function SettingsPage() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
             <select className="w-full border border-gray-300 rounded-lg p-2 text-sm">
-              {['owner', 'admin', 'finance', 'developer', 'read-only'].map((role) => (
+              {ROLE_OPTIONS.map((role) => (
                 <option key={role} value={role}>{role}</option>
               ))}
             </select>
