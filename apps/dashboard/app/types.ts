@@ -36,6 +36,18 @@ export interface Order {
   createdAt:          string;
   updatedAt:          string;
   steps:              RouteStep[];
+  sourceInstrument?:  {
+    bankInstitution?: string | null;
+    bankAccountIdentifier?: string | null;
+    bankAccountName?: string | null;
+    walletAddress?: string | null;
+  };
+  destInstrument?:    {
+    bankInstitution?: string | null;
+    bankAccountIdentifier?: string | null;
+    bankAccountName?: string | null;
+    walletAddress?: string | null;
+  };
 }
 
 // ── Asset helpers ──────────────────────────────────────────────────────────

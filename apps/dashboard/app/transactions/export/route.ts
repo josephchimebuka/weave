@@ -9,6 +9,11 @@ export async function GET(req: NextRequest) {
     status: sp.get('status') || undefined,
     direction: sp.get('direction') || undefined,
     provider: sp.get('provider') || undefined,
+    corridor: sp.get('corridor') || undefined,
+    fromDate: sp.get('fromDate') || undefined,
+    toDate: sp.get('toDate') || undefined,
+    amountMin: sp.get('amountMin') || undefined,
+    amountMax: sp.get('amountMax') || undefined,
     sort: (sp.get('sort') as 'createdAt_desc' | 'createdAt_asc' | 'amount_desc' | 'amount_asc' | null) || undefined,
   });
 

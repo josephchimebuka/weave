@@ -8,6 +8,11 @@ export type OrderFilter = {
   status?: string;
   direction?: string;
   provider?: string;
+  corridor?: string;
+  fromDate?: string;
+  toDate?: string;
+  amountMin?: string;
+  amountMax?: string;
   sort?: 'createdAt_desc' | 'createdAt_asc' | 'amount_desc' | 'amount_asc';
 };
 
@@ -38,6 +43,26 @@ function orderMatches(order: Order, filter: OrderFilter): boolean {
   if (filter.status && filter.status !== 'all' && order.status !== filter.status) return false;
   if (filter.direction && filter.direction !== 'all' && directionOf(order) !== filter.direction) return false;
   if (filter.provider && filter.provider !== 'all' && !(order.steps || []).some((s) => s.provider === filter.provider)) return false;
+  if (filter.corridor && filter.corridor !== 'all') {
+    const corridor = `${order.sourceAssetKey}→${order.destAssetKey}`;
+    if (corridor !== filter.corridor) return false;
+  }
+  if (filter.fromDate) {
+    const from = new Date(`${filter.fromDate}T00:00:00.000Z`).getTime();
+    if (Number.isFinite(from) && new Date(order.createdAt).getTime() < from) return false;
+  }
+  if (filter.toDate) {
+    const to = new Date(`${filter.toDate}T23:59:59.999Z`).getTime();
+    if (Number.isFinite(to) && new Date(order.createdAt).getTime() > to) return false;
+  }
+  if (filter.amountMin) {
+    const min = Number(filter.amountMin);
+    if (Number.isFinite(min) && (order.sourceAmount ?? 0) < min) return false;
+  }
+  if (filter.amountMax) {
+    const max = Number(filter.amountMax);
+    if (Number.isFinite(max) && (order.sourceAmount ?? 0) > max) return false;
+  }
   return true;
 }
 

@@ -58,6 +58,14 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
           <p className="text-gray-500">Merchant received</p>
           <p className="font-semibold text-gray-900">{money(order.destAmount, 4)}</p>
         </div>
+        <div>
+          <p className="text-gray-500">Payout destination</p>
+          <p className="font-semibold text-gray-900">
+            {order.destInstrument?.bankAccountIdentifier
+              ? `${order.destInstrument.bankInstitution || 'Bank'} · ${order.destInstrument.bankAccountIdentifier}`
+              : order.destInstrument?.walletAddress || '—'}
+          </p>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
@@ -99,7 +107,23 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
           ))}
         </div>
       </div>
+
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+        <h2 className="text-lg font-bold mb-4">Status audit trail</h2>
+        <ul className="space-y-2 text-sm text-gray-700">
+          <li>Order created · {new Date(order.createdAt).toLocaleString('en-GB')}</li>
+          <li>Last updated · {new Date(order.updatedAt).toLocaleString('en-GB')}</li>
+          {order.paycrestStatus ? <li>Paycrest status · {order.paycrestStatus}</li> : null}
+          {order.nearStatus ? <li>NEAR Intents status · {order.nearStatus}</li> : null}
+          {(order.steps || []).map((step) => (
+            <li key={`${step.id}-audit`}>
+              {step.provider} step {step.sequence} · {step.status}
+              {step.startedAt ? ` · started ${new Date(step.startedAt).toLocaleString('en-GB')}` : ''}
+              {step.completedAt ? ` · completed ${new Date(step.completedAt).toLocaleString('en-GB')}` : ''}
+            </li>
+          ))}
+        </ul>
+      </div>
     </main>
   );
 }
-

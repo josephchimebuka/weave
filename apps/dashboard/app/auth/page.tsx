@@ -11,8 +11,9 @@ export default function AuthIndexPage() {
         <Link href="/auth/login" className="p-3 rounded-lg border border-gray-200 hover:bg-gray-50">Login</Link>
         <Link href="/auth/signup" className="p-3 rounded-lg border border-gray-200 hover:bg-gray-50">Sign up</Link>
         <Link href="/auth/forgot-password" className="p-3 rounded-lg border border-gray-200 hover:bg-gray-50">Forgot password</Link>
+        <Link href="/auth/reset-password" className="p-3 rounded-lg border border-gray-200 hover:bg-gray-50">Reset password</Link>
+        <Link href="/auth/logout" className="p-3 rounded-lg border border-gray-200 hover:bg-gray-50">Logout</Link>
       </div>
     </main>
   );
 }
-

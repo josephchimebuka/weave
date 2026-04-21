@@ -41,6 +41,11 @@ type SearchParams = {
   status?: string;
   direction?: string;
   provider?: string;
+  corridor?: string;
+  fromDate?: string;
+  toDate?: string;
+  amountMin?: string;
+  amountMax?: string;
   sort?: 'createdAt_desc' | 'createdAt_asc' | 'amount_desc' | 'amount_asc';
 };
 
@@ -49,6 +54,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams?
   const rawOrders = await fetchOrders(10);
   const orders = applyOrderFilter(rawOrders, params);
   const providerOptions = Array.from(new Set(orders.flatMap((o) => (o.steps ?? []).map((s) => s.provider)))).sort();
+  const corridorOptions = Array.from(new Set(rawOrders.map((o) => `${o.sourceAssetKey}→${o.destAssetKey}`))).sort();
   const qs = toSearchQuery(params);
 
   return (
@@ -60,7 +66,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams?
         </p>
       </div>
 
-      <form className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
+      <form className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 grid grid-cols-1 md:grid-cols-8 gap-3">
         <input
           name="q"
           defaultValue={params.q || ''}
@@ -83,6 +89,16 @@ export default async function TransactionsPage({ searchParams }: { searchParams?
             <option key={provider} value={provider}>{provider}</option>
           ))}
         </select>
+        <select name="corridor" defaultValue={params.corridor || 'all'} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          <option value="all">all corridors</option>
+          {corridorOptions.map((corridor) => (
+            <option key={corridor} value={corridor}>{corridor}</option>
+          ))}
+        </select>
+        <input type="date" name="fromDate" defaultValue={params.fromDate || ''} className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+        <input type="date" name="toDate" defaultValue={params.toDate || ''} className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+        <input type="number" step="any" name="amountMin" defaultValue={params.amountMin || ''} placeholder="Min amount" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+        <input type="number" step="any" name="amountMax" defaultValue={params.amountMax || ''} placeholder="Max amount" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
         <div className="flex gap-2">
           <select name="sort" defaultValue={params.sort || 'createdAt_desc'} className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
             <option value="createdAt_desc">Newest</option>
