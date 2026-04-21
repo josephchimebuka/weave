@@ -106,7 +106,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams?
             <option value="amount_desc">Amount ↓</option>
             <option value="amount_asc">Amount ↑</option>
           </select>
-          <button className="bg-gray-900 text-white rounded-lg px-4 text-sm font-medium">Apply</button>
+          <button type="submit" className="bg-gray-900 text-white rounded-lg px-4 text-sm font-medium">Apply</button>
         </div>
       </form>
 

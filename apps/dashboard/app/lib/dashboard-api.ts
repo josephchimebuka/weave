@@ -21,6 +21,12 @@ export type OrderWithProviderStatus = Order & {
   nearStatus?: string | null;
 };
 
+function getCacheOptions(revalidateSeconds: number) {
+  return revalidateSeconds <= 0
+    ? ({ cache: 'no-store' } as const)
+    : ({ next: { revalidate: revalidateSeconds } } as const);
+}
+
 export function toSearchQuery(params: Record<string, string | undefined>): string {
   return new URLSearchParams(
     Object.entries(params).filter(([, v]) => typeof v === 'string' && v.length > 0) as Array<[string, string]>,
@@ -47,13 +53,12 @@ function orderMatches(order: Order, filter: OrderFilter): boolean {
     const corridor = `${order.sourceAssetKey}→${order.destAssetKey}`;
     if (corridor !== filter.corridor) return false;
   }
+  const orderDate = order.createdAt.slice(0, 10);
   if (filter.fromDate) {
-    const from = new Date(`${filter.fromDate}T00:00:00.000Z`).getTime();
-    if (Number.isFinite(from) && new Date(order.createdAt).getTime() < from) return false;
+    if (orderDate < filter.fromDate) return false;
   }
   if (filter.toDate) {
-    const to = new Date(`${filter.toDate}T23:59:59.999Z`).getTime();
-    if (Number.isFinite(to) && new Date(order.createdAt).getTime() > to) return false;
+    if (orderDate > filter.toDate) return false;
   }
   if (filter.amountMin) {
     const min = Number(filter.amountMin);
@@ -77,8 +82,7 @@ function sortOrders(orders: Order[], sort: OrderFilter['sort']) {
 
 export async function fetchOrders(revalidateSeconds = 10): Promise<Order[]> {
   try {
-    const cacheOptions =
-      revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } };
+    const cacheOptions = getCacheOptions(revalidateSeconds);
     const res = await fetch(`${API_BASE}/orders`, {
       headers: { 'x-api-key': API_KEY },
       ...cacheOptions,
@@ -93,8 +97,7 @@ export async function fetchOrders(revalidateSeconds = 10): Promise<Order[]> {
 
 export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<OrderWithProviderStatus | null> {
   try {
-    const cacheOptions =
-      revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } };
+    const cacheOptions = getCacheOptions(revalidateSeconds);
     const res = await fetch(`${API_BASE}/orders/${id}`, {
       headers: { 'x-api-key': API_KEY },
       ...cacheOptions,
