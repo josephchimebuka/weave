@@ -53,7 +53,7 @@ export default function Sidebar() {
   return (
     <aside className="w-72 h-screen bg-white border-r border-gray-200 flex flex-col fixed left-0 top-0">
       <div className="p-6 border-b border-gray-100">
-        <h2 className="text-2xl font-bold text-emerald-700">Weave<span className="text-gray-800">.</span></h2>
+        <h2 className="text-2xl font-bold text-gray-900">Weave<span className="text-gray-500">.</span></h2>
         <span className="text-xs text-gray-400 uppercase tracking-widest font-semibold mt-1 block">Merchant Portal</span>
       </div>
 
@@ -70,7 +70,7 @@ export default function Sidebar() {
                   href={item.href}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
                     active
-                      ? 'bg-emerald-50 text-emerald-700'
+                      ? 'bg-gray-100 text-gray-900'
                       : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                   }`}
                 >
@@ -84,7 +84,7 @@ export default function Sidebar() {
       </nav>
 
       <div className="p-4 border-t border-gray-100 text-xs text-gray-500">
-        API Status: <span className="text-emerald-600 font-semibold">Online</span>
+        API Status: <span className="text-gray-900 font-semibold">Online</span>
       </div>
     </aside>
   );
