@@ -52,9 +52,11 @@ function sortOrders(orders: Order[], sort: OrderFilter['sort']) {
 
 export async function fetchOrders(revalidateSeconds = 10): Promise<Order[]> {
   try {
+    const cacheOptions =
+      revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } };
     const res = await fetch(`${API_BASE}/orders`, {
       headers: { 'x-api-key': API_KEY },
-      ...(revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } }),
+      ...cacheOptions,
     });
     if (!res.ok) return [];
     const json = await res.json();
@@ -66,9 +68,11 @@ export async function fetchOrders(revalidateSeconds = 10): Promise<Order[]> {
 
 export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<OrderWithProviderStatus | null> {
   try {
+    const cacheOptions =
+      revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } };
     const res = await fetch(`${API_BASE}/orders/${id}`, {
       headers: { 'x-api-key': API_KEY },
-      ...(revalidateSeconds <= 0 ? { cache: 'no-store' as const } : { next: { revalidate: revalidateSeconds } }),
+      ...cacheOptions,
     });
     if (!res.ok) return null;
     const json = await res.json();

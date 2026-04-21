@@ -47,8 +47,8 @@ type SearchParams = {
 export default async function TransactionsPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   const params = (await searchParams) ?? {};
   const rawOrders = await fetchOrders(10);
-  const providerOptions = Array.from(new Set(rawOrders.flatMap((o) => (o.steps ?? []).map((s) => s.provider)))).sort();
   const orders = applyOrderFilter(rawOrders, params);
+  const providerOptions = Array.from(new Set(orders.flatMap((o) => (o.steps ?? []).map((s) => s.provider)))).sort();
   const qs = toSearchQuery(params);
 
   return (
