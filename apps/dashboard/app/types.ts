@@ -11,6 +11,7 @@ export interface RouteStep {
   status:         string;    // 'pending' | 'in_flight' | 'done' | 'failed'
   externalId:     string | null;
   depositAddress: string | null;
+  depositMemo:    string | null;
   startedAt:      string | null;
   completedAt:    string | null;
   createdAt:      string;

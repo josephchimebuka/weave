@@ -1,24 +1,9 @@
-import { Order, parseAsset, directionOf } from './types';
-
-const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
-const API_KEY  = process.env.WEAVE_API_KEY || '';
-
-async function getOrders(): Promise<Order[]> {
-  try {
-    const res = await fetch(`${API_BASE}/orders`, {
-      headers: { 'x-api-key': API_KEY },
-      next:    { revalidate: 30 },
-    });
-    if (!res.ok) return [];
-    const json = await res.json();
-    return json.data ?? [];
-  } catch {
-    return [];
-  }
-}
+import Link from 'next/link';
+import { fetchOrders } from './lib/dashboard-api';
+import { parseAsset, directionOf } from './types';
 
 export default async function Page() {
-  const orders    = await getOrders();
+  const orders = await fetchOrders(30);
   const completed = orders.filter((o) => o.status === 'completed');
 
   // Merchant-received volume: group completed orders by the currency/token they
@@ -67,8 +52,8 @@ export default async function Page() {
   return (
     <main className="max-w-6xl mx-auto space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Analytics Overview</h1>
-        <p className="text-gray-500 mt-1">Real-time performance across all Weave corridors.</p>
+        <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Dashboard v2 Overview</h1>
+        <p className="text-gray-500 mt-1">Track setup, transactions, payout readiness, and integration health in one place.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -83,6 +68,24 @@ export default async function Page() {
         <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
           <p className="text-sm font-medium text-gray-500 mb-2">Active Corridors</p>
           <h3 className="text-3xl font-bold text-gray-900">{corridors.length || '—'}</h3>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
+        <h3 className="text-lg font-bold mb-3">Merchant setup checklist</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+          {[
+            { href: '/auth/signup', label: 'Create merchant account' },
+            { href: '/security/otp', label: 'Enable OTP security' },
+            { href: '/onboarding/kyb', label: 'Submit KYB (Nigeria)' },
+            { href: '/payouts', label: 'Configure payout mode' },
+            { href: '/integration', label: 'Get embeddable checkout code' },
+            { href: '/settings', label: 'Set webhooks, team, and alerts' },
+          ].map((item) => (
+            <Link key={item.href} href={item.href} className="p-3 rounded-lg border border-gray-200 hover:bg-gray-50">
+              {item.label}
+            </Link>
+          ))}
         </div>
       </div>
 
