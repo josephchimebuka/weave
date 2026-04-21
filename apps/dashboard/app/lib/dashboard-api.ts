@@ -11,6 +11,11 @@ export type OrderFilter = {
   sort?: 'createdAt_desc' | 'createdAt_asc' | 'amount_desc' | 'amount_asc';
 };
 
+export type OrderWithProviderStatus = Order & {
+  paycrestStatus?: string | null;
+  nearStatus?: string | null;
+};
+
 function orderMatches(order: Order, filter: OrderFilter): boolean {
   const q = (filter.q || '').trim().toLowerCase();
   if (q) {
@@ -53,7 +58,7 @@ export async function fetchOrders(revalidateSeconds = 10): Promise<Order[]> {
   }
 }
 
-export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<(Order & { paycrestStatus?: string | null; nearStatus?: string | null }) | null> {
+export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<OrderWithProviderStatus | null> {
   try {
     const res = await fetch(`${API_BASE}/orders/${id}`, {
       headers: { 'x-api-key': API_KEY },
@@ -70,4 +75,3 @@ export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<(O
 export function applyOrderFilter(orders: Order[], filter: OrderFilter): Order[] {
   return sortOrders(orders.filter((o) => orderMatches(o, filter)), filter.sort);
 }
-
