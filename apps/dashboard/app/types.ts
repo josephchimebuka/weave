@@ -11,6 +11,7 @@ export interface RouteStep {
   status:         string;    // 'pending' | 'in_flight' | 'done' | 'failed'
   externalId:     string | null;
   depositAddress: string | null;
+  depositMemo:    string | null;
   startedAt:      string | null;
   completedAt:    string | null;
   createdAt:      string;
@@ -29,13 +30,24 @@ export interface Order {
   destAmount:         number | null;
   quoteRate:          number | null;
   status:             string;    // 'awaiting_deposit' | 'processing' | 'completed' | 'failed' | 'refunded'
-  reference:          string | null;
   senderFeeUsd:       number | null;
   appFeeUsd:          number | null;
   bridgeFeeUsd:       number | null;
   createdAt:          string;
   updatedAt:          string;
   steps:              RouteStep[];
+  sourceInstrument?:  {
+    bankInstitution?: string | null;
+    bankAccountIdentifier?: string | null;
+    bankAccountName?: string | null;
+    walletAddress?: string | null;
+  };
+  destInstrument?:    {
+    bankInstitution?: string | null;
+    bankAccountIdentifier?: string | null;
+    bankAccountName?: string | null;
+    walletAddress?: string | null;
+  };
 }
 
 // ── Asset helpers ──────────────────────────────────────────────────────────

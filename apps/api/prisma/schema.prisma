@@ -16,6 +16,7 @@ model User {
   id          String       @id @default(uuid())
   email       String?      @unique
   phoneE164   String?      @unique
+  passwordHash String?
   kycLevel    String       @default("none") // "none" | "basic" | "verified"
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt

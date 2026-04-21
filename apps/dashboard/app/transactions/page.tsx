@@ -1,21 +1,6 @@
-import { Order, assetLabel, directionOf, parseAsset } from '../types';
-
-const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
-const API_KEY  = process.env.WEAVE_API_KEY || '';
-
-async function getOrders(): Promise<Order[]> {
-  try {
-    const res = await fetch(`${API_BASE}/orders`, {
-      headers: { 'x-api-key': API_KEY },
-      next:    { revalidate: 10 },
-    });
-    if (!res.ok) return [];
-    const json = await res.json();
-    return json.data ?? [];
-  } catch {
-    return [];
-  }
-}
+import Link from 'next/link';
+import { applyOrderFilter, fetchOrders, toSearchQuery } from '../lib/dashboard-api';
+import { assetLabel, directionOf, parseAsset } from '../types';
 
 const STATUS_STYLES: Record<string, string> = {
   completed:        'text-green-600',
@@ -51,8 +36,26 @@ function fmtAmount(amount: number | null, assetKey: string): string {
   return `${formatted} ${suffix}`;
 }
 
-export default async function TransactionsPage() {
-  const orders = await getOrders();
+type SearchParams = {
+  q?: string;
+  status?: string;
+  direction?: string;
+  provider?: string;
+  corridor?: string;
+  fromDate?: string;
+  toDate?: string;
+  amountMin?: string;
+  amountMax?: string;
+  sort?: 'createdAt_desc' | 'createdAt_asc' | 'amount_desc' | 'amount_asc';
+};
+
+export default async function TransactionsPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
+  const params = (await searchParams) ?? {};
+  const rawOrders = await fetchOrders(10);
+  const orders = applyOrderFilter(rawOrders, params);
+  const providerOptions = Array.from(new Set(orders.flatMap((o) => (o.steps ?? []).map((s) => s.provider)))).sort();
+  const corridorOptions = Array.from(new Set(rawOrders.map((o) => `${o.sourceAssetKey}→${o.destAssetKey}`))).sort();
+  const qs = toSearchQuery(params);
 
   return (
     <main className="max-w-6xl mx-auto space-y-8">
@@ -61,6 +64,59 @@ export default async function TransactionsPage() {
         <p className="text-gray-500 mt-1">
           {orders.length > 0 ? `${orders.length} order${orders.length !== 1 ? 's' : ''}` : 'No transactions yet.'}
         </p>
+      </div>
+
+      <form className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 grid grid-cols-1 md:grid-cols-8 gap-3">
+        <input
+          name="q"
+          defaultValue={params.q || ''}
+          placeholder="Search order, asset, provider..."
+          className="md:col-span-2 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+        />
+        <select name="status" defaultValue={params.status || 'all'} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          {['all', 'awaiting_deposit', 'processing', 'completed', 'failed', 'refunded'].map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <select name="direction" defaultValue={params.direction || 'all'} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          {['all', 'offramp', 'onramp', 'bridge', 'transfer'].map((d) => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+        <select name="provider" defaultValue={params.provider || 'all'} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          <option value="all">all providers</option>
+          {providerOptions.map((provider) => (
+            <option key={provider} value={provider}>{provider}</option>
+          ))}
+        </select>
+        <select name="corridor" defaultValue={params.corridor || 'all'} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          <option value="all">all corridors</option>
+          {corridorOptions.map((corridor) => (
+            <option key={corridor} value={corridor}>{corridor}</option>
+          ))}
+        </select>
+        <input type="date" name="fromDate" defaultValue={params.fromDate || ''} className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+        <input type="date" name="toDate" defaultValue={params.toDate || ''} className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+        <input type="number" step="any" name="amountMin" defaultValue={params.amountMin || ''} placeholder="Min amount" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+        <input type="number" step="any" name="amountMax" defaultValue={params.amountMax || ''} placeholder="Max amount" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+        <div className="flex gap-2">
+          <select name="sort" defaultValue={params.sort || 'createdAt_desc'} className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm">
+            <option value="createdAt_desc">Newest</option>
+            <option value="createdAt_asc">Oldest</option>
+            <option value="amount_desc">Amount ↓</option>
+            <option value="amount_asc">Amount ↑</option>
+          </select>
+          <button type="submit" className="bg-gray-900 text-white rounded-lg px-4 text-sm font-medium">Apply</button>
+        </div>
+      </form>
+
+      <div className="flex justify-end">
+        <Link
+          href={`/transactions/export${qs ? `?${qs}` : ''}`}
+          className="text-sm bg-emerald-700 text-white px-3 py-2 rounded-lg hover:bg-emerald-800"
+        >
+          Download CSV
+        </Link>
       </div>
 
       {orders.length === 0 ? (
@@ -89,7 +145,11 @@ export default async function TransactionsPage() {
                 const route = (o.steps ?? []).map((s) => s.provider).join(' → ') || '—';
                 return (
                   <tr key={o.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="p-4 font-mono text-blue-600 text-xs">{o.id.slice(0, 8)}…</td>
+                    <td className="p-4 font-mono text-xs">
+                      <Link href={`/transactions/${o.id}`} className="text-blue-600 hover:underline">
+                        {o.id.slice(0, 8)}…
+                      </Link>
+                    </td>
                     <td className="p-4 text-gray-600 whitespace-nowrap">
                       {new Date(o.createdAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })}
                     </td>

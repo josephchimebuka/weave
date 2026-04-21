@@ -7,6 +7,7 @@ import ordersRouter       from './routes/orders';
 import webhooksRouter     from './routes/webhooks';
 import institutionsRouter from './routes/institutions';
 import countriesRouter    from './routes/countries';
+import authRouter         from './routes/auth';
 
 import { ensureMerchantDefaultInstruments } from './lib/merchant';
 
@@ -28,6 +29,7 @@ app.use('/api/v1/orders',       ordersRouter);
 app.use('/api/v1/webhooks',     webhooksRouter);
 app.use('/api/v1/institutions', institutionsRouter);
 app.use('/api/v1/ramp/countries', countriesRouter);
+app.use('/api/v1/auth', authRouter);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 
