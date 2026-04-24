@@ -3,6 +3,7 @@ import { paycrest } from '../services/paycrest.service';
 import { chainRails } from '../services/chainrails.service';
 import { nearIntents } from '../services/nearintents.service';
 import { requireApiKey } from '../middleware/auth';
+import { Decimal } from 'decimal.js';
 import { parseAsset } from '../lib/assets';
 import { planRoute } from '../services/router.service';
 
@@ -61,13 +62,22 @@ router.get('/', requireApiKey, async (req, res) => {
     const usdEquivalent = (() => {
       if (src.kind === 'crypto' && dst.kind === 'fiat') {
         if (amountIn === 'source') return amount;
-        // Dest-anchored: `amount` is the fiat the merchant must receive.
-        const netUsd = amount / sellRate;
-        return (netUsd / (1 - feeRate)) * (1 + slippageBuffer);
+        
+        // Dest-anchored: `amount` is the exact fiat the merchant MUST receive.
+        const targetFiat = new Decimal(amount);
+        const sr = new Decimal(sellRate);
+        const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+        
+        const netUsdc = targetFiat.div(sr);
+        const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+        
+        // Weave collects the old slippage buffer as guaranteed margin
+        const appFeePct = new Decimal(APP_FEE_BPS).plus(SLIPPAGE_BUFFER_BPS).div(10000);
+        return targetUsdc.div(new Decimal(1).minus(appFeePct)).toNumber();
       }
       if (src.kind === 'fiat' && dst.kind === 'crypto') {
         // Onramp: source is fiat; dest is USDC-equivalent.
-        return amountIn === 'source' ? amount / buyRate : amount;
+        return amountIn === 'source' ? new Decimal(amount).div(buyRate).toNumber() : amount;
       }
       return amount;
     })();
@@ -116,7 +126,7 @@ router.get('/', requireApiKey, async (req, res) => {
     let sourceAmount = usdEquivalent;
     if (src.kind === 'crypto') {
       try {
-        const token = await nearIntents.resolveToken(from);
+        const token = await nearIntents.resolveToken(from); // `from` is the raw string key like "crypto:BASE:USDC"
         if (token.price > 0) sourceAmount = usdEquivalent / token.price;
       } catch {}
     }

@@ -5,3 +5,17 @@
 @keyframes wpop   { 0% { transform: scale(0.6); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
 @keyframes wfade  { 0% { opacity: 0; transform: translateY(4px); } 100% { opacity: 1; transform: translateY(0); } }
 @keyframes wslide { 0% { opacity: 0; transform: translateY(10px); } 100% { opacity: 1; transform: translateY(0); } }
+
+/* Micro-interactions: Clickable elements */
+button, a, [role="button"], .w-clickable {
+  cursor: pointer !important;
+}
+
+button:active, a:active {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
+}
+
+input[type="radio"], input[type="checkbox"] {
+  cursor: pointer;
+}

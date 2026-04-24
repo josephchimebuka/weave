@@ -15,10 +15,20 @@ router.post('/chainrails', async (req: Request, res: Response) => {
     return res.status(401).json({ success: false, error: 'Invalid signature' });
   }
 
-  const payload = JSON.parse(rawBody);
+  let payload: any;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid JSON body' });
+  }
+
+  if (!payload?.type) {
+    return res.status(400).json({ success: false, error: 'Missing event type' });
+  }
+
   await webhookQueue.add('chainrails_event', {
     source: 'chainrails',
-    event:  payload.type,       // docs: envelope field is `type`
+    event:  payload.type,
     data:   payload,
   });
 
@@ -34,10 +44,21 @@ router.post('/paycrest', async (req: Request, res: Response) => {
     return res.status(401).json({ success: false, error: 'Invalid signature' });
   }
 
-  const payload = JSON.parse(rawBody);
+  let payload: any;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid JSON body' });
+  }
+
+  const event = payload?.event ?? payload?.type;
+  if (!event) {
+    return res.status(400).json({ success: false, error: 'Missing event field' });
+  }
+
   await webhookQueue.add('paycrest_event', {
     source: 'paycrest',
-    event:  payload.event ?? payload.type,
+    event,
     data:   payload,
   });
 

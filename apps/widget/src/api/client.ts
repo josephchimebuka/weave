@@ -1,18 +1,24 @@
-// Widget ↔ API transport. Pure-infra: the widget carries no end-user session.
-// The merchant supplies the API key and optionally a merchant-owned userId;
-// all auth is API-key based. No cookies, no cross-merchant state.
+// Widget ↔ API transport.
+//
+// Auth pattern:
+//   • Browser widget  → x-api-key: pk_live_... (publishable key, safe in JS)
+//   • Merchant server → x-public-key + x-secret-key headers (server-side only)
+//
+// The secretKey NEVER belongs in browser code. WeaveCheckout accepts only
+// the publishable key (apiKey prop).
 
-const API_BASE = (typeof window !== 'undefined' && (window as any).__WEAVE_API_BASE__)
-  || import.meta.env?.VITE_API_BASE
-  || 'http://localhost:4000/api/v1';
+const API_BASE =
+  (typeof window !== 'undefined' && (window as any).__WEAVE_API_BASE__) ||
+  (import.meta as any).env?.VITE_API_BASE ||
+  'http://localhost:4000/api/v1';
 
-async function apiFetch(path: string, apiKey: string | null, options?: RequestInit) {
+async function apiFetch(path: string, publishableKey: string, options?: RequestInit) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(apiKey ? { 'x-api-key': apiKey } : {}),
+    'x-api-key': publishableKey,
     ...(options?.headers as Record<string, string> | undefined),
   };
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res  = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (res.status === 204) return null;
   const json = await res.json();
   if (!json.success) throw new Error(json.error ?? 'API error');
@@ -20,17 +26,13 @@ async function apiFetch(path: string, apiKey: string | null, options?: RequestIn
 }
 
 // ── Asset key helpers ──────────────────────────────────────────────────────
-// The API identifies rails as canonical strings: `fiat:NGN`, `crypto:BASE:USDC`.
-export const fiatKey   = (currency: string)                  => `fiat:${currency.toUpperCase()}`;
-export const cryptoKey = (chain: string, token: string)      => `crypto:${chain.toUpperCase()}:${token.toUpperCase()}`;
+export const fiatKey   = (currency: string)             => `fiat:${currency.toUpperCase()}`;
+export const cryptoKey = (chain: string, token: string) => `crypto:${chain.toUpperCase()}:${token.toUpperCase()}`;
 
 // ── Quotes ─────────────────────────────────────────────────────────────────
 
 export interface QuoteBreakdown {
   usdEquivalent: number;
-  // Amount the user must deposit, denominated in the source asset. Equal to
-  // usdEquivalent for stablecoins; for SOL/ETH/etc it's the USD figure
-  // divided by the live NEAR Intents token price.
   sourceAmount:  number;
   senderFeeUsd:  number;
   appFeeUsd:     number;
@@ -47,7 +49,7 @@ export interface Quote {
 }
 
 export async function fetchQuote(
-  apiKey: string,
+  publishableKey: string,
   args: { from: string; to: string; amount: number; amountIn?: 'source' | 'dest' },
 ): Promise<Quote> {
   const qs = new URLSearchParams({
@@ -56,14 +58,14 @@ export async function fetchQuote(
     amount: String(args.amount),
     ...(args.amountIn ? { amountIn: args.amountIn } : {}),
   });
-  return apiFetch(`/quotes?${qs}`, apiKey);
+  return apiFetch(`/quotes?${qs}`, publishableKey);
 }
 
 // ── Instruments / Orders ───────────────────────────────────────────────────
 
 export interface InlineBankInstrument {
   kind:                  'bank_account';
-  assetKey:              string;    // e.g. "fiat:NGN"
+  assetKey:              string;
   label?:                string;
   bankInstitution:       string;
   bankAccountIdentifier: string;
@@ -72,7 +74,7 @@ export interface InlineBankInstrument {
 
 export interface InlineWalletInstrument {
   kind:          'crypto_wallet';
-  assetKey:      string;              // e.g. "crypto:BASE:USDC"
+  assetKey:      string;
   label?:        string;
   walletAddress: string;
 }
@@ -81,9 +83,9 @@ export type InlineInstrument = InlineBankInstrument | InlineWalletInstrument;
 export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstrument };
 
 export interface NextAction {
-  screen:         'collect_crypto' | 'collect_fiat';
+  screen:          'collect_crypto' | 'collect_fiat';
   depositAddress?: string;
-  depositMemo?:    string;    // required on XRP/TON/XLM/NEAR when routing via NEAR Intents
+  depositMemo?:    string;
   amount?:         number;
   token?:          string;
   chain?:          string;
@@ -94,7 +96,7 @@ export interface NextAction {
     amountToTransfer:  string;
     currency:          string;
   };
-  expiresAt?:     string;
+  expiresAt?: string;
 }
 
 export type Flow = 'self' | 'external';
@@ -106,30 +108,28 @@ export interface CreateOrderResponse {
 }
 
 export async function createOrder(
-  apiKey: string,
+  publishableKey: string,
   payload: {
-    source: InstrumentRef;
-    dest?: InstrumentRef;
-    amount: number;
-    flow?: Flow;
-    // Where refunds should go if the cross-chain swap fails. For the external
-    // flow this is the user's own wallet on the origin chain, collected in the
-    // widget — NOT the sender's own-chain balance, since we don't know it.
-    refundAddress?: string;
+    source:          InstrumentRef;
+    dest?:           InstrumentRef;
+    amount:          number;
+    amountIn?:       'source' | 'dest';
+    flow?:           Flow;
+    refundAddress?:  string;
   },
 ): Promise<CreateOrderResponse> {
-  return apiFetch('/orders', apiKey, {
+  return apiFetch('/orders', publishableKey, {
     method: 'POST',
     body:   JSON.stringify(payload),
   });
 }
 
-export async function fetchOrder(apiKey: string, orderId: string) {
-  return apiFetch(`/orders/${orderId}`, apiKey);
+export async function fetchOrder(publishableKey: string, orderId: string) {
+  return apiFetch(`/orders/${orderId}`, publishableKey);
 }
 
 // ── Reference data ─────────────────────────────────────────────────────────
 
-export async function fetchCountries(apiKey: string) {
-  return apiFetch('/ramp/countries', apiKey);
+export async function fetchCountries(publishableKey: string) {
+  return apiFetch('/ramp/countries', publishableKey);
 }

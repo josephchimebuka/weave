@@ -5,12 +5,14 @@ import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { login, storeSessionToken } from '../../lib/auth-client';
 
+const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
+
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
+  const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -22,52 +24,65 @@ export default function LoginPage() {
     setLoading(true);
     const result = await login(email, password);
     setLoading(false);
-    if (!result.success) {
-      setError(result.error);
-      return;
-    }
+    if (!result.success) { setError(result.error); return; }
     storeSessionToken(result.data.session.token);
     router.push('/');
   }
 
   return (
-    <main className="max-w-xl mx-auto">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 space-y-6">
+    <div className="w-full max-w-sm">
+      {/* Brand */}
+      <div className="text-center mb-8">
+        <p className="text-2xl font-bold tracking-tight text-zinc-900">Weave</p>
+        <p className="text-xs text-zinc-400 uppercase tracking-widest mt-1">Merchant Portal</p>
+      </div>
+
+      <div className="bg-white border border-zinc-200 rounded-2xl p-8 shadow-sm space-y-5">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Merchant login</h1>
-          <p className="text-gray-500 mt-1">Sign in to continue managing payments, payouts, and integrations.</p>
+          <h1 className="text-lg font-semibold text-zinc-900">Sign in</h1>
+          <p className="text-sm text-zinc-500 mt-0.5">Welcome back — enter your credentials below.</p>
         </div>
 
-        <form className="space-y-4" onSubmit={onSubmit}>
+        <form className="space-y-3" onSubmit={onSubmit}>
           <input
             placeholder="Work email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+            autoComplete="email"
+            className={INPUT}
           />
           <input
             placeholder="Password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+            autoComplete="current-password"
+            className={INPUT}
           />
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          {error && (
+            <p className="text-xs text-zinc-500 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2">
+              {error}
+            </p>
+          )}
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gray-900 disabled:bg-gray-500 text-white rounded-lg py-2.5 text-sm font-medium"
+            className="w-full bg-zinc-900 disabled:bg-zinc-400 text-white rounded-lg py-2.5 text-sm font-medium transition-colors"
           >
-            {loading ? 'Signing in…' : 'Login'}
+            {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
 
-        <div className="text-sm text-gray-500 flex justify-between">
-          <Link href="/auth/forgot-password" className="hover:underline">Forgot password?</Link>
-          <Link href="/auth/signup" className="text-gray-900 hover:underline">Create account</Link>
+        <div className="flex justify-between text-xs text-zinc-400">
+          <Link href="/auth/forgot-password" className="hover:text-zinc-900 transition-colors">
+            Forgot password?
+          </Link>
+          <Link href="/auth/signup" className="text-zinc-700 hover:text-zinc-900 transition-colors font-medium">
+            Create account →
+          </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

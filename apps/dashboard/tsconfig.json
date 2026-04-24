@@ -22,9 +22,9 @@
       }
     ],
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./*"],
+      "@weave/widget": ["../widget/src"],
+      "@weave/shared": ["../shared/src"]
     },
     "target": "ES2017"
   },

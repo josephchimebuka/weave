@@ -226,6 +226,8 @@ export class NearIntentsService {
     amount:         number | string;
     refundTo:       string;
     recipient:      string;
+    swapType?:      NearSwapType;
+    appFee?:        { recipient: string; fee: number };
     slippageBps?:   number;
     deadlineSecs?:  number;
     dry?:           boolean;
@@ -233,12 +235,16 @@ export class NearIntentsService {
   }): Promise<NearQuoteResponse> {
     const src = await this.resolveAssetId(params.sourceAssetKey);
     const dst = await this.resolveAssetId(params.destAssetKey);
-    const amountRaw = toSmallestUnit(params.amount, src.decimals);
+    
+    // If EXACT_OUTPUT, the amount parameter specifies the output token amount.
+    const isExactOutput = params.swapType === 'EXACT_OUTPUT';
+    const amountRaw = toSmallestUnit(params.amount, isExactOutput ? dst.decimals : src.decimals);
+    
     const deadline  = new Date(Date.now() + (params.deadlineSecs ?? 30 * 60) * 1000).toISOString();
 
     const body: NearQuoteRequest = {
       dry:               params.dry ?? false,
-      swapType:          'EXACT_INPUT',
+      swapType:          params.swapType ?? 'EXACT_INPUT',
       slippageTolerance: params.slippageBps ?? 100,
       originAsset:       src.assetId,
       destinationAsset:  dst.assetId,
@@ -250,6 +256,7 @@ export class NearIntentsService {
       recipientType:     'DESTINATION_CHAIN',
       deadline,
       ...(params.referral ? { referral: params.referral } : {}),
+      ...(params.appFee ? { appFees: [{ recipient: params.appFee.recipient, fee: params.appFee.fee }] } : {}),
     };
     return this.request<NearQuoteResponse>('POST', '/quote', body);
   }

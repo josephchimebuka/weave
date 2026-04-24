@@ -1,4 +1,5 @@
-export const DASHBOARD_SESSION_KEY = 'weave_dashboard_session_token';
+// Session cookie name — shared between client and server
+export const DASHBOARD_SESSION_COOKIE = 'weave_session';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api/v1';
 
@@ -26,17 +27,51 @@ export type AuthSuccessData = {
   user: { id: string; email: string | null };
 };
 
-export function storeSessionToken(token: string) {
-  if (typeof window !== 'undefined') window.localStorage.setItem(DASHBOARD_SESSION_KEY, token);
+function setCookie(name: string, value: string, maxAgeSeconds: number) {
+  if (typeof document === 'undefined') return;
+  const secure =
+    typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secure}`;
+}
+
+function clearCookie(name: string) {
+  if (typeof document === 'undefined') return;
+  document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+}
+
+export function storeSessionToken(token: string, expiresAt?: string) {
+  if (typeof window === 'undefined') return;
+  const maxAge = expiresAt
+    ? Math.max(60, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000))
+    : 24 * 60 * 60;
+  setCookie(DASHBOARD_SESSION_COOKIE, token, maxAge);
+}
+
+export function storeUserEmail(email: string | null) {
+  if (typeof window === 'undefined' || !email) return;
+  sessionStorage.setItem('weave_dashboard_user_email', email);
 }
 
 export function readSessionToken(): string {
-  if (typeof window === 'undefined') return '';
-  return window.localStorage.getItem(DASHBOARD_SESSION_KEY) || '';
+  if (typeof document === 'undefined') return '';
+  // Try to read from cookie (which the server also uses)
+  const name = DASHBOARD_SESSION_COOKIE + '=';
+  const decodedCookie = decodeURIComponent(document.cookie);
+  const cookies = decodedCookie.split(';');
+  for (const cookie of cookies) {
+    const c = cookie.trim();
+    if (c.indexOf(name) === 0) return c.substring(name.length);
+  }
+  return '';
 }
 
 export function clearSessionToken() {
-  if (typeof window !== 'undefined') window.localStorage.removeItem(DASHBOARD_SESSION_KEY);
+  if (typeof document !== 'undefined') {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('weave_dashboard_user_email');
+    }
+  }
+  clearCookie(DASHBOARD_SESSION_COOKIE);
 }
 
 export function signup(email: string, password: string) {
@@ -48,7 +83,10 @@ export function login(email: string, password: string) {
 }
 
 export function forgotPassword(email: string) {
-  return postJson<{ message: string; resetToken?: string; otpCode?: string; expiresAt?: string }>('/auth/forgot-password', { email });
+  return postJson<{ message: string; resetToken?: string; otpCode?: string; expiresAt?: string }>(
+    '/auth/forgot-password',
+    { email },
+  );
 }
 
 export function resetPassword(resetToken: string, otp: string, newPassword: string) {

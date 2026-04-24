@@ -17,22 +17,28 @@ import {
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 
+const ACCENT_MAP: Record<string, string> = {
+  forest: '#3D6B50',
+  tan:    '#B8935A',
+  ink:    '#1C1B17',
+};
+
 const WEAVE = {
-  ink: '#0B0F0E',
-  ink2: '#3A4240',
-  mute: '#6B7572',
-  hair: '#E8EAE6',
-  surface: '#FFFFFF',
-  page: '#F5F4EF',
-  panel: '#FAFAF7',
-  accent: '#0F5D4C',
-  accentSoft: '#E6F0EC',
-  accentInk: '#FFFFFF',
-  good: '#1F7A4D',
-  goodSoft: '#E6F3EC',
-  warn: '#A46A00',
-  warnSoft: '#FBF0DC',
-  err: '#A8321E',
+  ink: 'var(--weave-ink, #0B0F0E)',
+  ink2: 'var(--weave-ink2, #3A4240)',
+  mute: 'var(--weave-mute, #6B7572)',
+  hair: 'var(--weave-hair, #E8EAE6)',
+  surface: 'var(--weave-surface, #FFFFFF)',
+  page: 'var(--weave-page, #F5F4EF)',
+  panel: 'var(--weave-panel, #FAFAF7)',
+  accent: 'var(--weave-accent, #0F5D4C)',
+  accentSoft: 'var(--weave-accent-soft, #E6F0EC)',
+  accentInk: 'var(--weave-accent-ink, #FFFFFF)',
+  good: 'var(--weave-good, #1F7A4D)',
+  goodSoft: 'var(--weave-good-soft, #E6F3EC)',
+  warn: 'var(--weave-warn, #A46A00)',
+  warnSoft: 'var(--weave-warn-soft, #FBF0DC)',
+  err: 'var(--weave-err, #A8321E)',
 } as const;
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -60,32 +66,169 @@ interface Balance {
   usd: number;
   icon: string;
   chainTint: string;
+  logo?: string;
 }
 
 const BALANCES: Balance[] = [
-  { token: 'ETH',  chain: 'Optimism',  amount: 0.312,  usd: 1024.40, icon: 'Ξ', chainTint: '#ff3f57' },
-  { token: 'USDC', chain: 'Base',      amount: 150.00, usd: 150.00,  icon: '$', chainTint: '#1C4FE0' },
-  { token: 'STRK', chain: 'Starknet',  amount: 840.0,  usd: 184.80,  icon: 'S', chainTint: '#EC796B' },
-  { token: 'DAI',  chain: 'Ethereum',  amount: 502.00, usd: 502.00,  icon: 'D', chainTint: '#F5AC37' },
+  { 
+    token: 'ETH', chain: 'Optimism', amount: 0.312, usd: 1024.40, 
+    icon: 'Ξ', chainTint: '#ff3f57', 
+    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' 
+  },
+  { 
+    token: 'USDC', chain: 'Base', amount: 150.00, usd: 150.00, 
+    icon: '$', chainTint: '#1C4FE0', 
+    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' 
+  },
+  { 
+    token: 'STRK', chain: 'Starknet', amount: 840.0, usd: 184.80, 
+    icon: 'S', chainTint: '#EC796B', 
+    logo: 'https://assets.coingecko.com/coins/images/35293/standard/starknet.png' 
+  },
+  { 
+    token: 'DAI', chain: 'Ethereum', amount: 502.00, usd: 502.00, 
+    icon: 'D', chainTint: '#F5AC37', 
+    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x6B175474E89094C44Da98b954EedeAC495271d0F/logo.png' 
+  },
 ];
 
-interface Merchant {
+export interface Merchant {
   name: string;
   amount: number;
   currency: string;
+  description?: string;
 }
 
 const fmtMoney = (n: number, cur: string, fractionDigits?: number) => {
   const c = CURRENCIES[cur];
+  if (!c) return `${n.toFixed(2)} ${cur}`; // defensive fallback for unknown currencies
   const dp = fractionDigits ?? (Number.isInteger(n) ? 0 : 2);
+  const rounded = dp === 2 ? Math.ceil(n * 100) / 100 : n;
   const formatted = new Intl.NumberFormat('en-US', {
     minimumFractionDigits: dp,
     maximumFractionDigits: dp,
-  }).format(n);
+  }).format(rounded);
   return `${c.symbol}${formatted}`;
 };
-const fmtCrypto = (n: number, dp = 4) =>
-  n.toLocaleString('en-US', { maximumFractionDigits: dp });
+const fmtCrypto = (n: number, precision: number = 2) => {
+  const factor = Math.pow(10, precision);
+  const rounded = Math.ceil(n * factor) / factor;
+  return rounded.toLocaleString('en-US', {
+    minimumFractionDigits: precision,
+    maximumFractionDigits: precision,
+  });
+};
+
+const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string, accentColor?: string) => {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const accent = ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C';
+  const width = 800;
+  const height = 1100;
+  canvas.width = width;
+  canvas.height = height;
+
+  // 1. Background & Border
+  ctx.fillStyle = '#FDFDFB';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = '#E8EAE6';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(40, 40, width - 80, height - 80);
+
+  // 2. Header Logo & Title
+  ctx.fillStyle = accent;
+  ctx.font = '700 32px Figtree, Inter, sans-serif';
+  ctx.fillText('Weave', 80, 110);
+  
+  ctx.fillStyle = '#6B7572';
+  ctx.font = '500 16px Inter, sans-serif';
+  ctx.fillText('PAYMENT RECEIPT', width - 240, 105);
+
+  // 3. Status Badge
+  ctx.fillStyle = '#E6F0EC'; // weave-accent-soft (standard)
+  const badgeWidth = 230;
+  const badgeHeight = 36;
+  ctx.beginPath();
+  ctx.roundRect(80, 160, badgeWidth, badgeHeight, 8);
+  ctx.fill();
+  
+  ctx.fillStyle = accent; // use brand accent color
+  ctx.font = '700 12px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('✓ TRANSACTION SUCCESSFUL', 80 + badgeWidth / 2, 160 + 22);
+  ctx.textAlign = 'left';
+
+  // 4. Main Amount
+  ctx.fillStyle = '#0B0F0E';
+  ctx.font = '700 72px Figtree, Inter, sans-serif';
+  const amountStr = fmtMoney(merchant.amount, merchant.currency);
+  ctx.fillText(amountStr, 80, 280);
+
+  ctx.fillStyle = '#6B7572';
+  ctx.font = '500 18px Inter, sans-serif';
+  ctx.fillText('Total amount paid to ' + merchant.name, 80, 315);
+
+  // 5. Details Table
+  const drawRow = (label: string, value: string, y: number) => {
+    ctx.fillStyle = '#6B7572';
+    ctx.font = '500 15px Inter, sans-serif';
+    ctx.fillText(label, 80, y);
+    
+    ctx.fillStyle = '#0B0F0E';
+    ctx.font = '600 16px Inter, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(value, width - 80, y);
+    ctx.textAlign = 'left';
+
+    ctx.strokeStyle = '#E8EAE6';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(80, y + 25);
+    ctx.lineTo(width - 80, y + 25);
+    ctx.stroke();
+  };
+
+  const dateStr = new Date(order?.createdAt || Date.now()).toLocaleDateString('en-US', {
+    day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
+
+  drawRow('Payment Date', dateStr, 420);
+  drawRow('Transaction Ref', (order?.id || 'N/A').toUpperCase(), 490);
+  drawRow('Merchant', merchant.name, 560);
+  drawRow('Payout Destination', settledTo, 630);
+  drawRow('Status', 'Completed', 700);
+
+  // 6. Security & Footer
+  ctx.fillStyle = '#F5F4EF';
+  ctx.fillRect(80, 800, width - 160, 120);
+  
+  ctx.fillStyle = '#0B0F0E';
+  ctx.font = '600 16px Inter, sans-serif';
+  ctx.fillText('Security Verification', 110, 845);
+  
+  ctx.fillStyle = '#6B7572';
+  ctx.font = '400 14px Inter, sans-serif';
+  ctx.fillText('This transaction was secured with 256-bit encryption by Paycrest.', 110, 875);
+  ctx.fillText('You can verify this order directly on the Weave Dashboard.', 110, 895);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#0B0F0E';
+  ctx.font = '700 24px Figtree, Inter, sans-serif';
+  ctx.fillText('Thank you for using Weave.', width / 2, 1020);
+  
+  ctx.fillStyle = '#6B7572';
+  ctx.font = '400 12px Inter, sans-serif';
+  ctx.fillText('Support: help@weave.com', width / 2, 1050);
+
+  // 7. Output
+  const dataUrl = canvas.toDataURL('image/png');
+  const link = document.createElement('a');
+  link.download = `weave-receipt-${(order?.id || 'txn').slice(0, 8)}.png`;
+  link.href = dataUrl;
+  link.click();
+};
 
 // ── Primitives ───────────────────────────────────────────────────────────────
 
@@ -209,10 +352,10 @@ function WidgetFooter() {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 6V12C3 17 6.5 21 12 22C17.5 21 21 17 21 12V6L12 2Z" stroke="currentColor" strokeWidth="1.8"/></svg>
-        Secured by Weave
+        Secured by Weave by Dewdrop Labs
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span>ChainRails · Paycrest</span>
+        <span>v1.0.0</span>
       </div>
     </div>
   );
@@ -264,17 +407,25 @@ function ScreenConnect({ onPick, merchant }: {
       <Stack gap={10} style={{ alignItems: 'center', padding: '4px 0 6px' }}>
         <div style={{
           width: 44, height: 44, borderRadius: 10,
-          background: '#2B1810', color: '#F5DEB3',
+          background: ACCENT_MAP[merchant.currency === 'USDC' ? 'ink' : 'forest'] || '#2B1810',
+          color: '#FFFFFF',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontWeight: 700, fontSize: 20, fontFamily: 'Georgia, serif',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
-        }}>A</div>
+          fontWeight: 700, fontSize: 18, fontFamily: 'var(--weave-font-display, Georgia, serif)',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+        }}>
+          {(() => {
+            const parts = merchant.name.trim().split(/\s+/).filter(Boolean);
+            return parts.length >= 2 
+              ? (parts[0][0] + parts[1][0]).toUpperCase() 
+              : parts[0]?.slice(0, 2).toUpperCase() ?? '?';
+          })()}
+        </div>
         <Stack gap={3} style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 12.5, color: WEAVE.mute }}>Pay {merchant.name}</div>
           <div style={{ fontSize: 30, fontWeight: 600, letterSpacing: -0.6, color: WEAVE.ink }}>
             {fmtMoney(merchant.amount, merchant.currency)}
           </div>
-          <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Order #AFR-0481 · 2 items</div>
+          <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{merchant.description || 'Secure checkout'}</div>
         </Stack>
       </Stack>
 
@@ -294,7 +445,7 @@ function ScreenConnect({ onPick, merchant }: {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
         </button>
 
-        <button onClick={() => onPick('crypto')} style={methodCard}>
+        <button onClick={() => onPick('deposit')} style={methodCard}>
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <IconDot bg="#F6851B" size={24}>🦊</IconDot>
           </div>
@@ -315,11 +466,11 @@ function ScreenConnect({ onPick, merchant }: {
         ) : (
           <Stack gap={6} style={{ padding: '2px 0' }}>
             <Row gap={6}>
-              <button onClick={() => onPick('crypto')} style={{ ...methodCardSm, flex: 1 }}>
+              <button onClick={() => onPick('deposit')} style={{ ...methodCardSm, flex: 1 }}>
                 <IconDot bg="#3B99FC" size={20}>W</IconDot>
                 <span style={{ fontSize: 12.5, fontWeight: 500 }}>WalletConnect</span>
               </button>
-              <button onClick={() => onPick('crypto')} style={{ ...methodCardSm, flex: 1 }}>
+              <button onClick={() => onPick('deposit')} style={{ ...methodCardSm, flex: 1 }}>
                 <IconDot bg="#0052FF" size={20}>B</IconDot>
                 <span style={{ fontSize: 12.5, fontWeight: 500 }}>Coinbase</span>
               </button>
@@ -334,11 +485,6 @@ function ScreenConnect({ onPick, merchant }: {
           </Stack>
         )}
       </Stack>
-
-      <Row gap={6} justify="center" style={{ padding: '4px 0 0', fontSize: 11.5, color: WEAVE.mute }}>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 6V12C3 17 6.5 21 12 22C17.5 21 21 17 21 12V6L12 2Z" stroke="currentColor" strokeWidth="1.8"/><path d="M9 12L11 14L15 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        Bank-grade encryption · Weave never holds your money
-      </Row>
     </Stack>
   );
 }
@@ -382,7 +528,11 @@ function ScreenBalances({
                 transition: 'all 0.15s',
               }}
             >
-              <IconDot bg={b.chainTint} size={36}>{b.icon}</IconDot>
+              <IconDot bg={b.chainTint} size={36}>
+                {b.logo ? (
+                  <img src={b.logo} style={{ width: '100%', height: '100%', borderRadius: 'inherit', objectFit: 'cover' }} />
+                ) : b.icon}
+              </IconDot>
               <Stack gap={2} style={{ flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>
                   {fmtCrypto(b.amount)} {b.token}
@@ -538,7 +688,7 @@ function WeavingLoader() {
   );
 }
 
-const TERMINAL_OK  = new Set(['settled', 'completed']);
+const TERMINAL_OK  = new Set(['completed']);
 const TERMINAL_BAD = new Set(['failed', 'expired', 'refunded']);
 
 function ScreenProcessing({
@@ -552,8 +702,14 @@ function ScreenProcessing({
   bankDetails?: BankDetails | null;
 }) {
   const [stage, setStage] = useState(0);
+  const [seconds, setSeconds] = useState(0);
   const pollTerminated = useRef(false);
   const c = CURRENCIES[merchant.currency];
+
+  useEffect(() => {
+    const timer = setInterval(() => setSeconds(s => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const fiatDisplay = bankDetails?.amountToTransfer
     ? (() => {
@@ -673,7 +829,7 @@ function ScreenProcessing({
 }
 
 function ScreenSuccess({
-  onNext, merchant, balance, direction, apiKey, orderId,
+  onNext, merchant, balance, direction, apiKey, orderId, accentColor,
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -681,6 +837,7 @@ function ScreenSuccess({
   direction: 'offramp' | 'onramp';
   apiKey: string;
   orderId: string | null;
+  accentColor?: string;
 }) {
   const [order, setOrder] = useState<any | null>(null);
 
@@ -776,7 +933,10 @@ function ScreenSuccess({
         <button onClick={() => onNext('connect')} style={primaryBtn}>
           Done
         </button>
-        <button style={{ ...secondaryBtn, justifyContent: 'center', paddingLeft: 0 }}>
+        <button 
+          onClick={() => downloadReceipt(merchant, order, settledTo, accentColor)}
+          style={{ ...secondaryBtn, justifyContent: 'center', paddingLeft: 0 }}
+        >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3V15M12 15L7 10M12 15L17 10M3 19H21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
           Download receipt
         </button>
@@ -814,51 +974,68 @@ function ScreenError({ onNext, onBack }: { onNext: (s: string) => void; onBack: 
 // stablecoin entries are listed per chain where NEAR Intents has liquidity on each.
 const DEPOSIT_CHAINS = [
   // Base (our primary rail — USDC first)
-  { id: 'BASE',      name: 'Base',         token: 'USDC', tint: '#1C4FE0', icon: '$', network: 'Base' },
-  { id: 'BASE',      name: 'Base',         token: 'ETH',  tint: '#1C4FE0', icon: 'Ξ', network: 'Base' },
+  { id: 'BASE', name: 'Base', token: 'USDC', tint: '#1C4FE0', icon: '$', network: 'Base', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'BASE', name: 'Base', token: 'ETH',  tint: '#1C4FE0', icon: 'Ξ', network: 'Base', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { id: 'BASE', name: 'Base', token: 'cbBTC', tint: '#1C4FE0', icon: '₿', network: 'Base', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/base/assets/0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf/logo.png' },
   // Ethereum
-  { id: 'ETHEREUM',  name: 'Ethereum',     token: 'ETH',  tint: '#627EEA', icon: 'Ξ', network: 'Ethereum' },
-  { id: 'ETHEREUM',  name: 'Ethereum',     token: 'USDC', tint: '#627EEA', icon: '$', network: 'Ethereum' },
-  { id: 'ETHEREUM',  name: 'Ethereum',     token: 'USDT', tint: '#627EEA', icon: 'T', network: 'Ethereum' },
+  { id: 'ETHEREUM', name: 'Ethereum', token: 'ETH',  tint: '#627EEA', icon: 'Ξ', network: 'Ethereum', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { id: 'ETHEREUM', name: 'Ethereum', token: 'USDC', tint: '#627EEA', icon: '$', network: 'Ethereum', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'ETHEREUM', name: 'Ethereum', token: 'cbBTC', tint: '#627EEA', icon: '₿', network: 'Ethereum', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf/logo.png' },
+  { id: 'ETHEREUM', name: 'Ethereum', token: 'USDT', tint: '#627EEA', icon: 'T', network: 'Ethereum', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'ETHEREUM', name: 'Ethereum', token: 'PEPE', tint: '#627EEA', icon: 'P', network: 'Ethereum', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x6982508145454Ce325dDbE47A25d4ec3d2311933/logo.png' },
   // Arbitrum / Optimism
-  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'ETH',  tint: '#28A0F0', icon: 'Ξ', network: 'Arbitrum One' },
-  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'USDC', tint: '#28A0F0', icon: '$', network: 'Arbitrum One' },
-  { id: 'OPTIMISM',  name: 'Optimism',     token: 'ETH',  tint: '#FF0420', icon: 'Ξ', network: 'Optimism' },
-  { id: 'OPTIMISM',  name: 'Optimism',     token: 'USDC', tint: '#FF0420', icon: '$', network: 'Optimism' },
+  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'ETH',  tint: '#28A0F0', icon: 'Ξ', network: 'Arbitrum One', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/arbitrum/info/logo.png' },
+  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'USDC', tint: '#28A0F0', icon: '$', network: 'Arbitrum One', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'USDT', tint: '#28A0F0', icon: 'T', network: 'Arbitrum One', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'ARBITRUM',  name: 'Arbitrum',     token: 'cbBTC', tint: '#28A0F0', icon: '₿', network: 'Arbitrum One', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/base/assets/0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf/logo.png' },
+  { id: 'OPTIMISM',  name: 'Optimism',     token: 'ETH',  tint: '#FF0420', icon: 'Ξ', network: 'Optimism',     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/optimism/info/logo.png' },
+  { id: 'OPTIMISM',  name: 'Optimism',     token: 'USDC', tint: '#FF0420', icon: '$', network: 'Optimism',     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'OPTIMISM',  name: 'Optimism',     token: 'USDT', tint: '#FF0420', icon: 'T', network: 'Optimism',     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
   // Polygon / BSC / Avalanche
-  { id: 'POLYGON',   name: 'Polygon',      token: 'POL',  tint: '#7B3FE4', icon: 'P', network: 'Polygon' },
-  { id: 'POLYGON',   name: 'Polygon',      token: 'USDC', tint: '#7B3FE4', icon: '$', network: 'Polygon' },
-  { id: 'BSC',       name: 'BNB Chain',    token: 'BNB',  tint: '#F0B90B', icon: 'B', network: 'BNB Smart Chain' },
-  { id: 'BSC',       name: 'BNB Chain',    token: 'USDT', tint: '#F0B90B', icon: 'T', network: 'BNB Smart Chain' },
-  { id: 'AVALANCHE', name: 'Avalanche',    token: 'AVAX', tint: '#E84142', icon: 'A', network: 'Avalanche C-Chain' },
-  { id: 'AVALANCHE', name: 'Avalanche',    token: 'USDC', tint: '#E84142', icon: '$', network: 'Avalanche C-Chain' },
+  { id: 'POLYGON',   name: 'Polygon',      token: 'POL',  tint: '#7B3FE4', icon: 'P', network: 'Polygon',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
+  { id: 'POLYGON',   name: 'Polygon',      token: 'USDC', tint: '#7B3FE4', icon: '$', network: 'Polygon',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'POLYGON',   name: 'Polygon',      token: 'USDT', tint: '#7B3FE4', icon: 'T', network: 'Polygon',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'BSC',       name: 'BNB Chain',    token: 'BNB',  tint: '#F0B90B', icon: 'B', network: 'BNB Smart Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
+  { id: 'BSC',       name: 'BNB Chain',    token: 'USDT', tint: '#F0B90B', icon: 'T', network: 'BNB Smart Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'BSC',       name: 'BNB Chain',    token: 'USDC', tint: '#F0B90B', icon: '$', network: 'BNB Smart Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'AVALANCHE', name: 'Avalanche', token: 'AVAX', tint: '#E84142', icon: 'A', network: 'Avalanche C-Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/avalanchex/info/logo.png' },
+  { id: 'AVALANCHE', name: 'Avalanche', token: 'USDC', tint: '#E84142', icon: '$', network: 'Avalanche C-Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'AVALANCHE', name: 'Avalanche', token: 'USDT', tint: '#E84142', icon: 'T', network: 'Avalanche C-Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
   // Other EVM L2s
-  { id: 'GNOSIS',    name: 'Gnosis',       token: 'USDC', tint: '#04795B', icon: '$', network: 'Gnosis Chain' },
-  { id: 'SCROLL',    name: 'Scroll',       token: 'USDC', tint: '#D9A26C', icon: '$', network: 'Scroll' },
-  { id: 'XLAYER',    name: 'X Layer',      token: 'USDT', tint: '#1E1E1E', icon: 'T', network: 'X Layer' },
-  { id: 'BERA',      name: 'Berachain',    token: 'BERA', tint: '#814625', icon: 'B', network: 'Berachain' },
+  { id: 'GNOSIS',    name: 'Gnosis',       token: 'USDC', tint: '#04795B', icon: '$', network: 'Gnosis Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'GNOSIS',    name: 'Gnosis',       token: 'EURe', tint: '#04795B', icon: '€', network: 'Gnosis Chain', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/xdai/info/logo.png' },
+  { id: 'SCROLL',    name: 'Scroll',       token: 'USDC', tint: '#D9A26C', icon: '$', network: 'Scroll',       logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'SCROLL',    name: 'Scroll',       token: 'USDT', tint: '#D9A26C', icon: 'T', network: 'Scroll',       logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'ALEO',      name: 'Aleo',         token: 'ALEO', tint: '#111111', icon: 'A', network: 'Aleo',            logo: 'https://monad.xyz/favicon.ico' },
+  { id: 'XLAYER',    name: 'X Layer',      token: 'USDT', tint: '#1E1E1E', icon: 'T', network: 'X Layer',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'BERA',      name: 'Berachain',    token: 'BERA', tint: '#814625', icon: 'B', network: 'Berachain',    logo: 'https://assets.coingecko.com/coins/images/31034/standard/bera.png' },
   // Non-EVM
-  { id: 'SOLANA',    name: 'Solana',       token: 'SOL',  tint: '#14F195', icon: 'S', network: 'Solana' },
-  { id: 'SOLANA',    name: 'Solana',       token: 'USDC', tint: '#14F195', icon: '$', network: 'Solana' },
-  { id: 'TRON',      name: 'Tron',         token: 'TRX',  tint: '#EF0027', icon: 'T', network: 'Tron' },
-  { id: 'TRON',      name: 'Tron',         token: 'USDT', tint: '#EF0027', icon: 'T', network: 'Tron' },
-  { id: 'NEAR',      name: 'NEAR',         token: 'NEAR', tint: '#111111', icon: 'N', network: 'NEAR' },
-  { id: 'NEAR',      name: 'NEAR',         token: 'USDC', tint: '#111111', icon: '$', network: 'NEAR' },
-  { id: 'TON',       name: 'TON',          token: 'TON',  tint: '#0098EA', icon: 'T', network: 'TON' },
-  { id: 'TON',       name: 'TON',          token: 'USDT', tint: '#0098EA', icon: 'T', network: 'TON' },
-  { id: 'SUI',       name: 'Sui',          token: 'SUI',  tint: '#4DA2FF', icon: 'S', network: 'Sui' },
-  { id: 'APTOS',     name: 'Aptos',        token: 'APT',  tint: '#111111', icon: 'A', network: 'Aptos' },
-  { id: 'STARKNET',  name: 'Starknet',     token: 'STRK', tint: '#EC796B', icon: 'S', network: 'Starknet' },
+  { id: 'SOLANA',    name: 'Solana',       token: 'SOL',  tint: '#14F195', icon: 'S', network: 'Solana',       logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png' },
+  { id: 'SOLANA',    name: 'Solana',       token: 'USDC', tint: '#14F195', icon: '$', network: 'Solana',       logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'SOLANA',    name: 'Solana',       token: 'WIF',  tint: '#14F195', icon: 'W', network: 'Solana',       logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/assets/EKpQGSJtjMFqKZ9KQanAtY7YXDeJs2H3ob77S2SpxmX/logo.png' },
+  { id: 'TRON',      name: 'Tron',         token: 'TRX',  tint: '#EF0027', icon: 'T', network: 'Tron',         logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/tron/info/logo.png' },
+  { id: 'TRON',      name: 'Tron',         token: 'USDT', tint: '#EF0027', icon: 'T', network: 'Tron',         logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'NEAR',      name: 'NEAR',         token: 'NEAR', tint: '#111111', icon: 'N', network: 'NEAR',         logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/near/info/logo.png' },
+  { id: 'NEAR',      name: 'NEAR',         token: 'USDC', tint: '#111111', icon: '$', network: 'NEAR',         logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'TON',       name: 'TON',          token: 'TON',  tint: '#0098EA', icon: 'T', network: 'TON',          logo: 'https://assets.coingecko.com/coins/images/17980/standard/ton_symbol.png' },
+  { id: 'TON',       name: 'TON',          token: 'USDT', tint: '#0098EA', icon: 'T', network: 'TON',          logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'SUI',       name: 'Sui',          token: 'SUI',  tint: '#4DA2FF', icon: 'S', network: 'Sui',          logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/sui/info/logo.png' },
+  { id: 'SUI',       name: 'Sui',          token: 'USDC', tint: '#4DA2FF', icon: '$', network: 'Sui',          logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'APTOS',     name: 'Aptos',        token: 'APT',  tint: '#111111', icon: 'A', network: 'Aptos',        logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/aptos/info/logo.png' },
+  { id: 'APTOS',     name: 'Aptos',        token: 'USDC', tint: '#111111', icon: '$', network: 'Aptos',        logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'APTOS',     name: 'Aptos',        token: 'USDT', tint: '#111111', icon: 'T', network: 'Aptos',        logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { id: 'STARKNET',  name: 'Starknet',     token: 'STRK', tint: '#EC796B', icon: 'S', network: 'Starknet',     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/starknet/info/logo.png' },
   // Native-coin L1s
-  { id: 'BITCOIN',   name: 'Bitcoin',      token: 'BTC',  tint: '#F7931A', icon: '₿', network: 'Bitcoin' },
-  { id: 'XRP',       name: 'XRP Ledger',   token: 'XRP',  tint: '#23292F', icon: 'X', network: 'XRP Ledger' },
-  { id: 'STELLAR',   name: 'Stellar',      token: 'XLM',  tint: '#111111', icon: '★', network: 'Stellar' },
-  { id: 'CARDANO',   name: 'Cardano',      token: 'ADA',  tint: '#0033AD', icon: '₳', network: 'Cardano' },
-  { id: 'DOGE',      name: 'Dogecoin',     token: 'DOGE', tint: '#C2A633', icon: 'D', network: 'Dogecoin' },
-  { id: 'LITECOIN',  name: 'Litecoin',     token: 'LTC',  tint: '#345D9D', icon: 'L', network: 'Litecoin' },
-  { id: 'BCH',       name: 'Bitcoin Cash', token: 'BCH',  tint: '#8DC351', icon: 'B', network: 'Bitcoin Cash' },
-  { id: 'ZEC',       name: 'Zcash',        token: 'ZEC',  tint: '#F4B728', icon: 'Z', network: 'Zcash' },
-  { id: 'DASH',      name: 'Dash',         token: 'DASH', tint: '#008CE7', icon: 'D', network: 'Dash' },
+  { id: 'BITCOIN',   name: 'Bitcoin',      token: 'BTC',  tint: '#F7931A', icon: '₿', network: 'Bitcoin',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/bitcoin/info/logo.png' },
+  { id: 'XRP',       name: 'XRP Ledger',   token: 'XRP',  tint: '#23292F', icon: 'X', network: 'XRP Ledger',   logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ripple/info/logo.png' },
+  { id: 'STELLAR',   name: 'Stellar',      token: 'XLM',  tint: '#111111', icon: '★', network: 'Stellar',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/stellar/info/logo.png' },
+  { id: 'STELLAR',   name: 'Stellar',      token: 'USDC', tint: '#111111', icon: '$', network: 'Stellar',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { id: 'CARDANO',   name: 'Cardano',      token: 'ADA',  tint: '#0033AD', icon: '₳', network: 'Cardano',      logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/cardano/info/logo.png' },
+  { id: 'DOGE',      name: 'Dogecoin',     token: 'DOGE', tint: '#C2A633', icon: 'D', network: 'Dogecoin',     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/doge/info/logo.png' },
+  { id: 'LITECOIN',  name: 'Litecoin',     token: 'LTC',  tint: '#345D9D', icon: 'L', network: 'Litecoin',     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/litecoin/info/logo.png' },
+  { id: 'BCH',       name: 'Bitcoin Cash', token: 'BCH',  tint: '#8DC351', icon: 'B', network: 'Bitcoin Cash', logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/bitcoincash/info/logo.png' },
+  { id: 'ZEC',       name: 'Zcash',        token: 'ZEC',  tint: '#F4B728', icon: 'Z', network: 'Zcash',        logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/zcash/info/logo.png' },
+  { id: 'DASH',      name: 'Dash',         token: 'DASH', tint: '#008CE7', icon: 'D', network: 'Dash',         logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/dash/info/logo.png' },
 ];
 
 // Chains where the deposit destination tag/memo is part of the address — dropping
@@ -917,7 +1094,8 @@ const buildDepositQRPayload = (
   if (!amount || !chain || !token) return address;
   const meta = ERC20_META[`${chain.toUpperCase()}:${token.toUpperCase()}`];
   if (!meta) return address;
-  const rawUnits = BigInt(Math.round(amount * 10 ** meta.decimals));
+  const roundedAmount = Math.ceil(amount * 100) / 100;
+  const rawUnits = BigInt(Math.round(roundedAmount * 10 ** meta.decimals));
   return `ethereum:${meta.contract}@${meta.chainId}/transfer?address=${address}&uint256=${rawUnits.toString()}`;
 };
 
@@ -1094,7 +1272,11 @@ function ScreenDeposit({
                 border: 'none', cursor: 'pointer', fontFamily: 'inherit',
                 display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
               }}>
-                <IconDot bg={c.tint} size={24}>{c.icon}</IconDot>
+                <IconDot bg={c.tint} size={24}>
+                  {(c as any).logo ? (
+                    <img src={(c as any).logo} style={{ width: '100%', height: '100%', borderRadius: 'inherit', objectFit: 'cover' }} />
+                  ) : c.icon}
+                </IconDot>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{c.token} on {c.name}</div>
                   <div style={{ fontSize: 10.5, color: WEAVE.mute }}>{c.network}</div>
@@ -1227,7 +1409,7 @@ function ScreenDeposit({
               <Stack gap={2}>
                 <div style={{ fontSize: 10.5, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>Amount</div>
                 <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>
-                  {fmtCrypto(displayAmount, 8)} {displayToken}
+                  {fmtCrypto(displayAmount)} {displayToken}
                 </div>
                 <div style={{ fontSize: 11, color: WEAVE.mute }}>
                   on {chain.name}
@@ -1696,8 +1878,12 @@ export interface WeaveCheckoutProps {
   merchant?: Merchant;
   apiKey?: string;
   userAddress?: string;
+  theme?: 'organic' | 'minimal';
+  borderRadius?: number;
+  accentColor?: string;
   onSuccess?: (txn: { orderId: string; status: string }) => void;
   onError?: (err: Error) => void;
+  onClose?: () => void;
 }
 
 const DEFAULT_MERCHANT: Merchant = {
@@ -1718,15 +1904,22 @@ export function WeaveCheckout({
   merchant = DEFAULT_MERCHANT,
   apiKey: propApiKey,
   userAddress: propUserAddress,
+  theme = 'organic',
+  borderRadius = 16,
+  accentColor,
   onSuccess,
   onError,
+  onClose,
 }: WeaveCheckoutProps) {
   const apiKey =
-    propApiKey ?? (import.meta.env?.VITE_WEAVE_API_KEY as string | undefined) ?? 'pk_test_123';
+    propApiKey ??
+    (typeof window !== 'undefined' ? (window as any).__WEAVE_API_KEY__ : undefined) ??
+    ((import.meta as any).env?.VITE_WEAVE_PUBLIC_KEY as string | undefined) ??
+    'pk_test_demo';
   const userAddress =
-    propUserAddress
-    ?? (import.meta.env?.VITE_WEAVE_DEMO_USER_ADDRESS as string | undefined)
-    ?? '0x0000000000000000000000000000000000000000';
+    propUserAddress ??
+    ((import.meta as any).env?.VITE_WEAVE_DEMO_USER_ADDRESS as string | undefined) ??
+    '0x0000000000000000000000000000000000000000';
 
   const [screen, setScreen] = useState('connect');
   const [direction, setDirection] = useState<'offramp' | 'onramp'>('offramp');
@@ -1799,9 +1992,9 @@ export function WeaveCheckout({
       };
       const res = await createOrder(apiKey, {
         source,
-        // Deposit amount is source-asset-denominated (e.g. SOL), NOT USD.
-        // The backend feeds this straight into NEAR Intents as amountIn.
-        amount: q.breakdown.sourceAmount,
+        // The backend uses exact math to derive the sourceAmount and fed straight into NEAR Intents.
+        amount: merchant.amount,
+        amountIn: 'dest',
         refundAddress: refundAddr,
       });
       if (depositReq.current !== myReq) return;
@@ -1902,7 +2095,7 @@ export function WeaveCheckout({
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: userAddress },
       };
-      const res = await createOrder(apiKey, { source, amount: q.breakdown.sourceAmount });
+      const res = await createOrder(apiKey, { source, amount: merchant.amount, amountIn: 'dest' });
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
       setScreen('processing');
@@ -1949,14 +2142,14 @@ export function WeaveCheckout({
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError}/>;
       if (screen === 'vaccount')   return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId}/>;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails}/>;
-      if (screen === 'success')    return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId}/>;
+      if (screen === 'success')    return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor}/>;
       if (screen === 'error')      return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')}/>;
     } else {
       if (screen === 'deposit')    return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId}/>;
       if (screen === 'wallet')     return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance}/>;
       if (screen === 'quote')      return <ScreenQuote merchant={merchant} balance={balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading}/>;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId}/>;
-      if (screen === 'success')    return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId}/>;
+      if (screen === 'success')    return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor}/>;
       if (screen === 'error')      return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')}/>;
     }
     return null;
@@ -1971,19 +2164,23 @@ export function WeaveCheckout({
                             'connect';
 
   return (
-    <div style={{
-      width: 400,
-      background: WEAVE.surface,
-      borderRadius: 16,
-      boxShadow: '0 30px 80px rgba(11, 15, 14, 0.22), 0 0 0 1px rgba(0,0,0,0.04)',
-      overflow: 'hidden',
-      fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif',
-      color: WEAVE.ink,
-      animation: 'wslide 0.35s cubic-bezier(0.2, 1, 0.3, 1)',
-    }}>
+    <div 
+      className={`weave-checkout weave-theme-${theme}`}
+      style={{
+        '--weave-accent': ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C',
+        '--weave-accent-soft': (ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C') + '15',
+        width: 400,
+        background: WEAVE.surface,
+        borderRadius: borderRadius,
+        boxShadow: '0 30px 80px rgba(11, 15, 14, 0.22), 0 0 0 1px rgba(0,0,0,0.04)',
+        overflow: 'hidden',
+        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif',
+        color: WEAVE.ink,
+        animation: 'wslide 0.35s cubic-bezier(0.2, 1, 0.3, 1)',
+      } as React.CSSProperties}>
       <WidgetHeader
         merchantName={merchant.name}
-        onClose={() => setClosed(true)}
+        onClose={() => { setClosed(true); onClose?.(); }}
         showBack={showBack}
         onBack={() => setScreen(backTarget)}
       />

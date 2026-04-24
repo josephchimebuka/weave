@@ -1,21 +1,23 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { requireApiKey } from '../middleware/auth';
+import { requireAuth } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
 import { executeOrder } from '../services/executor.service';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
+import { Decimal } from 'decimal.js';
 
 const router = Router();
 
 interface CreateOrderBody {
-  source:     InstrumentRef;   // how the user pays (wallet or bank)
-  dest?:      InstrumentRef;   // merchant payout; falls back to Client.defaultPayoutInstrumentId
-  amount:     number;          // denominated in the source asset
-  reference?: string;          // optional merchant-supplied ref
-  flow?:      Flow;            // 'self' (connected wallet, future ChainRails) | 'external' (send-from-another-wallet, NEAR Intents); default 'external'
+  source:     InstrumentRef;   
+  dest?:      InstrumentRef;   
+  amount:     number;          
+  amountIn?:  'source' | 'dest';
+  reference?: string;          
+  flow?:      Flow;            
   // Explicit refund destination on the origin chain. In the external flow we
   // don't know who'll actually pay the deposit address, so the widget collects
   // a refund wallet from the user and sends it here. Takes precedence over the
@@ -24,7 +26,7 @@ interface CreateOrderBody {
 }
 
 // POST /api/v1/orders — direction-agnostic order creation.
-router.post('/', requireApiKey, async (req, res) => {
+router.post('/', requireAuth, async (req, res) => {
   const body = req.body as CreateOrderBody;
   if (!body?.source || !body?.amount) {
     return res.status(400).json({ success: false, error: 'Missing source, amount' });
@@ -34,22 +36,30 @@ router.post('/', requireApiKey, async (req, res) => {
   }
 
   try {
-    const client = await prisma.client.findUnique({ where: { id: req.clientId } });
-    if (!client) return res.status(401).json({ success: false, error: 'Unknown client' });
+    // Validate inline source shape early so we return a clean 400
+    if ('inline' in body.source) {
+      const d = body.source.inline;
+      if (!d?.kind || !d?.assetKey) {
+        return res.status(400).json({ success: false, error: 'source.inline requires kind and assetKey' });
+      }
+      if (d.kind === 'bank_account' && (!d.bankInstitution || !d.bankAccountIdentifier || !d.bankAccountName)) {
+        return res.status(400).json({ success: false, error: 'source.inline bank_account requires bankInstitution, bankAccountIdentifier, bankAccountName' });
+      }
+    }
 
-    // Pure-infra: we don't own end-user identity. The merchant is the owner of
-    // the instrument record; userId on Order stays null until a future licensed
-    // mode reintroduces end-user accounts.
-    const sourceInstrument = await resolveInstrument(body.source, 'merchant', client.id);
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    if (!merchant) return res.status(401).json({ success: false, error: 'Unknown merchant' });
+
+    const sourceInstrument = await resolveInstrument(body.source, merchant.id);
 
     let destInstrument;
     if (body.dest) {
-      destInstrument = await resolveInstrument(body.dest, 'merchant', client.id);
+      destInstrument = await resolveInstrument(body.dest, merchant.id);
     } else {
-      if (!client.defaultPayoutInstrumentId) {
-        return res.status(400).json({ success: false, error: 'No dest instrument and client has no default payout' });
+      if (!merchant.defaultPayoutInstrumentId) {
+        return res.status(400).json({ success: false, error: 'No dest instrument and merchant has no default payout configured' });
       }
-      destInstrument = await prisma.instrument.findUnique({ where: { id: client.defaultPayoutInstrumentId } });
+      destInstrument = await prisma.instrument.findUnique({ where: { id: merchant.defaultPayoutInstrumentId } });
       if (!destInstrument) return res.status(500).json({ success: false, error: 'Default payout instrument missing' });
     }
 
@@ -68,20 +78,56 @@ router.post('/', requireApiKey, async (req, res) => {
     //    source-asset-denominated amount the widget sent. The executor needs
     //    both: sourceAmount drives the first-hop deposit, usdEquivalent drives
     //    the USDC-on-Base intermediate legs.
+    const SENDER_FEE_BPS = Number(process.env.SENDER_FEE_BPS ?? 75);
+    const APP_FEE_BPS    = Number(process.env.APP_FEE_BPS    ?? 10);
+    const SLIPPAGE_BUFFER_BPS = Number(process.env.SLIPPAGE_BUFFER_BPS ?? 200);
+
     const srcP = parseAsset(sourceInstrument.assetKey);
     const dstP = parseAsset(destInstrument.assetKey);
     let quoteRate: number | null = null;
     let usdEquivalent = body.amount;
+    let sourceAmount = body.amount;
+    let destAmountFiat: number | undefined = undefined;
+    let appFeeBps: number | undefined = undefined;
+    
     try {
       const fiat = srcP.kind === 'fiat' ? srcP.currency : dstP.kind === 'fiat' ? dstP.currency : null;
+      let sellRate = 1; let buyRate = 1;
       if (fiat) {
         const r = await paycrest.getRate('base', 'USDC', 1, fiat);
-        quoteRate = Number(srcP.kind === 'fiat' ? r.buy.rate : r.sell.rate) || null;
-        if (srcP.kind === 'fiat' && quoteRate) usdEquivalent = body.amount / quoteRate;
+        sellRate = Number(r.sell.rate) || 1;
+        buyRate  = Number(r.buy.rate)  || 1;
+        quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
       }
-      if (srcP.kind === 'crypto') {
+
+      if (srcP.kind === 'crypto' && dstP.kind === 'fiat' && body.amountIn === 'dest') {
+         destAmountFiat = body.amount;
+         const targetFiat = new Decimal(body.amount);
+         const sr = new Decimal(sellRate);
+         const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+         
+         const netUsdc = targetFiat.div(sr);
+         // exact required USDC for paycrest
+         const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+         
+         // convert slippage buffer to explicit App Fee revenue
+         const appFeePct = new Decimal(APP_FEE_BPS).plus(SLIPPAGE_BUFFER_BPS).div(10000);
+         const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+         
+         usdEquivalent = totalUsdc.toNumber();
+         appFeeBps = APP_FEE_BPS + SLIPPAGE_BUFFER_BPS;
+      } else {
+         if (srcP.kind === 'crypto') {
+           const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
+           if (token.price > 0) usdEquivalent = body.amount * token.price;
+         } else if (srcP.kind === 'fiat') {
+           usdEquivalent = body.amount / buyRate;
+         }
+      }
+      
+      if (srcP.kind === 'crypto' && body.amountIn === 'dest') {
         const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
-        if (token.price > 0) usdEquivalent = body.amount * token.price;
+        if (token.price > 0) sourceAmount = usdEquivalent / token.price;
       }
     } catch {}
 
@@ -89,14 +135,14 @@ router.post('/', requireApiKey, async (req, res) => {
     //    use as the reference and lets us attach RouteStep rows to it.
     const order = await prisma.order.create({
       data: {
-        clientId:           client.id,
+        merchantId:         merchant.id,
         sourceInstrumentId: sourceInstrument.id,
         destInstrumentId:   destInstrument.id,
         sourceAssetKey:     sourceInstrument.assetKey,
         destAssetKey:       destInstrument.assetKey,
-        sourceAmount:       body.amount,
+        sourceAmount,
         status:             'awaiting_deposit',
-        routePlan:           plan as any,
+        routePlan:          plan as any,
         quoteRate,
         reference:          body.reference,
       },
@@ -118,8 +164,10 @@ router.post('/', requireApiKey, async (req, res) => {
     const execResult = await executeOrder({
       orderId:       order.id,
       plan,
-      sourceAmount:  body.amount,
+      sourceAmount,
       usdEquivalent,
+      destAmountFiat,
+      appFeeBps,
       reference:     order.id,
       merchantMemo:  `Weave ${order.id}`,
       refundAddress,
@@ -178,10 +226,10 @@ const PAYCREST_STATUS_ONRAMP: Record<string, string> = {
 const TERMINAL = new Set(['completed', 'failed', 'refunded']);
 
 // GET /api/v1/orders/:id — poll fallback kicks in when the webhook is late.
-router.get('/:id', requireApiKey, async (req, res) => {
+router.get('/:id', requireAuth, async (req, res) => {
   try {
     let order = await prisma.order.findFirst({
-      where:   { id: req.params.id, clientId: req.clientId },
+      where:   { id: req.params.id, merchantId: req.merchantId },
       include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
     });
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
@@ -244,10 +292,10 @@ router.get('/:id', requireApiKey, async (req, res) => {
 });
 
 // GET /api/v1/orders — list for the merchant.
-router.get('/', requireApiKey, async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
     const orders = await prisma.order.findMany({
-      where:   { clientId: req.clientId },
+      where:   { merchantId: req.merchantId },
       orderBy: { createdAt: 'desc' },
       take:    50,
       include: { steps: { orderBy: { sequence: 'asc' } } },

@@ -1,37 +1,34 @@
-// On startup, make sure every Client has a payout Instrument that matches
-// the MERCHANT_PAYOUT_* env vars — this is how we migrate from the old
-// env-driven merchant config to the Instrument-based model without losing
-// the convenience of a single source of truth in .env.
+// On startup, ensure every Merchant has a default payout Instrument that matches
+// the MERCHANT_PAYOUT_* env vars — this migrates from env-driven to DB-driven
+// payout config without losing the convenience of a single source of truth.
 
 import { prisma } from './prisma';
 import { cryptoKey, fiatKey } from './assets';
 
 export async function ensureMerchantDefaultInstruments() {
-  const clients = await prisma.client.findMany();
+  const merchants = await prisma.merchant.findMany();
 
-  for (const client of clients) {
-    if (client.defaultPayoutInstrumentId) continue; // already set
+  for (const merchant of merchants) {
+    if (merchant.defaultPayoutInstrumentId) continue; // already set
 
-    // Pick whichever payout config is populated in env. Fiat wins if both
-    // are set — merchants who care about crypto payouts will configure the
-    // Instrument explicitly via the dashboard later.
-    const fiatInst = buildFiatMerchantInstrument();
-    const cryptoInst = buildCryptoMerchantInstrument();
-    const toCreate = fiatInst ?? cryptoInst;
+    // Prefer fiat payout when both env vars are set.
+    const fiatInst   = buildFiatInstrument();
+    const cryptoInst = buildCryptoInstrument();
+    const toCreate   = fiatInst ?? cryptoInst;
     if (!toCreate) continue;
 
     const inst = await prisma.instrument.create({
-      data: { ...toCreate, ownerType: 'merchant', merchantId: client.id, verifiedAt: new Date() },
+      data: { ...toCreate, merchantId: merchant.id, verifiedAt: new Date() },
     });
-    await prisma.client.update({
-      where: { id: client.id },
+    await prisma.merchant.update({
+      where: { id: merchant.id },
       data:  { defaultPayoutInstrumentId: inst.id },
     });
-    console.log(`[bootstrap] merchant ${client.name}: payout instrument ${inst.id} (${inst.assetKey})`);
+    console.log(`[bootstrap] merchant ${merchant.name}: payout instrument ${inst.id} (${inst.assetKey})`);
   }
 }
 
-function buildFiatMerchantInstrument() {
+function buildFiatInstrument() {
   const institution       = process.env.MERCHANT_PAYOUT_INSTITUTION;
   const accountIdentifier = process.env.MERCHANT_PAYOUT_ACCOUNT_IDENTIFIER;
   const accountName       = process.env.MERCHANT_PAYOUT_ACCOUNT_NAME;
@@ -47,7 +44,7 @@ function buildFiatMerchantInstrument() {
   };
 }
 
-function buildCryptoMerchantInstrument() {
+function buildCryptoInstrument() {
   const address = process.env.MERCHANT_PAYOUT_WALLET_ADDRESS;
   const chain   = process.env.MERCHANT_PAYOUT_WALLET_CHAIN ?? 'BASE';
   const token   = process.env.MERCHANT_PAYOUT_WALLET_TOKEN ?? 'USDC';

@@ -115,14 +115,16 @@ export function planRoute(req: RouteRequest): RoutePlan {
   const dst = parseAsset(req.destAsset);
   const flow: Flow = req.flow ?? 'external';
 
-  if (req.sourceAsset === req.destAsset) {
+  // Direct transfer is only possible for identical crypto assets.
+  // Fiat assets ALWAYS require a bridge (Paycrest) in our architecture.
+  if (req.sourceAsset === req.destAsset && src.kind === 'crypto') {
     return summarize([{
       provider:       'direct',
       fromAsset:      req.sourceAsset,
       toAsset:        req.destAsset,
       expectedFeeBps: 0,
       expectedSecs:   30,
-      note:           'same asset',
+      note:           'same crypto asset',
     }]);
   }
 

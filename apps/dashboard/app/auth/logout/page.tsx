@@ -6,9 +6,9 @@ import { useState } from 'react';
 import { clearSessionToken, logout, readSessionToken } from '../../lib/auth-client';
 
 export default function LogoutPage() {
-  const router = useRouter();
+  const router  = useRouter();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error,   setError]   = useState('');
 
   async function onLogout() {
     setError('');
@@ -21,29 +21,47 @@ export default function LogoutPage() {
     }
     const result = await logout(token);
     setLoading(false);
-    if (!result.success) {
-      setError(result.error);
-      return;
-    }
+    if (!result.success) { setError(result.error); return; }
     clearSessionToken();
     router.push('/auth/login');
   }
 
   return (
-    <main className="max-w-xl mx-auto">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 space-y-6">
+    <div className="w-full max-w-sm">
+      <div className="text-center mb-8">
+        <p className="text-2xl font-bold tracking-tight text-zinc-900">Weave</p>
+        <p className="text-xs text-zinc-400 uppercase tracking-widest mt-1">Merchant Portal</p>
+      </div>
+
+      <div className="bg-white border border-zinc-200 rounded-2xl p-8 shadow-sm space-y-5">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Sign out</h1>
-          <p className="text-gray-500 mt-1">End your active merchant dashboard session on this device.</p>
+          <h1 className="text-lg font-semibold text-zinc-900">Sign out</h1>
+          <p className="text-sm text-zinc-500 mt-0.5">This will end your active session on this device.</p>
         </div>
-        {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+        {error && (
+          <p className="text-xs text-zinc-500 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2">
+            {error}
+          </p>
+        )}
+
         <div className="flex gap-3">
-          <button type="button" onClick={onLogout} disabled={loading} className="bg-gray-900 disabled:bg-gray-500 text-white rounded-lg px-4 py-2.5 text-sm font-medium">
-            {loading ? 'Signing out…' : 'Confirm logout'}
+          <button
+            type="button"
+            onClick={onLogout}
+            disabled={loading}
+            className="flex-1 bg-zinc-900 disabled:bg-zinc-400 text-white rounded-lg py-2.5 text-sm font-medium transition-colors"
+          >
+            {loading ? 'Signing out…' : 'Confirm sign out'}
           </button>
-          <Link href="/" className="px-4 py-2.5 text-sm rounded-lg border border-gray-200 hover:bg-gray-50">Cancel</Link>
+          <Link
+            href="/"
+            className="px-4 py-2.5 text-sm rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50 transition-colors"
+          >
+            Cancel
+          </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

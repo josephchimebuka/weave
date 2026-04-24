@@ -208,7 +208,10 @@ export class ChainRailsService {
    * Also enforces the 5-minute timestamp window per docs.
    */
   verifyWebhookSignature(rawBody: string, signature: string, timestamp: string): boolean {
-    if (!this.webhookSecret) return true;        // dev mode
+    if (!this.webhookSecret) {
+      console.error('[security] CHAINRAILS_WEBHOOK_SECRET not set. Rejecting all webhooks.');
+      return false;
+    }
     if (!signature || !timestamp) return false;
 
     const ts = Number(timestamp);

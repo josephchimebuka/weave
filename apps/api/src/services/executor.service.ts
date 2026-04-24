@@ -10,6 +10,7 @@ import { prisma } from '../lib/prisma';
 import { paycrest } from './paycrest.service';
 import { chainRails } from './chainrails.service';
 import { nearIntents } from './nearintents.service';
+import { sendMerchantPaymentNotification } from './email.service';
 import { parseAsset } from '../lib/assets';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 
@@ -22,6 +23,8 @@ export interface ExecutorInput {
   // it, a SOL→USDC→NGN route would hand Paycrest the SOL figure (0.006)
   // instead of the USDC figure (~0.52) and Paycrest's rate validation fails.
   usdEquivalent:    number;
+  destAmountFiat?:  number;
+  appFeeBps?:       number;
   reference:        string;
   merchantMemo:     string;
   // Source-side context, set per source-asset kind:
@@ -220,6 +223,8 @@ async function runNearIntentsSwap(
   downstreamRecipient: string,
   refundAddress:       string,
   ref:                 string,
+  exactOutputTarget?:  number,
+  appFeeBps?:          number,
 ): Promise<StepExecution> {
   const from = parseAsset(step.fromAsset);
   const to   = parseAsset(step.toAsset);
@@ -227,23 +232,25 @@ async function runNearIntentsSwap(
   if (!downstreamRecipient) throw new Error('nearintents: missing downstream recipient');
   if (!refundAddress)       throw new Error('nearintents: missing refundTo');
 
+  const WEAVE_EVM_REFUND_ADDRESS = process.env.WEAVE_EVM_REFUND_ADDRESS || refundAddress;
+
   const resp = await nearIntents.createQuote({
     sourceAssetKey: step.fromAsset,
     destAssetKey:   step.toAsset,
-    amount:         amountIn,
+    amount:         exactOutputTarget ?? amountIn, // Target output amount or fallback to input amount
+    swapType:       exactOutputTarget ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
     refundTo:       refundAddress,
     recipient:      downstreamRecipient,
-    slippageBps:    SLIPPAGE_BUFFER_BPS,
+    slippageBps:    exactOutputTarget ? undefined : SLIPPAGE_BUFFER_BPS, // EXACT_OUTPUT leaves slippage risk to solver
+    appFee:         appFeeBps && exactOutputTarget ? { recipient: WEAVE_EVM_REFUND_ADDRESS, fee: appFeeBps } : undefined,
     referral:       `weave-${ref}`.toLowerCase().slice(0, 32),
   });
 
-  // NEAR expresses amounts in smallest units; amountOutFormatted is the human
-  // figure. Fall back to amountIn if the field is missing on a non-dry quote.
   const amountOut = Number(resp.quote.amountOutFormatted) || amountIn;
 
   return {
-    externalId:     resp.quote.depositAddress, // status lookups are keyed by depositAddress, not correlationId
-    amountIn,
+    externalId:     resp.quote.depositAddress,
+    amountIn:       exactOutputTarget ? Number(resp.quote.amountInFormatted) || amountIn : amountIn,
     amountOut,
     depositAddress: resp.quote.depositAddress,
     depositMemo:    resp.quote.depositMemo ?? null,
@@ -261,6 +268,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   // Walk steps last → first, each step's depositAddress feeds the previous.
   const executions: StepExecution[] = new Array(plan.steps.length);
   let downstreamRecipient: string | null = null;
+  let exactTargetUsdc: number | null = null;
 
   for (let i = last; i >= 0; i--) {
     const step     = plan.steps[i];
@@ -268,7 +276,6 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     // on USDC-on-Base (the only intermediate we route through today), so the
     // USD-equivalent is the correct figure to hand them.
     const amountIn = i === 0 ? input.sourceAmount : input.usdEquivalent;
-
     let exec: StepExecution;
 
     if (step.provider === 'paycrest') {
@@ -276,11 +283,23 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       if (from.kind === 'crypto') {
         if (!input.destBank) throw new Error('paycrest offramp requires destBank');
         if (!WEAVE_EVM_REFUND_ADDRESS) throw new Error('paycrest offramp requires WEAVE_EVM_REFUND_ADDRESS');
-        exec = await runPaycrestOfframp(step, amountIn, input.reference, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
+        
+        // Exact Output anchoring: Since we computed exact usdc equivalent and stripped appFeeUsd to get target Paycrest USDC,
+        // we previously relied on input.appFeeUsd. However, we now calculate the target dynamically.
+        // Wait, input.usdEquivalent is the TOTAL user pays. We need Paycrest Target!
+        // targetUsdc = usdEquivalent * (1 - appFeeBps / 10000)
+        let paycrestAmountIn = amountIn;
+        if (input.destAmountFiat && input.appFeeBps) {
+          paycrestAmountIn = input.usdEquivalent * (1 - input.appFeeBps / 10000);
+          exactTargetUsdc = paycrestAmountIn;
+        }
+        
+        exec = await runPaycrestOfframp(step, paycrestAmountIn, input.reference, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
       } else {
         if (!input.refundAccount) throw new Error('paycrest onramp requires refundAccount');
-        if (!input.destWallet)    throw new Error('paycrest onramp requires destWallet');
-        exec = await runPaycrestOnramp(step, amountIn, input.reference, input.refundAccount, input.destWallet);
+        const recipient = downstreamRecipient || input.destWallet;
+        if (!recipient)           throw new Error('paycrest onramp requires destWallet or downstreamRecipient');
+        exec = await runPaycrestOnramp(step, amountIn, input.reference, input.refundAccount, recipient);
       }
     } else if (step.provider === 'chainrails') {
       if (!downstreamRecipient) throw new Error('chainrails step needs downstreamRecipient');
@@ -290,7 +309,15 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       // until they pick one. Fall back to destWallet — if the swap fails, at
       // least the refund lands somewhere the merchant can recover from.
       const refundTo = input.refundAddress || input.destWallet || downstreamRecipient || '';
-      exec = await runNearIntentsSwap(step, amountIn, downstreamRecipient ?? input.destWallet ?? '', refundTo, input.reference);
+      exec = await runNearIntentsSwap(
+        step, 
+        amountIn, 
+        downstreamRecipient ?? input.destWallet ?? '', 
+        refundTo, 
+        input.reference,
+        exactTargetUsdc ?? undefined,
+        input.appFeeBps
+      );
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');
@@ -412,9 +439,21 @@ export async function markStepDone(params: {
   const fresh = await prisma.routeStep.findMany({ where: { orderId: step.orderId }, orderBy: { sequence: 'asc' } });
   const allDone = fresh.every(s => s.id === step.id ? true : s.status === 'done');
   const anyFailed = fresh.some(s => s.status === 'failed');
-
   const nextOrderStatus = anyFailed ? 'failed' : allDone ? 'completed' : 'processing';
+  
   await prisma.order.update({ where: { id: step.orderId }, data: { status: nextOrderStatus } });
+
+  // ── Notify Merchant ───────────────────────────────────────────────────────
+  if (nextOrderStatus === 'completed') {
+    const { webhookService } = await import('./webhook.service');
+    // Fire and forget so we don't block the webhook worker
+    Promise.all([
+      sendMerchantPaymentNotification(step.orderId),
+      webhookService.triggerPaymentSucceeded(step.orderId)
+    ]).catch(err => {
+        console.error(`[executor] failed to trigger merchant notifications:`, err.message);
+    });
+  }
 
   return { orderId: step.orderId, stepId: step.id, orderStatus: nextOrderStatus };
 }

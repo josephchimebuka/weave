@@ -7,7 +7,15 @@ const connection = {
   port: Number(process.env.REDIS_PORT) || 6379,
 };
 
-export const webhookQueue = new Queue('weave-webhooks', { connection });
+export const webhookQueue = new Queue('weave-webhooks', {
+  connection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff:  { type: 'exponential', delay: 2_000 },
+    removeOnComplete: 100,
+    removeOnFail:     500,
+  },
+});
 
 // ── Event classification ────────────────────────────────────────────────────
 // Provider events bucket into three outcomes against our RouteStep lifecycle:
@@ -88,7 +96,7 @@ const worker = new Worker('weave-webhooks', async (job) => {
     create: { orderId: step.orderId, source, event, externalId, payload: data, processed: true },
     update: { processed: true },
   });
-}, { connection });
+}, { connection, concurrency: 5 });
 
 worker.on('failed', (job, err) => {
   console.error(`[queue] job ${job?.id} failed:`, err.message);

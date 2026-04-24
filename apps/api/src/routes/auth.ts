@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
+import { 
+  sendWelcomeEmail, 
+  sendOtpEmail, 
+  sendPasswordResetEmail,
+  sendAdminKYBNotification 
+} from '../services/email.service';
+import { authLimiter } from '../middleware/rate-limit';
 
 const router = Router();
 
@@ -40,28 +47,39 @@ function createOtpCode(): string {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
-function pickPublicUser(user: { id: string; email: string | null; createdAt: Date; updatedAt: Date }) {
+function generatePublishableKey(): string {
+  return 'pk_live_' + crypto.randomBytes(24).toString('hex');
+}
+
+function generateSecretKey(): string {
+  return 'sk_live_' + crypto.randomBytes(32).toString('hex');
+}
+
+function pickPublicMerchant(m: { id: string; email: string; name: string; publishableKey: string; createdAt: Date; updatedAt: Date }) {
   return {
-    id: user.id,
-    email: user.email,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+    id:             m.id,
+    email:          m.email,
+    name:           m.name,
+    publishableKey: m.publishableKey,
+    createdAt:      m.createdAt,
+    updatedAt:      m.updatedAt,
   };
 }
 
-async function issueSession(userId: string) {
-  const token = createSessionToken();
+async function issueSession(merchantId: string) {
+  const token     = createSessionToken();
   const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000);
-  const session = await prisma.session.create({
-    data: { userId, token, expiresAt },
+  const session   = await prisma.session.create({
+    data: { merchantId, token, expiresAt },
   });
   return { token: session.token, expiresAt: session.expiresAt };
 }
 
-// POST /api/v1/auth/signup
-router.post('/signup', async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email ?? ''));
+// ── POST /api/v1/auth/signup ─────────────────────────────────────────────────
+router.post('/signup', authLimiter, async (req, res) => {
+  const email    = normalizeEmail(String(req.body?.email    ?? ''));
   const password = String(req.body?.password ?? '');
+  const name     = String(req.body?.name     ?? email.split('@')[0]);
 
   if (!email || !password) {
     return res.status(400).json({ success: false, error: 'email and password are required' });
@@ -71,25 +89,53 @@ router.post('/signup', async (req, res) => {
   }
 
   try {
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const existing = await prisma.merchant.findUnique({ where: { email } });
     if (existing) {
       return res.status(409).json({ success: false, error: 'account already exists' });
     }
 
-    const user = await prisma.user.create({
-      data: {
-        email,
-        kycLevel: 'none',
-        passwordHash: hashPassword(password),
-      },
+    const publishableKey = generatePublishableKey();
+    const secretKey      = generateSecretKey();
+    const hashedSecret   = hashCode(secretKey);
+
+    // Create Merchant + KeyPair in one transaction so signup is atomic.
+    const { merchant, session } = await prisma.$transaction(async (tx) => {
+      const merchant = await tx.merchant.create({
+        data: {
+          email,
+          name,
+          kycLevel:      'none',
+          passwordHash:  hashPassword(password),
+          publishableKey,
+        },
+      });
+      await tx.keyPair.create({
+        data: {
+          publicKey:      publishableKey,
+          hashedSecretKey: hashedSecret,
+          merchantId:     merchant.id,
+          isActive:       true,
+        },
+      });
+      const token     = createSessionToken();
+      const expiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000);
+      const session   = await tx.session.create({
+        data: { merchantId: merchant.id, token, expiresAt },
+      });
+      return { merchant, session };
     });
-    const session = await issueSession(user.id);
+
+    sendWelcomeEmail(email, name).catch(err =>
+      console.error('[signup] welcome email error:', err.message),
+    );
 
     return res.json({
       success: true,
       data: {
-        user: pickPublicUser(user),
-        session,
+        merchant: pickPublicMerchant(merchant),
+        session:  { token: session.token, expiresAt: session.expiresAt },
+        // Secret key is shown exactly once — merchant must store it.
+        secretKey,
       },
     });
   } catch (err: any) {
@@ -97,9 +143,9 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// POST /api/v1/auth/login
-router.post('/login', async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email ?? ''));
+// ── POST /api/v1/auth/login ──────────────────────────────────────────────────
+router.post('/login', authLimiter, async (req, res) => {
+  const email    = normalizeEmail(String(req.body?.email    ?? ''));
   const password = String(req.body?.password ?? '');
 
   if (!email || !password) {
@@ -107,16 +153,16 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !verifyPassword(password, user.passwordHash)) {
+    const merchant = await prisma.merchant.findUnique({ where: { email } });
+    if (!merchant || !verifyPassword(password, merchant.passwordHash)) {
       return res.status(401).json({ success: false, error: 'invalid email or password' });
     }
 
-    const session = await issueSession(user.id);
+    const session = await issueSession(merchant.id);
     return res.json({
       success: true,
       data: {
-        user: pickPublicUser(user),
+        merchant: pickPublicMerchant(merchant),
         session,
       },
     });
@@ -125,15 +171,15 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// GET /api/v1/auth/session
+// ── GET /api/v1/auth/session ─────────────────────────────────────────────────
 router.get('/session', async (req, res) => {
   const token = String(req.headers['x-session-token'] ?? '');
   if (!token) return res.status(401).json({ success: false, error: 'missing x-session-token header' });
 
   try {
     const session = await prisma.session.findUnique({
-      where: { token },
-      include: { user: true },
+      where:   { token },
+      include: { merchant: true },
     });
     if (!session || session.expiresAt.getTime() <= Date.now()) {
       return res.status(401).json({ success: false, error: 'invalid or expired session' });
@@ -141,7 +187,7 @@ router.get('/session', async (req, res) => {
     return res.json({
       success: true,
       data: {
-        user: pickPublicUser(session.user),
+        user:    pickPublicMerchant(session.merchant),  // alias for dashboard compatibility
         session: { token: session.token, expiresAt: session.expiresAt },
       },
     });
@@ -150,47 +196,49 @@ router.get('/session', async (req, res) => {
   }
 });
 
-// POST /api/v1/auth/forgot-password
-router.post('/forgot-password', async (req, res) => {
+// ── POST /api/v1/auth/forgot-password ────────────────────────────────────────
+router.post('/forgot-password', authLimiter, async (req, res) => {
   const email = normalizeEmail(String(req.body?.email ?? ''));
   if (!email) return res.status(400).json({ success: false, error: 'email is required' });
 
   try {
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return res.json({ success: true, data: { message: 'If the account exists, reset instructions have been generated.' } });
+    const merchant = await prisma.merchant.findUnique({ where: { email } });
+    if (!merchant) {
+      // Return success to avoid account enumeration
+      return res.json({ success: true, data: { message: 'If that account exists, reset instructions have been sent.' } });
     }
 
-    const otpCode = createOtpCode();
+    const otpCode   = createOtpCode();
     const challenge = await prisma.otpChallenge.create({
       data: {
-        channel: 'email',
-        target: email,
-        purpose: 'password_reset',
-        codeHash: hashCode(otpCode),
+        channel:   'email',
+        target:    email,
+        purpose:   'password_reset',
+        codeHash:  hashCode(otpCode),
         expiresAt: new Date(Date.now() + RESET_TTL_MINUTES * 60 * 1000),
       },
     });
 
+    // Production behavior: Always send email, never leak OTP in response.
+    sendPasswordResetEmail(email, otpCode, challenge.id).catch(err =>
+      console.error('[forgot-password] email error:', err.message),
+    );
+
     return res.json({
       success: true,
-      data: {
-        message: 'Reset instructions generated. Use the challenge id and OTP code to reset in non-production environments.',
-        resetToken: challenge.id,
-        otpCode: process.env.NODE_ENV === 'production' ? undefined : otpCode,
-        expiresAt: challenge.expiresAt,
-      },
+      data: { message: 'Verification instructions have been sent to your email.' },
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// POST /api/v1/auth/reset-password
+// ── POST /api/v1/auth/reset-password ─────────────────────────────────────────
 router.post('/reset-password', async (req, res) => {
-  const resetToken = String(req.body?.resetToken ?? '');
-  const otpCode = String(req.body?.otp ?? '');
+  const resetToken  = String(req.body?.resetToken  ?? '');
+  const otpCode     = String(req.body?.otp         ?? '');
   const newPassword = String(req.body?.newPassword ?? '');
+
   if (!resetToken || !otpCode || !newPassword) {
     return res.status(400).json({ success: false, error: 'resetToken, otp, and newPassword are required' });
   }
@@ -200,34 +248,40 @@ router.post('/reset-password', async (req, res) => {
 
   try {
     const challenge = await prisma.otpChallenge.findUnique({ where: { id: resetToken } });
-    if (!challenge || challenge.purpose !== 'password_reset' || challenge.consumedAt || challenge.expiresAt.getTime() <= Date.now()) {
+    if (
+      !challenge ||
+      challenge.purpose !== 'password_reset' ||
+      challenge.consumedAt ||
+      challenge.expiresAt.getTime() <= Date.now()
+    ) {
       return res.status(400).json({ success: false, error: 'invalid or expired reset token' });
     }
     if (challenge.codeHash !== hashCode(otpCode)) {
-      return res.status(400).json({ success: false, error: 'invalid otp code' });
+      return res.status(400).json({ success: false, error: 'invalid OTP code' });
     }
 
-    const user = await prisma.user.findUnique({ where: { email: challenge.target } });
-    if (!user) return res.status(404).json({ success: false, error: 'account not found' });
+    const merchant = await prisma.merchant.findUnique({ where: { email: challenge.target } });
+    if (!merchant) return res.status(404).json({ success: false, error: 'account not found' });
 
-    const updatedUser = await prisma.$transaction(async (tx) => {
-      const u = await tx.user.update({
-        where: { id: user.id },
-        data: { passwordHash: hashPassword(newPassword) },
+    const updated = await prisma.$transaction(async (tx) => {
+      const m = await tx.merchant.update({
+        where: { id: merchant.id },
+        data:  { passwordHash: hashPassword(newPassword) },
       });
       await tx.otpChallenge.update({
         where: { id: challenge.id },
-        data: { consumedAt: new Date() },
+        data:  { consumedAt: new Date() },
       });
-      await tx.session.deleteMany({ where: { userId: user.id } });
-      return u;
+      // Invalidate all existing sessions for security
+      await tx.session.deleteMany({ where: { merchantId: merchant.id } });
+      return m;
     });
 
-    const session = await issueSession(updatedUser.id);
+    const session = await issueSession(updated.id);
     return res.json({
       success: true,
       data: {
-        user: pickPublicUser(updatedUser),
+        merchant: pickPublicMerchant(updated),
         session,
       },
     });
@@ -236,7 +290,7 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-// POST /api/v1/auth/logout
+// ── POST /api/v1/auth/logout ─────────────────────────────────────────────────
 router.post('/logout', async (req, res) => {
   const token = String(req.body?.sessionToken ?? req.headers['x-session-token'] ?? '');
   if (!token) return res.status(400).json({ success: false, error: 'sessionToken is required' });

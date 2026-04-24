@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { paycrest } from '../services/paycrest.service';
-import { requireApiKey } from '../middleware/auth';
+import { requireAuth } from '../middleware/auth';
 
 const router = Router();
 
 // GET /api/v1/institutions — banks + mobile money for a fiat currency
-router.get('/', requireApiKey, async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
     const currency = req.query.currency as string;
     if (!currency) {

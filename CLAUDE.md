@@ -20,7 +20,12 @@ packages/
 
 ## `apps/api` — orchestration layer
 
-Express app at `src/index.ts`, mounted under `/api/v1`. The API is **pure infrastructure**: it does not own end-user identity. Auth is API-key only (`x-api-key` header → `Client` row), even though `prisma/schema.prisma` carries a dormant `User`/`Session`/`OtpChallenge` identity model for a future licensed mode.
+Express app at `src/index.ts`, mounted under `/api/v1`. Supports two authentication methods:
+
+1. **API-key auth** (`x-api-key` header) — for external systems / the widget. Each `Client` (merchant) has an `apiKey`.
+2. **Session token auth** (`x-session-token` header) — for the merchant dashboard. Created by `/auth/signup` or `/auth/login` and stored in the `weave_session` cookie.
+
+The API does **not** own end-user payment identity. The `Instrument` model allows merchants to configure their own payout destinations (bank accounts or crypto wallets) and supports both merchant-owned and user-owned instruments for a future licensed mode with user accounts.
 
 ### Routes (`src/routes/`)
 
@@ -28,16 +33,24 @@ Express app at `src/index.ts`, mounted under `/api/v1`. The API is **pure infras
 - `POST /orders` — direction-agnostic order creation. Accepts optional `flow: 'self' | 'external'` (default `'external'`). Resolves source + dest `Instrument`s, plans the route with the flow, persists the `Order`, then executes providers and returns `nextAction` for the widget (incl. `depositMemo` when NEAR Intents requires one).
 - `GET /orders/:id` — includes a Paycrest poll fallback AND a NEAR Intents poll fallback (both safety nets for their respective workers). Status map differs for onramp vs offramp (see `PAYCREST_STATUS_ONRAMP/OFFRAMP` in `routes/orders.ts`). Response adds `paycrestStatus` and `nearStatus` fields.
 - `GET /orders` — merchant list, capped at 50.
-- `POST /webhooks/chainrails` · `POST /webhooks/paycrest` — signature-verified, enqueued to BullMQ (`weave-webhooks`).
+- `POST /webhooks/chainrails` · `POST /webhooks/paycrest` — signature-verified, then body JSON-parsed and enqueued to BullMQ (`weave-webhooks`). Signature verification is REQUIRED; no bypasses are allowed.
+- **Outgoing Merchant Webhooks** — Managed by `webhook.service.ts` and triggered by `executor.service.ts`. Enqueued via BullMQ `outgoing_webhooks`. HMAC-SHA256 signed.
 - `GET /institutions?currency=NGN` — proxies Paycrest.
 - `GET /ramp/countries` — currently NGN-only demo stub.
+- **Auth endpoints:**
+  - `POST /auth/signup` · `POST /auth/login` — create/authenticate a `User` + issue a `Session` (scrypt password hash, 24 h TTL by default). Return `{ user, session: { token, expiresAt } }`.
+  - `GET /auth/session` — validate `x-session-token` header, return current user.
+  - `POST /auth/forgot-password` — create an `OtpChallenge` (purpose `password_reset`); returns `resetToken` + `otpCode` in non-production.
+  - `POST /auth/reset-password` — consume challenge + OTP, hash new password, delete all sessions, issue fresh session.
+  - `POST /auth/logout` — delete session by token.
 
 ### Services (`src/services/`)
 
 - **`router.service.ts`** — BFS planner (depth ≤ 3) over a small `EDGES` table. Edges now carry an optional `flows: Flow[]` allowlist (`'self' | 'external'`) so `planRoute({ flow })` filters candidates before traversing. Edges: Paycrest offramp (EVM USDC → fiat), Paycrest onramp (fiat → EVM USDC), **NEAR Intents (any supported chain → USDC on Base, `flows: ['external']`)**, ChainRails (any EVM USDC → USDC on Base, `flows: ['self']`), direct same-asset. Intermediate is `crypto:BASE:USDC` (Paycrest's settlement chain). Swap BFS for Dijkstra once edge count grows.
 - **`executor.service.ts`** — creates provider resources for every step at order-creation time, **walking steps in reverse** so each step's `depositAddress` feeds the previous step's recipient. Dispatch branches: Paycrest offramp/onramp, ChainRails bridge, NEAR Intents swap, direct. Persists `RouteStep` rows (incl. `depositMemo`) in a single transaction after all provider calls succeed. Exposes `markStepDone` / `markStepFailed` for the webhook worker + NEAR poller, which roll up `Order.status` when all steps complete.
-- **`paycrest.service.ts`** — thin client for `api.paycrest.io/v2` (`/rates`, `/institutions`, `/sender/orders`). HMAC-SHA256 webhook verification (`sha256=` prefix accepted). Missing webhook secret = dev mode (accept unsigned).
-- **`chainrails.service.ts`** — thin client for `api.chainrails.io/api/v1` (`/quotes/best`, `/intents`). Carries its own chain/token registry + `toSmallestUnit` scaler. Webhook verification is `HMAC-SHA256(secret, "${timestamp}.${rawBody}")` with a 5-minute timestamp window. **Currently not firing** — reserved for the connect-wallet flow (`flow: 'self'`) when that path is fully wired.
+- **`paycrest.service.ts`** — thin client for `api.paycrest.io/v2` (`/rates`, `/institutions`, `/sender/orders`). HMAC-SHA256 webhook verification. Fails-closed if `PAYCREST_WEBHOOK_SECRET` is missing.
+- **`chainrails.service.ts`** — thin client for `api.chainrails.io/api/v1` (`/quotes/best`, `/intents`). Webhook verification is `HMAC-SHA256(secret, "${timestamp}.${rawBody}")`. Fails-closed if `CHAINRAILS_WEBHOOK_SECRET` is missing.
+- **`webhook.service.ts`** — Dispatcher for merchant-bound notifications. Handles HMAC-SHA256 signing using the merchant's `webhookSecret`.
 - **`nearintents.service.ts`** — thin client for `1click.chaindefuser.com/v0` (`/tokens`, `/quote`, `/status`, `/deposit/submit`). JWT-bearer auth. Fetches `/tokens` once, caches 10 min, maps our `crypto:CHAIN:TOKEN` → their `assetId` by `(blockchain, symbol)`. Exports `classifyNearStatus` → `'done' | 'failed' | 'progress'`.
 
 ### Data model (`prisma/schema.prisma`, Postgres)
@@ -52,8 +65,10 @@ Express app at `src/index.ts`, mounted under `/api/v1`. The API is **pure infras
 
 Two long-running workers, both Redis-backed. Booted by side-effect imports in `src/index.ts`.
 
-- **`webhooks.ts`** — BullMQ `weave-webhooks` queue. Event → outcome map (`PAYCREST_OUTCOME`, `CHAINRAILS_OUTCOME`) classifies events as `done | failed | progress`. Worker resolves the owning `RouteStep` by `(provider, externalId)` then calls `markStepDone` / `markStepFailed`. Idempotency is enforced by a `WebhookLog.processed` check before work runs and an upsert after.
-- **`nearintents_poller.ts`** — NEAR Intents has no webhooks, so we poll. BullMQ repeatable tick (jobId `weave-nearintents-tick`, default `NEAR_POLL_INTERVAL_MS=15000`) scans open `RouteStep`s with `provider='nearintents'` (oldest first, capped at 10/tick), calls `GET /v0/status` with a `PER_STEP_DELAY_MS=2000` stagger to respect the 1-req/5-s rate limit, and routes terminal outcomes through the same `markStepDone` / `markStepFailed` helpers. Uses `depositAddress` as the `externalId` for step lookups.
+- **`webhooks.ts`** — BullMQ `weave-webhooks` queue. Incoming events from providers.
+- **`nearintents_poller.ts`** — NEAR Intents poller for status updates.
+- **`outgoing_webhooks.ts`** — BullMQ `outgoing_webhooks` queue. Reliable, signed delivery of events to merchant endpoints with exponential backoff.
+
 
 ### Startup bootstrap (`src/lib/merchant.ts`)
 
@@ -79,14 +94,55 @@ Transport in `src/api/client.ts` — no cookies, API-key auth. Base URL resoluti
 
 ## `apps/dashboard` — merchant portal (Next.js 15)
 
-App Router, React 19, Tailwind v4. Server components only — `app/page.tsx`, `app/transactions/page.tsx`, `app/settings/page.tsx` each fetch the API server-side using `WEAVE_API_KEY` + `API_BASE` env vars with `next: { revalidate: 10 | 30 }`. Shared types/helpers (`parseAsset`, `assetLabel`, `directionOf` → `offramp | onramp | bridge | transfer`) live in `app/types.ts`. Sidebar navigation only — no client-side routing logic.
+App Router, React 19, Tailwind v4 with a natural design system (forest/tan/cream/ink). **User identity system** backed by email/password accounts stored in Postgres.
+
+### Authentication Flow
+
+**User registration & login** (`app/auth/signup`, `app/auth/login`) — Client-side forms (`'use client'`) that call:
+- `POST /api/v1/auth/signup` — Creates a `User` row (with scrypt-hashed password) and a linked `Client` (merchant account). Issues a `Session` token (valid 24 hours by default).
+- `POST /api/v1/auth/login` — Authenticates user + issues session token.
+
+Both endpoints return `{ user: { id, email, ... }, session: { token, expiresAt } }`.
+
+**Session storage** — The session token is stored in a `weave_session` cookie (Path=/, SameSite=Lax, Secure over HTTPS). This cookie is shared between client and server:
+- **Client-side** — `app/lib/auth-client.ts` reads/writes the cookie for login/logout/signup flows.
+- **Server-side** — `app/lib/auth-server.ts` reads the cookie to authenticate server components and dashboard API calls.
+
+**Protected pages** — All routes outside `/auth/*` call `requireServerSession()` which:
+- Reads the `weave_session` cookie.
+- Calls `GET /api/v1/auth/session` with the token (safety net).
+- Redirects to `/auth/login` if invalid or expired.
+
+**Dashboard API calls** (`app/lib/dashboard-api.ts`) — All `fetchOrders`/`fetchOrder` calls:
+- Read the session token from the cookie (server-side).
+- Pass `x-session-token` header to `/orders` endpoints.
+- Backend middleware `requireSession` validates and links to the user's `Client` (merchant account).
+
+### Key distinction
+
+- **API key** (`x-api-key`) — External systems (widget, third-party integrations) use merchant API keys. NOT used by the dashboard.
+- **Session token** (`x-session-token`) — Merchant dashboard users authenticate with email/password, store the token in a cookie, and use it for all dashboard API calls.
+
+### Env vars
+
+`AUTH_SESSION_TTL_HOURS` (default 24), `AUTH_RESET_TTL_MINUTES` (default 15) — session and password-reset OTP lifetimes.
+`API_BASE` (default `http://localhost:4000/api/v1`) — backend URL for server-side API calls.
+
+### Layout & Routes
+
+- `app/layout.tsx` — Root HTML shell, mounts `SidebarLayout` (client component).
+- `components/SidebarLayout.tsx` — Detects auth routes vs authenticated routes and renders sidebar + content accordingly.
+- `app/page.tsx` · `app/transactions/page.tsx` — Server components that fetch orders server-side, require session.
+- `app/auth/*` — Client routes for signup, login, password reset (no sidebar).
+- `app/settings/page.tsx` · `app/compliance/page.tsx` · `app/onboarding/kyb/page.tsx` — Admin settings (scaffolding; not yet wired to API).
 
 ## Conventions
 
 - **Checkout flow gates provider choice.** `flow: 'external'` (default) → NEAR Intents handles the cross-chain leg (send-from-another-wallet). `flow: 'self'` → reserved for ChainRails (connect-wallet). Edges in `router.service.ts` carry a `flows` allowlist; passing a flow filters the graph.
 - **Asset keys are load-bearing.** Use `parseAsset` / `fiatKey` / `cryptoKey` rather than string-splitting inline. Chain and token are always uppercase; currency is ISO 4217 uppercase.
 - **Fees:** `SENDER_FEE_BPS` + `APP_FEE_BPS` are applied to the USD-equivalent; `bridgeFeeUsd` is the ChainRails component. All three snapshot onto `Order` at creation.
-- **Webhook order-of-operations:** verify signature → enqueue → worker checks `WebhookLog.processed` for idempotency → mutates `RouteStep` → rolls up `Order.status` → upserts log row.
+- **Webhook order-of-operations:** verify signature → enqueue → worker checks `WebhookLog.processed` for idempotency → mutates `RouteStep` → rolls up `Order.status` → enqueues outgoing merchant webhook → upserts log row.
+- **Security Whitelisting:** NEVER use `update: { ...req.body }` or `create: { ...req.body }`. Always explicitly whitelist fields in the route handler before passing to Prisma/Service layer to prevent mass-assignment.
 - **Error shape:** every endpoint returns `{ success: boolean, data? , error? }`. Upstream provider failures map to HTTP `502`.
 - **Never commit `.env`** — `.env.example` is the source of truth for required keys.
 
@@ -94,3 +150,4 @@ App Router, React 19, Tailwind v4. Server components only — `app/page.tsx`, `a
 
 - The PRD describes `/quotes/offramp`, `/quotes/onramp`, `/orders/offramp`, `/orders/onramp`, normalized webhook fan-out to merchant endpoints, sandbox mode, analytics, batch orders, and chain-auto-detection in the widget. The current API collapses both directions into a single `POST /orders` and a single `GET /quotes`; the widget demo screens are hard-coded against NGN + a mock balance list. Don't assume PRD endpoints exist — grep first.
 - `packages/shared` is a stub. Anything genuinely shared between apps is currently duplicated (e.g. `parseAsset` lives in `apps/api/src/lib/assets.ts` and `apps/dashboard/app/types.ts`).
+- Dashboard payout/settings/integration/compliance/KYB pages are currently UI scaffolding only; form submissions are not wired to live API calls.

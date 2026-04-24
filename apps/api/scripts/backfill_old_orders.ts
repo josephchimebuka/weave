@@ -17,7 +17,7 @@ import { PrismaClient } from '@prisma/client';
 const SNAPSHOT_PATH = '/tmp/weave_pre_v1.sql';
 const APPLY         = process.argv.includes('--apply');
 
-const MERCHANT_ID              = 'demo';
+const MERCHANT_ID              = '35c381e8-adbb-4c17-8dad-1480e5c13f3c';
 const MERCHANT_PAYOUT_WALLET   = process.env.MERCHANT_PAYOUT_WALLET_ADDRESS || '';
 const MERCHANT_PAYOUT_CHAIN    = (process.env.MERCHANT_PAYOUT_WALLET_CHAIN || 'base').toUpperCase();
 
@@ -128,6 +128,17 @@ function plan(o: OldOrder): Plan {
   if (o.type === 'offramp') {
     const sourceAssetKey = `crypto:${o.sourceChain}:${o.sourceToken}`;
     const destAssetKey   = `fiat:${o.fiatCurrency}`;
+    // For offramp: calculate destAmount and quoteRate based on realistic rates
+    // USDC/USDT ≈ 1 USD, ETH ≈ $2500 (sample rate)
+    let sourceUsdValue = o.sourceAmount;
+    if (o.sourceToken === 'ETH') {
+      sourceUsdValue = o.sourceAmount * 2500; // ETH at $2500
+    }
+    // Subtract fees to get destAmount
+    const totalFees = (o.senderFeeUsd ?? 0) + (o.appFeeUsd ?? 0) + (o.bridgeFeeUsd ?? 0);
+    const destAmount = sourceUsdValue - totalFees;
+    const quoteRate = sourceUsdValue / o.sourceAmount; // USD per source unit
+    
     return {
       order: o,
       sourceAssetKey,
@@ -146,17 +157,22 @@ function plan(o: OldOrder): Plan {
         bankAccountIdentifier: o.recipientAccount,
         bankAccountName:       o.recipientName,
       },
-      destAmount: o.fiatAmount,
-      quoteRate:  o.fiatAmount != null ? o.fiatAmount / o.sourceAmount : null,
+      destAmount: destAmount > 0 ? destAmount : sourceUsdValue,
+      quoteRate:  quoteRate,
       routeStep: o.paycrestOrderId
         ? { provider: 'paycrest', fromAsset: sourceAssetKey, toAsset: destAssetKey, externalId: o.paycrestOrderId }
         : null,
     };
   }
 
-  // onramp: sourceAsset is fiat, destAsset assumed crypto:BASE:USDC (merchant default)
+  // onramp: sourceAsset is fiat (NGN), destAsset assumed crypto:BASE:USDC
+  // NGN to USD rate: approximately 1 USD = 1550 NGN (sample rate)
   const sourceAssetKey = `fiat:${o.sourceToken}`;
   const destAssetKey   = `crypto:${MERCHANT_PAYOUT_CHAIN}:USDC`;
+  const ngn_to_usd = 0.000645; // 1 NGN ≈ 0.000645 USD
+  const destAmount = o.sourceAmount * ngn_to_usd;
+  const quoteRate = 1 / 1550; // USD per NGN (inverse of NGN per USD)
+  
   return {
     order: o,
     sourceAssetKey,
@@ -172,8 +188,8 @@ function plan(o: OldOrder): Plan {
       label:         'Merchant payout wallet',
       walletAddress: MERCHANT_PAYOUT_WALLET,
     },
-    destAmount: null, // old schema didn't record delivered crypto amount
-    quoteRate:  null,
+    destAmount: destAmount,
+    quoteRate:  quoteRate,
     routeStep: o.chainrailsIntentId
       ? { provider: 'chainrails', fromAsset: sourceAssetKey, toAsset: destAssetKey, externalId: o.chainrailsIntentId }
       : null,

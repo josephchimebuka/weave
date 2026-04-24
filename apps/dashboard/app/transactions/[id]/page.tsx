@@ -1,10 +1,32 @@
 import Link from 'next/link';
+import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { fetchOrder } from '../../lib/dashboard-api';
-import { assetLabel } from '../../types';
+import { assetLabel, parseAsset } from '../../types';
 
-function money(value: number | null, dp = 2) {
+function money(value: number | null | undefined, dp = 2) {
   if (value == null) return '—';
-  return value.toLocaleString(undefined, { maximumFractionDigits: dp });
+  return value.toLocaleString(undefined, { minimumFractionDigits: dp > 2 ? 0 : 2, maximumFractionDigits: dp });
+}
+
+const STATUS_META: Record<string, { tone: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }> }> = {
+  completed:        { tone: 'bg-forest-surface text-forest-deep',  label: 'Completed',  icon: CheckCircle2 },
+  processing:       { tone: 'bg-tan-mist text-tan-deep',           label: 'Processing', icon: Loader2 },
+  bridging:         { tone: 'bg-tan-mist text-tan-deep',           label: 'Bridging',   icon: Loader2 },
+  awaiting_deposit: { tone: 'bg-tan-mist text-tan-deep',           label: 'Awaiting',   icon: Clock },
+  in_flight:        { tone: 'bg-tan-mist text-tan-deep',           label: 'In flight',  icon: Loader2 },
+  refunded:         { tone: 'bg-cream-deep text-ink-soft',         label: 'Refunded',   icon: CheckCircle2 },
+  failed:           { tone: 'bg-terracotta-soft text-terracotta',  label: 'Failed',     icon: XCircle },
+  done:             { tone: 'bg-forest-surface text-forest-deep',  label: 'Done',       icon: CheckCircle2 },
+  pending:          { tone: 'bg-cream-deep text-ink-muted',        label: 'Pending',    icon: Clock },
+};
+
+function Field({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted mb-1.5">{label}</p>
+      <p className="text-[14px] text-ink">{value}</p>
+    </div>
+  );
 }
 
 export default async function TransactionReceiptPage({ params }: { params: Promise<{ id: string }> }) {
@@ -13,117 +35,150 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
 
   if (!order) {
     return (
-      <main className="max-w-5xl mx-auto">
-        <div className="bg-white rounded-xl border border-gray-100 p-8">
-          <h1 className="text-2xl font-bold">Transaction not found</h1>
-          <p className="text-gray-500 mt-2">This receipt does not exist or is not available for your account.</p>
-          <Link href="/transactions" className="inline-block mt-4 text-emerald-700 hover:underline">Back to transactions</Link>
+      <div className="max-w-3xl mx-auto">
+        <div className="bg-cream-soft border border-hair-soft rounded-[24px] px-8 py-10 text-center shadow-leaf">
+          <p className="font-display text-[22px] font-semibold text-ink">Transaction not found</p>
+          <p className="text-[14px] text-ink-muted mt-2">This receipt does not exist or belongs to a different account.</p>
+          <Link
+            href="/transactions"
+            className="inline-flex items-center gap-2 mt-5 px-5 py-2.5 bg-forest text-cream-soft rounded-full text-[13px] font-medium hover:bg-forest-deep transition-colors"
+          >
+            <ArrowLeft size={14} strokeWidth={2} />
+            Back to transactions
+          </Link>
         </div>
-      </main>
+      </div>
     );
   }
 
+  const meta = STATUS_META[order.status] ?? STATUS_META.processing;
+  const StatusIcon = meta.icon;
+  const srcA = parseAsset(order.sourceAssetKey);
+
   return (
-    <main className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 fade-up">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Transaction receipt</h1>
-          <p className="text-gray-500 mt-1 font-mono text-sm">{order.id}</p>
+          <Link
+            href="/transactions"
+            className="inline-flex items-center gap-1.5 text-[13px] text-ink-muted hover:text-forest-deep font-medium mb-3 transition-colors"
+          >
+            <ArrowLeft size={14} strokeWidth={2} />
+            Back to transactions
+          </Link>
+          <h1 className="font-display text-[42px] font-semibold text-ink tracking-tight leading-none">
+            Receipt
+          </h1>
+          <p className="text-[12px] font-mono text-ink-muted mt-2">#{order.id}</p>
         </div>
-        <Link href="/transactions" className="text-sm text-emerald-700 hover:underline">Back to list</Link>
+        <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium ${meta.tone}`}>
+          <StatusIcon size={14} strokeWidth={2.2} />
+          {meta.label}
+        </span>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-        <div>
-          <p className="text-gray-500">Status</p>
-          <p className="font-semibold text-gray-900 capitalize">{order.status.replace('_', ' ')}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">Created</p>
-          <p className="font-semibold text-gray-900">{new Date(order.createdAt).toLocaleString('en-GB')}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">From</p>
-          <p className="font-semibold text-gray-900">{assetLabel(order.sourceAssetKey)}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">To</p>
-          <p className="font-semibold text-gray-900">{assetLabel(order.destAssetKey)}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">Customer paid</p>
-          <p className="font-semibold text-gray-900">{money(order.sourceAmount, 4)}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">Merchant received</p>
-          <p className="font-semibold text-gray-900">{money(order.destAmount, 4)}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">Payout destination</p>
-          <p className="font-semibold text-gray-900">
-            {order.destInstrument?.bankAccountIdentifier
-              ? `${order.destInstrument.bankInstitution || 'Bank'} · ${order.destInstrument.bankAccountIdentifier}`
-              : order.destInstrument?.walletAddress || '—'}
+      {/* Hero amount */}
+      <div className="relative rounded-[28px] bg-cream-soft border border-hair-soft shadow-leaf px-8 py-7 overflow-hidden fade-up" style={{ animationDelay: '80ms' }}>
+        <div className="absolute -top-20 -right-16 w-64 h-64 rounded-full bg-forest-mist/60 blur-3xl pointer-events-none" />
+        <div className="relative">
+          <div className="flex items-center gap-2 text-ink-muted text-[11px] font-semibold tracking-[0.15em] uppercase">
+            <Receipt size={13} strokeWidth={2.2} />
+            Customer paid
+          </div>
+          <p className="mt-3 font-display font-display-tight text-[56px] font-semibold text-ink tabular-nums leading-none">
+            {money(order.sourceAmount, 4)}
+            <span className="text-[28px] text-ink-muted font-medium ml-3">
+              {srcA.kind === 'fiat' ? srcA.currency : srcA.token}
+            </span>
+          </p>
+          <p className="mt-3 text-[14px] text-ink-muted">
+            {assetLabel(order.sourceAssetKey)} → {assetLabel(order.destAssetKey)}
           </p>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-        <h2 className="text-lg font-bold mb-4">Fees</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="p-3 rounded-lg bg-gray-50">
-            <p className="text-gray-500">Sender fee (USD)</p>
-            <p className="font-semibold">{money(order.senderFeeUsd)}</p>
-          </div>
-          <div className="p-3 rounded-lg bg-gray-50">
-            <p className="text-gray-500">App fee (USD)</p>
-            <p className="font-semibold">{money(order.appFeeUsd)}</p>
-          </div>
-          <div className="p-3 rounded-lg bg-gray-50">
-            <p className="text-gray-500">Bridge fee (USD)</p>
-            <p className="font-semibold">{money(order.bridgeFeeUsd)}</p>
-          </div>
+      {/* Core details */}
+      <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '120ms' }}>
+        <div className="px-7 py-5 border-b border-hair-soft">
+          <h2 className="font-display text-[20px] font-semibold text-ink">Details</h2>
+        </div>
+        <div className="px-7 py-6 grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-6">
+          <Field label="From" value={assetLabel(order.sourceAssetKey)} />
+          <Field label="To" value={assetLabel(order.destAssetKey)} />
+          <Field label="Merchant received" value={`${money(order.destAmount, 4)} ${order.destAssetKey.split(':').at(-1)}`} />
+          <Field label="Created" value={new Date(order.createdAt).toLocaleString('en-GB')} />
+          <Field label="Updated" value={new Date(order.updatedAt).toLocaleString('en-GB')} />
+          <Field
+            label="Payout destination"
+            value={
+              order.destInstrument?.bankAccountIdentifier
+                ? `${order.destInstrument.bankInstitution || 'Bank'} · ${order.destInstrument.bankAccountIdentifier}`
+                : order.destInstrument?.walletAddress || '—'
+            }
+          />
+          {order.paycrestStatus && <Field label="Paycrest status" value={order.paycrestStatus} />}
+          {order.nearStatus && <Field label="NEAR status" value={order.nearStatus} />}
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-        <h2 className="text-lg font-bold mb-4">Route timeline</h2>
-        <div className="space-y-3">
-          {order.steps?.map((step) => (
-            <div key={step.id} className="border border-gray-100 rounded-lg p-4">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="font-semibold text-gray-900">{step.provider}</p>
-                  <p className="text-xs text-gray-500">{step.fromAsset} → {step.toAsset}</p>
-                </div>
-                <p className="text-xs capitalize text-gray-700">{step.status.replace('_', ' ')}</p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3 text-xs text-gray-600">
-                <p>Provider ID: {step.externalId || '—'}</p>
-                <p>Deposit: {step.depositAddress || '—'}</p>
-                <p>Memo: {step.depositMemo || '—'}</p>
-              </div>
+      {/* Fees */}
+      <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '160ms' }}>
+        <div className="px-7 py-5 border-b border-hair-soft">
+          <h2 className="font-display text-[20px] font-semibold text-ink">Fee breakdown</h2>
+        </div>
+        <div className="px-7 py-6 grid grid-cols-3 gap-4">
+          {[
+            { label: 'Sender fee',  value: order.senderFeeUsd },
+            { label: 'App fee',     value: order.appFeeUsd },
+            { label: 'Bridge fee',  value: order.bridgeFeeUsd },
+          ].map((f) => (
+            <div key={f.label} className="bg-cream-deep/50 border border-hair-soft rounded-2xl px-4 py-3.5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted">{f.label}</p>
+              <p className="text-[18px] font-display font-semibold text-ink mt-1 tabular-nums">
+                ${money(f.value)}
+              </p>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-        <h2 className="text-lg font-bold mb-4">Status audit trail</h2>
-        <ul className="space-y-2 text-sm text-gray-700">
-          <li>Order created · {new Date(order.createdAt).toLocaleString('en-GB')}</li>
-          <li>Last updated · {new Date(order.updatedAt).toLocaleString('en-GB')}</li>
-          {order.paycrestStatus ? <li>Paycrest status · {order.paycrestStatus}</li> : null}
-          {order.nearStatus ? <li>NEAR Intents status · {order.nearStatus}</li> : null}
-          {(order.steps || []).map((step) => (
-            <li key={`${step.id}-audit`}>
-              {step.provider} step {step.sequence} · {step.status}
-              {step.startedAt ? ` · started ${new Date(step.startedAt).toLocaleString('en-GB')}` : ''}
-              {step.completedAt ? ` · completed ${new Date(step.completedAt).toLocaleString('en-GB')}` : ''}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </main>
+      {/* Route timeline */}
+      {order.steps && order.steps.length > 0 && (
+        <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '200ms' }}>
+          <div className="px-7 py-5 border-b border-hair-soft">
+            <h2 className="font-display text-[20px] font-semibold text-ink">Route timeline</h2>
+          </div>
+          <div className="divide-y divide-hair-soft">
+            {order.steps.map((step, idx) => {
+              const stepMeta = STATUS_META[step.status] ?? STATUS_META.pending;
+              const StepIcon = stepMeta.icon;
+              return (
+                <div key={step.id} className="px-7 py-5">
+                  <div className="flex items-center justify-between mb-2 gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="w-7 h-7 rounded-full bg-forest-surface text-forest-deep text-[12px] font-semibold flex items-center justify-center shrink-0">
+                        {idx + 1}
+                      </span>
+                      <span className="font-medium text-ink capitalize">{step.provider}</span>
+                      <span className="text-[12px] text-ink-muted truncate">{step.fromAsset} → {step.toAsset}</span>
+                    </div>
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium ${stepMeta.tone}`}>
+                      <StepIcon size={12} strokeWidth={2.2} />
+                      {stepMeta.label}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 text-[12px] text-ink-muted ml-10 mt-2">
+                    <span>ID: <span className="font-mono text-ink-soft">{step.externalId?.slice(0, 12) || '—'}</span></span>
+                    <span>Deposit: <span className="font-mono text-ink-soft">{step.depositAddress?.slice(0, 12) || '—'}</span></span>
+                    {step.depositMemo && <span>Memo: <span className="font-mono text-ink-soft">{step.depositMemo}</span></span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

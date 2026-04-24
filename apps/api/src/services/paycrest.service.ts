@@ -164,7 +164,10 @@ export class PaycrestService {
 
   /** HMAC-SHA256(secret, rawBody). Accepts optional `sha256=` prefix. */
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
-    if (!this.webhookSecret) return true;        // dev mode: accept unsigned
+    if (!this.webhookSecret) {
+      console.error('[security] PAYCREST_WEBHOOK_SECRET not set. Rejecting all webhooks.');
+      return false;
+    }
     if (!signature) return false;
     const expected = crypto.createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex');
     const sig = signature.startsWith('sha256=') ? signature.slice(7) : signature;

@@ -1,23 +1,31 @@
-import "./globals.css";
-import Sidebar from "../components/Sidebar";
+import './globals.css';
+import { Fraunces, Figtree } from 'next/font/google';
+import { headers } from 'next/headers';
+import { SidebarLayout } from '../components/SidebarLayout';
+
+const fraunces = Fraunces({
+  subsets: ['latin'],
+  variable: '--font-display',
+  display: 'swap',
+  axes: ['opsz', 'SOFT'],
+});
+
+const figtree = Figtree({
+  subsets: ['latin'],
+  variable: '--font-body',
+  display: 'swap',
+});
 
 export const metadata = {
-  title: "Weave Dashboard",
-  description: "Manage your Checkout instances",
+  title: 'Weave — Merchant Dashboard',
+  description: 'Merchant portal for Weave payments',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="antialiased bg-gray-50 text-gray-900 flex min-h-screen">
-        <Sidebar />
-        <div className="flex-1 ml-72 p-8">
-          {children}
-        </div>
+    <html lang="en" className={`h-full ${fraunces.variable} ${figtree.variable}`}>
+      <body className="h-full antialiased text-ink bg-cream font-body">
+        <SidebarLayout>{children}</SidebarLayout>
       </body>
     </html>
   );
