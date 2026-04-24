@@ -50,31 +50,27 @@ export interface Order {
   };
 }
 
-// ── Asset helpers ──────────────────────────────────────────────────────────
-// Asset keys are canonical strings like "crypto:BASE:USDC" or "fiat:NGN".
+import { 
+  parseAsset, 
+  assetLabel as sharedAssetLabel, 
+  directionOf as sharedDirectionOf, 
+  type OrderDirection as Direction 
+} from '@weave/shared';
 
-export type ParsedAsset =
-  | { kind: 'crypto'; chain: string; token: string }
-  | { kind: 'fiat';   currency: string };
-
-export function parseAsset(key: string): ParsedAsset {
-  const [kind, a, b] = key.split(':');
-  if (kind === 'fiat')   return { kind: 'fiat',   currency: a };
-  return { kind: 'crypto', chain: a, token: b };
-}
-
-export function assetLabel(key: string): string {
-  const a = parseAsset(key);
-  return a.kind === 'fiat' ? a.currency : `${a.token} · ${a.chain}`;
-}
-
-export type Direction = 'offramp' | 'onramp' | 'bridge' | 'transfer';
-
+/**
+ * Compatibility wrapper for the dashboard's property-based calls.
+ */
 export function directionOf(order: Pick<Order, 'sourceAssetKey' | 'destAssetKey'>): Direction {
-  const s = parseAsset(order.sourceAssetKey).kind;
-  const d = parseAsset(order.destAssetKey).kind;
-  if (s === 'crypto' && d === 'fiat')   return 'offramp';
-  if (s === 'fiat'   && d === 'crypto') return 'onramp';
-  if (s === 'crypto' && d === 'crypto') return 'bridge';
-  return 'transfer';
+  return sharedDirectionOf(order.sourceAssetKey, order.destAssetKey);
 }
+
+/**
+ * Returns a human-friendly label for an asset key.
+ */
+export function assetLabel(key: string): string {
+  return sharedAssetLabel(key);
+}
+
+export { parseAsset };
+export type { Direction };
+

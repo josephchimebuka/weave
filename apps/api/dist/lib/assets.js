@@ -1,33 +1,17 @@
 "use strict";
-// Canonical asset-key handling. Every asset in the system is identified by a
-// string of the form:
-//
-//   "fiat:<CCY>"                 — fiat currency (ISO 4217, uppercase)
-//   "crypto:<CHAIN>:<TOKEN>"     — on-chain asset (uppercase chain + token)
-//
-// Using a single convention keeps the router, executor, and DB columns in
-// agreement. Normalize early, parse at use sites.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.parseAsset = parseAsset;
-exports.fiatKey = fiatKey;
-exports.cryptoKey = cryptoKey;
-exports.isFiat = isFiat;
-exports.isCrypto = isCrypto;
-function parseAsset(key) {
-    const [kind, ...rest] = key.split(':');
-    if (kind === 'fiat' && rest.length === 1) {
-        return { kind: 'fiat', currency: rest[0].toUpperCase() };
-    }
-    if (kind === 'crypto' && rest.length === 2) {
-        return { kind: 'crypto', chain: rest[0].toUpperCase(), token: rest[1].toUpperCase() };
-    }
-    throw new Error(`invalid asset key: ${key}`);
-}
-function fiatKey(currency) {
-    return `fiat:${currency.toUpperCase()}`;
-}
-function cryptoKey(chain, token) {
-    return `crypto:${chain.toUpperCase()}:${token.toUpperCase()}`;
-}
-function isFiat(key) { return parseAsset(key).kind === 'fiat'; }
-function isCrypto(key) { return parseAsset(key).kind === 'crypto'; }
+__exportStar(require("@weave/shared"), exports);

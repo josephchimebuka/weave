@@ -1,26 +1,16 @@
 "use strict";
-// Shared order-filtering and sorting logic.
-// Previously duplicated verbatim between dashboard-api.ts and dashboard-api-client.ts.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.toSearchQuery = toSearchQuery;
-exports.directionOf = directionOf;
 exports.orderMatches = orderMatches;
 exports.sortOrders = sortOrders;
 exports.applyOrderFilter = applyOrderFilter;
+// Shared order-filtering and sorting logic.
+const assets_1 = require("./assets");
 // Returns a URLSearchParams query string from a filter object, omitting empty values.
 function toSearchQuery(params) {
     return new URLSearchParams(Object.entries(params).filter(([, v]) => typeof v === 'string' && v.length > 0)).toString();
 }
-// Determine the direction of an order from its asset keys.
-function directionOf(order) {
-    const src = order.sourceAssetKey;
-    const dest = order.destAssetKey;
-    if (src.startsWith('crypto:') && dest.startsWith('fiat:'))
-        return 'offramp';
-    if (src.startsWith('fiat:') && dest.startsWith('crypto:'))
-        return 'onramp';
-    return 'unknown';
-}
+// Direction helper removed — now using assets.ts version via getDirection.
 function orderMatches(order, filter) {
     const q = (filter.q || '').trim().toLowerCase();
     if (q) {
@@ -36,7 +26,7 @@ function orderMatches(order, filter) {
     }
     if (filter.status && filter.status !== 'all' && order.status !== filter.status)
         return false;
-    if (filter.direction && filter.direction !== 'all' && directionOf(order) !== filter.direction)
+    if (filter.direction && filter.direction !== 'all' && (0, assets_1.directionOf)(order.sourceAssetKey, order.destAssetKey) !== filter.direction)
         return false;
     if (filter.provider && filter.provider !== 'all' && !(order.steps || []).some((s) => s.provider === filter.provider))
         return false;

@@ -3,6 +3,19 @@
 //   Fiat:   "fiat:NGN"
 //   Crypto: "crypto:BASE:USDC"
 
+export type AssetKey = string;
+
+export interface FiatAsset {
+  kind:     'fiat';
+  currency: string;
+}
+
+export interface CryptoAsset {
+  kind:  'crypto';
+  chain: string;
+  token: string;
+}
+
 export interface ParsedFiatAsset {
   kind:     'fiat';
   currency: string; // e.g. "NGN"
@@ -22,7 +35,8 @@ export function parseAsset(key: string): ParsedAsset {
   if (!key) throw new Error('asset key is required');
   const parts = key.split(':');
   if (parts[0] === 'fiat' && parts[1]) {
-    return { kind: 'fiat', currency: parts[1].toUpperCase(), key: `fiat:${parts[1].toUpperCase()}` };
+    const currency = parts[1].toUpperCase();
+    return { kind: 'fiat', currency, key: `fiat:${currency}` };
   }
   if (parts[0] === 'crypto' && parts[1] && parts[2]) {
     const chain = parts[1].toUpperCase();
@@ -36,3 +50,33 @@ export const fiatKey   = (currency: string)             => `fiat:${currency.toUp
 export const cryptoKey = (chain: string, token: string) => `crypto:${chain.toUpperCase()}:${token.toUpperCase()}`;
 export const isFiat    = (key: string)                  => key.startsWith('fiat:');
 export const isCrypto  = (key: string)                  => key.startsWith('crypto:');
+
+/**
+ * Returns a human-friendly label for an asset key.
+ */
+export function assetLabel(key: string): string {
+  try {
+    const a = parseAsset(key);
+    return a.kind === 'fiat' ? a.currency : `${a.token} · ${a.chain}`;
+  } catch {
+    return key;
+  }
+}
+
+export type OrderDirection = 'offramp' | 'onramp' | 'bridge' | 'transfer';
+
+/**
+ * Determines the logical direction of an order based on source/dest assets.
+ */
+export function directionOf(sourceKey: string, destKey: string): OrderDirection {
+  try {
+    const s = parseAsset(sourceKey).kind;
+    const d = parseAsset(destKey).kind;
+    if (s === 'crypto' && d === 'fiat')   return 'offramp';
+    if (s === 'fiat'   && d === 'crypto') return 'onramp';
+    if (s === 'crypto' && d === 'crypto') return 'bridge';
+    return 'transfer';
+  } catch {
+    return 'transfer';
+  }
+}

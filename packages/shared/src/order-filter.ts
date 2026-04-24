@@ -1,5 +1,5 @@
 // Shared order-filtering and sorting logic.
-// Previously duplicated verbatim between dashboard-api.ts and dashboard-api-client.ts.
+import { directionOf as getDirection } from './assets';
 
 export type OrderFilter = {
   q?:         string;
@@ -26,14 +26,7 @@ export function toSearchQuery(params: Record<string, string | undefined>): strin
   ).toString();
 }
 
-// Determine the direction of an order from its asset keys.
-export function directionOf(order: { sourceAssetKey: string; destAssetKey: string }): 'offramp' | 'onramp' | 'unknown' {
-  const src  = order.sourceAssetKey;
-  const dest = order.destAssetKey;
-  if (src.startsWith('crypto:') && dest.startsWith('fiat:'))   return 'offramp';
-  if (src.startsWith('fiat:')   && dest.startsWith('crypto:')) return 'onramp';
-  return 'unknown';
-}
+// Direction helper removed — now using assets.ts version via getDirection.
 
 export function orderMatches<Order extends {
   id: string;
@@ -57,7 +50,7 @@ export function orderMatches<Order extends {
   }
 
   if (filter.status    && filter.status    !== 'all' && order.status                !== filter.status)    return false;
-  if (filter.direction && filter.direction !== 'all' && directionOf(order)          !== filter.direction) return false;
+  if (filter.direction && filter.direction !== 'all' && getDirection(order.sourceAssetKey, order.destAssetKey) !== filter.direction) return false;
   if (filter.provider  && filter.provider  !== 'all' && !(order.steps || []).some((s) => s.provider === filter.provider)) return false;
 
   if (filter.corridor && filter.corridor !== 'all') {

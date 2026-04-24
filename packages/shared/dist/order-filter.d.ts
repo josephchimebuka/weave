@@ -15,10 +15,6 @@ export type OrderWithProviderStatus<Order> = Order & {
     nearStatus?: string | null;
 };
 export declare function toSearchQuery(params: Record<string, string | undefined>): string;
-export declare function directionOf(order: {
-    sourceAssetKey: string;
-    destAssetKey: string;
-}): 'offramp' | 'onramp' | 'unknown';
 export declare function orderMatches<Order extends {
     id: string;
     sourceAssetKey: string;
