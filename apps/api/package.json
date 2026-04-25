@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.0.0",
+    "@upstash/qstash": "^2.10.1",
     "@weave/shared": "workspace:*",
     "bullmq": "^4.0.0",
     "cors": "^2.8.5",

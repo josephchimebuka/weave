@@ -71,11 +71,18 @@ class WebhookService {
    * Enqueues an event for background dispatch.
    */
   async enqueue(merchantId: string, orderId: string | undefined, event: WebhookEvent) {
-    const { outgoingWebhookQueue } = await import('../queues/outgoing_webhooks');
-    await outgoingWebhookQueue.add(`${event.type}:${orderId}`, {
-      merchantId,
-      orderId,
-      event
+    const { qstash } = await import('../lib/qstash');
+    
+    // Fallback to local dev host if API_BASE is missing
+    const baseUrl = process.env.API_BASE || 'http://localhost:4000/api/v1';
+
+    await qstash.publishJSON({
+      url: `${baseUrl}/jobs/dispatch-outgoing`,
+      body: {
+        merchantId,
+        orderId,
+        event
+      }
     });
   }
 

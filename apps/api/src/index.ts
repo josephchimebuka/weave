@@ -15,13 +15,10 @@ import adminRouter        from './routes/admin';
 import assetsRouter       from './routes/assets';
 import supportRouter      from './routes/support';
 
+import jobsRouter         from './routes/jobs';
+
 import { ensureMerchantDefaultInstruments } from './lib/merchant';
 import { prisma } from './lib/prisma';
-
-// Start BullMQ workers (webhook-driven + NEAR Intents poller + outgoing dispatch)
-import './queues/webhooks';
-import './queues/nearintents_poller';
-import './queues/outgoing_webhooks';
 
 const app = express();
 
@@ -48,6 +45,7 @@ app.use('/api/v1/verification',  verificationRouter);
 app.use('/api/v1/admin',         adminRouter);
 app.use('/api/v1/assets',        assetsRouter);
 app.use('/api/v1/support',       supportRouter);
+app.use('/api/v1/jobs',          jobsRouter);
 
 app.get('/', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));

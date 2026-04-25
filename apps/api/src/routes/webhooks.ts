@@ -26,10 +26,16 @@ router.post('/chainrails', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'Missing event type' });
   }
 
-  await webhookQueue.add('chainrails_event', {
-    source: 'chainrails',
-    event:  payload.type,
-    data:   payload,
+  const { qstash } = await import('../lib/qstash');
+  const baseUrl = process.env.API_BASE || `https://${req.headers.host}/api/v1`;
+
+  await qstash.publishJSON({
+    url: `${baseUrl}/jobs/process-webhook`,
+    body: {
+      source: 'chainrails',
+      event:  payload.type,
+      data:   payload,
+    },
   });
 
   res.json({ success: true });
@@ -56,10 +62,16 @@ router.post('/paycrest', async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, error: 'Missing event field' });
   }
 
-  await webhookQueue.add('paycrest_event', {
-    source: 'paycrest',
-    event,
-    data:   payload,
+  const { qstash } = await import('../lib/qstash');
+  const baseUrl = process.env.API_BASE || `https://${req.headers.host}/api/v1`;
+
+  await qstash.publishJSON({
+    url: `${baseUrl}/jobs/process-webhook`,
+    body: {
+      source: 'paycrest',
+      event,
+      data:   payload,
+    },
   });
 
   res.json({ success: true });
