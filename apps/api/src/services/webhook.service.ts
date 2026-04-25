@@ -22,7 +22,7 @@ class WebhookService {
 
   /**
    * Dispatches an event to a merchant.
-   * In production, this should be called through a BullMQ worker to handle retries.
+   * In production, this should be called through a QStash worker to handle retries.
    */
   async dispatch(merchantId: string, event: WebhookEvent) {
     const merchant = await prisma.merchant.findUnique({
@@ -62,7 +62,7 @@ class WebhookService {
       console.log(`[webhook] dispatched ${event.type} to merchant ${merchantId}`);
     } catch (err: any) {
       console.error(`[webhook] failed to dispatch to merchant ${merchantId}:`, err.message);
-      // Re-throw so the BullMQ worker knows to retry
+      // Re-throw so the QStash worker knows to retry
       throw err;
     }
   }

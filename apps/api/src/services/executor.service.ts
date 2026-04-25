@@ -474,7 +474,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
 // ── Webhook-driven step advance ─────────────────────────────────────────────
 //
-// Called by the BullMQ worker when a provider webhook arrives. Marks the
+// Called by the QStash worker when a provider webhook arrives. Marks the
 // RouteStep done and rolls the Order up when every step is complete.
 
 export async function markStepDone(params: {
