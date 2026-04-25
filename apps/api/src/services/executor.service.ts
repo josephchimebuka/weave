@@ -437,8 +437,8 @@ export async function markStepDone(params: {
 
   // Refetch steps to get the latest statuses.
   const fresh = await prisma.routeStep.findMany({ where: { orderId: step.orderId }, orderBy: { sequence: 'asc' } });
-  const allDone = fresh.every(s => s.id === step.id ? true : s.status === 'done');
-  const anyFailed = fresh.some(s => s.status === 'failed');
+  const allDone = fresh.every((s: any) => s.id === step.id ? true : s.status === 'done');
+  const anyFailed = fresh.some((s: any) => s.status === 'failed');
   const nextOrderStatus = anyFailed ? 'failed' : allDone ? 'completed' : 'processing';
   
   await prisma.order.update({ where: { id: step.orderId }, data: { status: nextOrderStatus } });

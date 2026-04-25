@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { 
   sendWelcomeEmail, 
   sendOtpEmail, 
@@ -99,7 +100,7 @@ router.post('/signup', authLimiter, async (req, res) => {
     const hashedSecret   = hashCode(secretKey);
 
     // Create Merchant + KeyPair in one transaction so signup is atomic.
-    const { merchant, session } = await prisma.$transaction(async (tx) => {
+    const { merchant, session } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const merchant = await tx.merchant.create({
         data: {
           email,
@@ -263,7 +264,7 @@ router.post('/reset-password', async (req, res) => {
     const merchant = await prisma.merchant.findUnique({ where: { email: challenge.target } });
     if (!merchant) return res.status(404).json({ success: false, error: 'account not found' });
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const m = await tx.merchant.update({
         where: { id: merchant.id },
         data:  { passwordHash: hashPassword(newPassword) },

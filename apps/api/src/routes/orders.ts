@@ -239,7 +239,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     if (!TERMINAL.has(order.status)) {
       // Find the earliest not-done step that has a Paycrest externalId — that's
       // the one currently gating order progress.
-      const activePaycrestStep = order.steps.find(s => s.provider === 'paycrest' && s.status !== 'done' && s.externalId);
+      const activePaycrestStep = order.steps.find((s: any) => s.provider === 'paycrest' && s.status !== 'done' && s.externalId);
       if (activePaycrestStep?.externalId) {
         try {
           const pc = await paycrest.getOrder(activePaycrestStep.externalId);
@@ -262,13 +262,13 @@ router.get('/:id', requireAuth, async (req, res) => {
 
       // Same shape for NEAR Intents: safety net for the nearintents_poller
       // worker so a stale GET-by-id still forces a status sync.
-      const activeNearStep = order.steps.find(s => s.provider === 'nearintents' && s.status !== 'done' && s.depositAddress);
+      const activeNearStep = order.steps.find((s: any) => s.provider === 'nearintents' && s.status !== 'done' && s.depositAddress);
       if (activeNearStep?.depositAddress) {
         try {
           const st = await nearIntents.getStatus(activeNearStep.depositAddress, activeNearStep.depositMemo ?? undefined);
           nearStatus = st.status;
           const outcome = classifyNearStatus(st.status);
-          const bridged = outcome === 'done' || order.steps.some(s => s.status === 'done' && s.provider === 'nearintents');
+          const bridged = outcome === 'done' || order.steps.some((s: any) => s.status === 'done' && s.provider === 'nearintents');
           const anyFail = outcome === 'failed' || outcome === 'refunded';
           const nearProcessing = st.status === 'PROCESSING';
           const nextStatus = outcome === 'refunded' ? 'refunded' : anyFail ? 'failed' : (nearProcessing || bridged) ? 'processing' : order.status;

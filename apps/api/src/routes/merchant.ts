@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { requireSession } from '../middleware/auth';
 import { sendDeletionRequestEmail } from '../services/email.service';
 
@@ -50,7 +51,7 @@ router.post('/keys/regenerate', requireSession, async (req, res) => {
     const secretKey      = generateSecretKey();
     const hashedSecret   = hashSecret(secretKey);
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Deactivate all previous keypairs for this merchant
       await tx.keyPair.updateMany({
         where: { merchantId: merchant.id, isActive: true },
