@@ -22,18 +22,30 @@ export function rateLimit(options: RateLimitOptions) {
     if (req.headers['x-session-token']) role = 'dashboard';
     if (req.headers['x-secret-key'])   role = 'server';
 
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    // Smarter IP detection for proxied environments (Vercel/Heroku/Cloudflare)
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : (req.ip || req.socket.remoteAddress || 'unknown');
+    
     const key = `${keyPrefix}:${role}:${ip}`;
 
-    // Bypass for low-weight background status checks
+    // ── Bypass & Special Handling ───────────────────────────────────────────
+    
+    // 1. Critical session polling bypass
     if (req.path.endsWith('/auth/session')) {
       return next();
     }
 
+    // 2. Dashboards are state-heavy. Authenticated GET requests from the
+    // dashboard are exempted from the global limit to prevent auto-refresh lockout.
+    if (role === 'dashboard' && req.method === 'GET') {
+      return next();
+    }
+
     try {
+      const currentQuota = role === 'dashboard' ? 1000 : max;
       const count = (await redis.get<number>(key)) || 0;
 
-      if (count >= max) {
+      if (count >= currentQuota) {
         return res.status(429).json({
           success: false,
           error: message || 'Too many requests, please try again later.',
