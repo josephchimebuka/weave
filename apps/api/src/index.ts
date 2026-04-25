@@ -29,9 +29,15 @@ app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : true }));
 import { apiLimiter } from './middleware/rate-limit';
 app.use('/api', apiLimiter);
 
-// Raw body needed for webhook signature verification
+// Combined middleware to handle raw body for webhooks & QStash verification
+app.use(express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf.toString();
+  }
+}));
+
+// Webhook-specific large bodies or alternative content-types
 app.use('/api/v1/webhooks', express.raw({ type: 'application/json' }));
-app.use(express.json());
 
 app.use('/api/v1/quotes',        quotesRouter);
 app.use('/api/v1/orders',        ordersRouter);

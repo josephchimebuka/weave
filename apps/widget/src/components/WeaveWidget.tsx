@@ -1927,14 +1927,69 @@ export function WeaveCheckout({
   const depositReq = useRef(0);
   const quoteReq = useRef(0);
 
-  // Auto-detect P2P / Source-anchored links on mount + Sync Assets
+  // ── Persistence & Resumption ──────────────────────────────────────────────
+  
+  // 1. Resumption logic on mount
   useEffect(() => {
-    // 1. Sync assets from API
+    const saved = localStorage.getItem(`weave-order-${apiKey}`);
+    if (saved) {
+      try {
+        const { orderId: savedId, screen: savedScreen, createdAt } = JSON.parse(saved);
+        // Don't resume orders older than 24h
+        if (Date.now() - createdAt < 24 * 60 * 60 * 1000) {
+          fetchOrder(apiKey, savedId).then(data => {
+            const order = data;
+            if (['awaiting_deposit', 'processing'].includes(order.status)) {
+              setOrderId(order.id);
+              
+              // Find the active step (usually the first one that isn't DONE)
+              const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
+              
+              if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
+                // This was a bank/fiat-based onramp
+                setDirection('onramp');
+                // The bank details were stored in the source instrument at creation
+                if (order.sourceInstrument?.kind === 'bank_account') {
+                   setBankDetails({
+                     accountName:       order.sourceInstrument.bankAccountName || '',
+                     accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
+                     institution:       order.sourceInstrument.bankInstitution || '',
+                     currency:          order.destAssetKey.split(':').pop() || 'NGN',
+                     amountToTransfer:  order.sourceAmount.toString()
+                   });
+                }
+                setScreen('vaccount');
+              } else if (activeStep?.provider === 'nearintents') {
+                // This was a crypto-based offramp
+                setDirection('offramp');
+                setDepositAddress(activeStep.depositAddress);
+                setDepositMemo(activeStep.depositMemo);
+                setDepositAmount(Number(activeStep.amountIn));
+                
+                const parts = activeStep.fromAsset.split(':');
+                setDepositToken(parts[2] || parts[1]);
+                setDepositChain(parts[1]);
+                setScreen('deposit');
+              }
+            } else if (order.status === 'completed') {
+              setOrderId(order.id);
+              setScreen('success');
+            }
+          }).catch(() => {
+            localStorage.removeItem(`weave-order-${apiKey}`);
+          });
+        }
+      } catch (e) {
+        localStorage.removeItem(`weave-order-${apiKey}`);
+      }
+    }
+
+    // Existing: Sync assets from API
     fetchAssets(apiKey).then(data => {
       if (data) setSupportedAssets(data);
     }).catch(() => {});
 
-    // 2. Pre-selection logic
+    // Existing: Pre-selection logic
     if (merchant.sourceAssetKey && merchant.amountIn === 'source') {
       const idx = supportedAssets.crypto.findIndex(c => `${c.id}:${c.token}` === merchant.sourceAssetKey?.split('crypto:')[1]);
       if (idx !== -1) {
@@ -1943,7 +1998,21 @@ export function WeaveCheckout({
         setScreen('deposit');
       }
     }
-  }, [merchant.sourceAssetKey, merchant.amountIn, apiKey]);
+  }, [apiKey]); // Run once on mount
+
+  // 2. Persistence logic: Save state whenever orderId or screen changes
+  useEffect(() => {
+    if (orderId && !['success', 'error'].includes(screen)) {
+      localStorage.setItem(`weave-order-${apiKey}`, JSON.stringify({
+        orderId,
+        screen,
+        createdAt: Date.now()
+      }));
+    } else if (screen === 'success') {
+      // Clear storage after success so next checkout is fresh
+      localStorage.removeItem(`weave-order-${apiKey}`);
+    }
+  }, [orderId, screen, apiKey]);
 
   // Derived Helpers
   const currencies: Record<string, Currency> = supportedAssets.fiat.reduce((acc, f) => {

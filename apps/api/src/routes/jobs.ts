@@ -15,7 +15,7 @@ const verifyQStash = async (req: Request, res: Response, next: Function) => {
   if (process.env.NODE_ENV === 'development') return next();
 
   const signature = req.headers['upstash-signature'] as string;
-  const body = JSON.stringify(req.body);
+  const body = (req as any).rawBody || JSON.stringify(req.body);
 
   const isValid = await qstashReceiver.verify({
     signature,
