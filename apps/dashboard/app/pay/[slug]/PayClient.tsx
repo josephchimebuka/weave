@@ -2,6 +2,11 @@
 
 import { WeaveCheckout } from '@weave/widget';
 
+// Point the widget to our internal safe public proxy
+if (typeof window !== 'undefined') {
+  (window as any).__WEAVE_API_BASE__ = '/api/public';
+}
+
 type LinkData = {
   id: string;
   title: string;
