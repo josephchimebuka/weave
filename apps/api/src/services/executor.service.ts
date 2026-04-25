@@ -513,7 +513,9 @@ export async function syncOrder(orderId: string) {
 
     try {
       if (step.provider === 'nearintents' && step.depositAddress) {
+        console.log(`[sync] checking nearintents step ${step.id} for address ${step.depositAddress}`);
         const status = await nearIntents.getStatus(step.depositAddress, step.depositMemo ?? undefined);
+        console.log(`[sync] nearintents status for ${step.id}: ${status.status}`);
         const outcome = classifyNearStatus(status.status);
         if (outcome === 'done') {
           const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
@@ -522,12 +524,19 @@ export async function syncOrder(orderId: string) {
           await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, isRefund: outcome === 'refunded' });
         }
       } else if (step.provider === 'paycrest' && step.externalId) {
+        console.log(`[sync] checking paycrest step ${step.id} for order ${step.externalId}`);
         const pc = await paycrest.getOrder(step.externalId);
-        // Paycrest statuses: 'successful', 'pending', 'expired', 'refunding', 'refunded'
-        if (pc.status === 'successful') {
+        console.log(`[sync] paycrest status for ${step.id}: ${pc.status}`);
+        
+        // Comprehensive success statuses for Paycrest
+        const isDone = ['successful', 'completed', 'settled', 'paid'].includes(pc.status.toLowerCase());
+        const isFailed = ['expired', 'failed', 'cancelled'].includes(pc.status.toLowerCase());
+        const isRefund = ['refunded', 'refunding'].includes(pc.status.toLowerCase());
+
+        if (isDone) {
           await markStepDone({ provider: 'paycrest', externalId: step.externalId, amountOut: Number(pc.amount) });
-        } else if (['expired', 'refunded'].includes(pc.status)) {
-          await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund: pc.status === 'refunded' });
+        } else if (isFailed || isRefund) {
+          await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund });
         }
       }
     } catch (err: any) {
