@@ -336,10 +336,8 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
   for (let i = last; i >= 0; i--) {
     const step     = plan.steps[i];
-    // Step 0 consumes the user's source-asset deposit. Downstream steps operate
-    // on USDC-on-Base (the only intermediate we route through today), so the
-    // USD-equivalent is the correct figure to hand them.
     const amountIn = i === 0 ? input.sourceAmount : input.usdEquivalent;
+    const stepRef  = `${input.reference}-${i}`;
     let exec: StepExecution;
 
     if (step.provider === 'paycrest') {
@@ -348,32 +346,24 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         if (!input.destBank) throw new Error('paycrest offramp requires destBank');
         if (!WEAVE_EVM_REFUND_ADDRESS) throw new Error('paycrest offramp requires WEAVE_EVM_REFUND_ADDRESS');
         
-        // Exact Output anchoring: Since we computed exact usdc equivalent and stripped appFeeUsd to get target Paycrest USDC,
-        // we previously relied on input.appFeeUsd. However, we now calculate the target dynamically.
-        // Wait, input.usdEquivalent is the TOTAL user pays. We need Paycrest Target!
-        // targetUsdc = usdEquivalent * (1 - appFeeBps / 10000)
         let paycrestAmountIn = amountIn;
         if (input.destAmountFiat && input.appFeeBps) {
           paycrestAmountIn = input.usdEquivalent * (1 - input.appFeeBps / 10000);
           exactTargetUsdc = paycrestAmountIn;
         }
         
-        exec = await runPaycrestOfframp(step, paycrestAmountIn, input.reference, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
+        exec = await runPaycrestOfframp(step, paycrestAmountIn, stepRef, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
       } else {
         if (!input.refundAccount) throw new Error('paycrest onramp requires refundAccount');
         const recipient = downstreamRecipient || input.destWallet;
         if (!recipient)           throw new Error('paycrest onramp requires destWallet or downstreamRecipient');
-        exec = await runPaycrestOnramp(step, amountIn, input.reference, input.refundAccount, recipient);
+        exec = await runPaycrestOnramp(step, amountIn, stepRef, input.refundAccount, recipient);
       }
     } else if (step.provider === 'chainrails') {
       if (!downstreamRecipient) throw new Error('chainrails step needs downstreamRecipient');
-      exec = await runChainRailsBridge(step, amountIn, downstreamRecipient, input.refundAddress ?? '', input.reference);
+      exec = await runChainRailsBridge(step, amountIn, downstreamRecipient, input.refundAddress ?? '', stepRef);
     } else if (step.provider === 'nearintents') {
       const from = parseAsset(step.fromAsset);
-      // For the external-wallet flow the user may not have a refund address
-      // until they pick one. We MUST ensure the refundTo is valid for the 
-      // source chain. If it's missing, we don't fall back to an EVM address
-      // if the source is not EVM (e.g. Starknet).
       const sourceIsEvm = from.kind === 'crypto' && ['BASE', 'ETHEREUM', 'ARBITRUM', 'OPTIMISM', 'POLYGON', 'BSC', 'AVALANCHE'].includes(from.chain.toUpperCase());
       const refundTo = input.refundAddress || (sourceIsEvm ? (input.destWallet || downstreamRecipient) : '');
       
@@ -386,7 +376,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         amountIn, 
         downstreamRecipient ?? input.destWallet ?? '', 
         refundTo, 
-        input.reference,
+        stepRef,
         exactTargetUsdc ?? undefined,
         input.appFeeBps
       );
