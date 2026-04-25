@@ -107,13 +107,25 @@ router.post('/dispatch-outgoing', verifyQStash, async (req, res) => {
 // ── NEAR Polling Job ────────────────────────────────────────────────────────
 
 router.post('/poll-near', verifyQStash, async (req, res) => {
+  const openStepsCount = await prisma.routeStep.count({
+    where: {
+      provider: 'nearintents',
+      status:   { notIn: ['done', 'failed'] },
+      depositAddress: { not: null },
+    },
+  });
+
+  if (openStepsCount === 0) {
+    return res.json({ success: true, count: 0, skipped: true });
+  }
+
   const openSteps = await prisma.routeStep.findMany({
     where: {
       provider: 'nearintents',
       status:   { notIn: ['done', 'failed'] },
       depositAddress: { not: null },
     },
-    take: 10,
+    take: 15,
   });
 
   for (const step of openSteps) {

@@ -108,6 +108,8 @@ function fmtDate(iso: string): string {
   );
 }
 
+import AutoRefresh from '../AutoRefresh';
+
 export default function TransactionsPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -117,17 +119,21 @@ export default function TransactionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const rawOrders = await fetchOrders(10);
-        setOrders(rawOrders);
-        setLoading(false);
-      } catch (err) {
+  const load = async (isSilent = false) => {
+    try {
+      if (!isSilent) setLoading(true);
+      const rawOrders = await fetchOrders(20);
+      setOrders(rawOrders);
+      setLoading(false);
+    } catch (err) {
+      if (!isSilent) {
         setError(err instanceof Error ? err.message : 'Failed to load orders');
         setLoading(false);
       }
-    };
+    }
+  };
+
+  useEffect(() => {
     load();
   }, []);
 
@@ -170,7 +176,6 @@ export default function TransactionsPage() {
 
   const fmtAggregate = (n: number | null | undefined): string => {
     if (n == null || isNaN(n)) return '—';
-    // Remove space between currency symbol and amount if it's a standard token, or include currency code for others
     const suffix = ['$', '₦', '€', '£'].includes(currencySymbol) ? '' : ` ${currencyCode}`;
     return `${currencySymbol}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix}`;
   };
@@ -183,10 +188,9 @@ export default function TransactionsPage() {
   const statPending = pendingFiat;
   const statSuccess = completedCount;
 
-  const recent = filteredOrders.slice(0, 4);
-
   return (
     <div className="flex flex-col xl:flex-row gap-0 -mx-6 md:-mx-10 lg:-mx-14 -my-8 md:-my-10 min-h-[calc(100vh-2rem)]">
+      <AutoRefresh interval={10000} onRefresh={() => load(true)} />
       {/* List side */}
       <div className={`flex-1 flex flex-col overflow-hidden px-6 md:px-10 lg:px-14 py-8 md:py-10 ${selected ? 'xl:max-w-[calc(100%-420px)]' : ''}`}>
         {/* Header */}

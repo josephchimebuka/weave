@@ -3,17 +3,20 @@
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
-export default function AutoRefresh({ interval = 15000 }: { interval?: number }) {
+export default function AutoRefresh({ interval = 15000, onRefresh }: { interval?: number, onRefresh?: () => void }) {
   const router = useRouter();
 
   useEffect(() => {
-    // Standard approach for auto-refreshing Server Component data in Next.js
     const timer = setInterval(() => {
-      router.refresh();
+      if (onRefresh) {
+        onRefresh();
+      } else {
+        router.refresh();
+      }
     }, interval);
 
     return () => clearInterval(timer);
-  }, [interval, router]);
+  }, [interval, router, onRefresh]);
 
   return null;
 }
