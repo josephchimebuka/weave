@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { qstashReceiver } from '../lib/qstash';
 import { prisma } from '../lib/prisma';
-import { markStepDone, markStepFailed } from '../services/executor.service';
+import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 
@@ -159,6 +159,18 @@ router.post('/cleanup-expired', verifyQStash, async (req, res) => {
   });
   
   res.json({ success: true, count: result.count });
+});
+
+// ── Sync Jobs ───────────────────────────────────────────────────────────────
+
+router.post('/sync-all', verifyQStash, async (req, res) => {
+  await syncAllOpenOrders();
+  res.json({ success: true });
+});
+
+router.post('/sync-order/:id', verifyQStash, async (req, res) => {
+  await syncOrder(req.params.id);
+  res.json({ success: true });
 });
 
 export default router;

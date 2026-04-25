@@ -492,3 +492,67 @@ export async function markStepFailed(params: { provider: string; externalId: str
 
   return { orderId: step.orderId, stepId: step.id };
 }
+
+// ── Synchronization Logic ───────────────────────────────────────────────────
+
+/**
+ * Manually fetches the current status of an order's steps from providers
+ * and advances the state machine if it has moved.
+ */
+export async function syncOrder(orderId: string) {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { steps: true }
+  });
+  if (!order || ['completed', 'failed', 'refunded'].includes(order.status)) return;
+
+  const { classifyNearStatus } = await import('./nearintents.service');
+
+  for (const step of order.steps) {
+    if (step.status === 'done' || step.status === 'failed') continue;
+
+    try {
+      if (step.provider === 'nearintents' && step.depositAddress) {
+        const status = await nearIntents.getStatus(step.depositAddress, step.depositMemo ?? undefined);
+        const outcome = classifyNearStatus(status.status);
+        if (outcome === 'done') {
+          const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
+          await markStepDone({ provider: 'nearintents', externalId: step.depositAddress, amountOut });
+        } else if (outcome === 'failed' || outcome === 'refunded') {
+          await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, isRefund: outcome === 'refunded' });
+        }
+      } else if (step.provider === 'paycrest' && step.externalId) {
+        const pc = await paycrest.getOrder(step.externalId);
+        // Paycrest statuses: 'successful', 'pending', 'expired', 'refunding', 'refunded'
+        if (pc.status === 'successful') {
+          await markStepDone({ provider: 'paycrest', externalId: step.externalId, amountOut: Number(pc.amount) });
+        } else if (['expired', 'refunded'].includes(pc.status)) {
+          await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund: pc.status === 'refunded' });
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[sync] failed to sync step ${step.id} (${step.provider}):`, err.message);
+    }
+  }
+}
+
+/**
+ * Utility to sweep all "processing" orders from the last 24h and fix them.
+ */
+export async function syncAllOpenOrders() {
+  const stuck = await prisma.order.findMany({
+    where: {
+      status: { in: ['processing', 'awaiting_deposit'] },
+      createdAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    },
+    select: { id: true }
+  });
+
+  for (const order of stuck) {
+    try {
+      await syncOrder(order.id);
+    } catch (err: any) {
+      console.error(`[sync] failed for order ${order.id}:`, err.message);
+    }
+  }
+}
