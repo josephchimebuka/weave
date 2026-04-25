@@ -233,8 +233,7 @@ function SupportForm() {
     setError(null);
 
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api/v1';
-      const res = await fetch(`${apiBase}/support/contact`, {
+      const res = await fetch('/api/support/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),

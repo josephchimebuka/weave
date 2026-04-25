@@ -1,12 +1,13 @@
 // Session cookie name — shared between client and server
 export const DASHBOARD_SESSION_COOKIE = 'weave_session';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api/v1';
+const API_BASE = '/api/auth';
 
 type ApiResult<T> = { success: true; data: T } | { success: false; error: string };
 
 async function postJson<T>(path: string, body: Record<string, unknown>): Promise<ApiResult<T>> {
   try {
+    // Note: path already starts with / e.g. /login
     const res = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

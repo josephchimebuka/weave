@@ -28,7 +28,7 @@ export default function LinksPage() {
 
   async function fetchSupportedAssets() {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api/v1'}/assets`);
+      const res = await fetch(`/api/assets`);
       const json = await res.json();
       if (json.success) setSupportedAssets(json.data);
     } catch (e) {
