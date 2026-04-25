@@ -234,29 +234,36 @@ async function runNearIntentsSwap(
 
   const WEAVE_EVM_REFUND_ADDRESS = process.env.WEAVE_EVM_REFUND_ADDRESS || refundAddress;
 
-  const resp = await nearIntents.createQuote({
-    sourceAssetKey: step.fromAsset,
-    destAssetKey:   step.toAsset,
-    amount:         exactOutputTarget ?? amountIn, // Target output amount or fallback to input amount
-    swapType:       exactOutputTarget ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
-    refundTo:       refundAddress,
-    recipient:      downstreamRecipient,
-    slippageBps:    exactOutputTarget ? undefined : SLIPPAGE_BUFFER_BPS, // EXACT_OUTPUT leaves slippage risk to solver
-    appFee:         appFeeBps && exactOutputTarget ? { recipient: WEAVE_EVM_REFUND_ADDRESS, fee: appFeeBps } : undefined,
-    referral:       `weave-${ref}`.toLowerCase().slice(0, 32),
-  });
+  try {
+    const resp = await nearIntents.createQuote({
+      sourceAssetKey: step.fromAsset,
+      destAssetKey:   step.toAsset,
+      amount:         exactOutputTarget ?? amountIn, // Target output amount or fallback to input amount
+      swapType:       exactOutputTarget ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
+      refundTo:       refundAddress,
+      recipient:      downstreamRecipient,
+      slippageBps:    exactOutputTarget ? undefined : SLIPPAGE_BUFFER_BPS, // EXACT_OUTPUT leaves slippage risk to solver
+      appFee:         appFeeBps && exactOutputTarget ? { recipient: WEAVE_EVM_REFUND_ADDRESS, fee: appFeeBps } : undefined,
+      referral:       `weave-${ref}`.toLowerCase().slice(0, 32),
+    });
 
-  const amountOut = Number(resp.quote.amountOutFormatted) || amountIn;
+    const amountOut = Number(resp.quote.amountOutFormatted) || amountIn;
 
-  return {
-    externalId:     resp.quote.depositAddress,
-    amountIn:       exactOutputTarget ? Number(resp.quote.amountInFormatted) || amountIn : amountIn,
-    amountOut,
-    depositAddress: resp.quote.depositAddress,
-    depositMemo:    resp.quote.depositMemo ?? null,
-    expiresAt:      resp.quote.deadline,
-    feeUsd:         Math.max(0, Number(resp.quote.amountInUsd) - Number(resp.quote.amountOutUsd)) || 0,
-  };
+    return {
+      externalId:     resp.quote.depositAddress,
+      amountIn:       exactOutputTarget ? Number(resp.quote.amountInFormatted) || amountIn : amountIn,
+      amountOut,
+      depositAddress: resp.quote.depositAddress,
+      depositMemo:    resp.quote.depositMemo ?? null,
+      expiresAt:      resp.quote.deadline,
+      feeUsd:         Math.max(0, Number(resp.quote.amountInUsd) - Number(resp.quote.amountOutUsd)) || 0,
+    };
+  } catch (err: any) {
+    if (err.message.includes('400') && err.message.toLowerCase().includes('failed to get quote')) {
+      throw new Error('The amount is too low for a cross-chain payment. Please try a higher amount (approx. $1.00 USD minimum).');
+    }
+    throw err;
+  }
 }
 
 // ── Orchestrator ────────────────────────────────────────────────────────────

@@ -198,7 +198,7 @@ router.post('/', requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     console.error('create order error:', err.message);
-    res.status(502).json({ success: false, error: err.message });
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 

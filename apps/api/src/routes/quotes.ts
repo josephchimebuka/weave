@@ -150,7 +150,7 @@ router.get('/', requireApiKey, async (req, res) => {
     });
   } catch (err: any) {
     console.error('quote error:', err.message);
-    res.status(502).json({ success: false, error: err.message });
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
