@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import { webhookQueue } from '../queues/webhooks';
 import { chainRails } from '../services/chainrails.service';
 import { paycrest } from '../services/paycrest.service';
 
