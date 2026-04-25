@@ -1,14 +1,10 @@
 import { Queue, Worker } from 'bullmq';
 import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed } from '../services/executor.service';
-
-const connection = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: Number(process.env.REDIS_PORT) || 6379,
-};
+import { redis } from '../lib/redis';
 
 export const webhookQueue = new Queue('weave-webhooks', {
-  connection,
+  connection: redis,
   defaultJobOptions: {
     attempts: 5,
     backoff:  { type: 'exponential', delay: 2_000 },
@@ -96,7 +92,7 @@ const worker = new Worker('weave-webhooks', async (job) => {
     create: { orderId: step.orderId, source, event, externalId, payload: data, processed: true },
     update: { processed: true },
   });
-}, { connection, concurrency: 5 });
+}, { connection: redis, concurrency: 5 });
 
 worker.on('failed', (job, err) => {
   console.error(`[queue] job ${job?.id} failed:`, err.message);

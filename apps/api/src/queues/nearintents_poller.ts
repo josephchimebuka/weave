@@ -14,17 +14,13 @@ import { Queue, Worker } from 'bullmq';
 import { prisma } from '../lib/prisma';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { markStepDone, markStepFailed } from '../services/executor.service';
-
-const connection = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: Number(process.env.REDIS_PORT) || 6379,
-};
+import { redis } from '../lib/redis';
 
 const QUEUE_NAME       = 'weave-nearintents-poll';
 const POLL_INTERVAL_MS = Number(process.env.NEAR_POLL_INTERVAL_MS ?? 15_000);
 const PER_STEP_DELAY_MS = 2_000;  // stagger between per-step polls inside one tick
 
-export const nearPollerQueue = new Queue(QUEUE_NAME, { connection });
+export const nearPollerQueue = new Queue(QUEUE_NAME, { connection: redis });
 
 // Repeatable tick job. BullMQ dedupes by the jobId we pass, so restarts don't
 // fan out duplicate schedulers.
@@ -63,7 +59,7 @@ const worker = new Worker(QUEUE_NAME, async () => {
       console.warn(`[nearpoll] ${step.id} ${step.depositAddress}: ${err.message}`);
     }
   }
-}, { connection });
+}, { connection: redis });
 
 worker.on('failed', (job, err) => {
   console.error(`[nearpoll] job ${job?.id} failed:`, err.message);
