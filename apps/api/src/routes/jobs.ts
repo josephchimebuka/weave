@@ -15,11 +15,19 @@ const verifyQStash = async (req: Request, res: Response, next: Function) => {
   if (process.env.NODE_ENV === 'development') return next();
 
   const signature = req.headers['upstash-signature'] as string;
-  const body = (req as any).rawBody || JSON.stringify(req.body);
+  const rawBody = (req as any).rawBody;
+  // If we have a rawBody, use it. Otherwise, if the request is empty, use "". 
+  // Fall back to stringified json only if we actually have data but missed rawBody.
+  const body = rawBody !== undefined ? rawBody : (Object.keys(req.body || {}).length === 0 ? '' : JSON.stringify(req.body));
+  
+  // Use the public URL as QStash signed it against the public domain
+  const url = `https://api.paywithweave.com/api/v1/jobs${req.path}`;
 
   const isValid = await qstashReceiver.verify({
     signature,
     body,
+    url,
+    clockTolerance: 10,
   }).catch(() => false);
 
   if (!isValid) {
