@@ -126,9 +126,12 @@ router.post('/signup', authLimiter, async (req, res) => {
       return { merchant, session };
     });
 
-    sendWelcomeEmail(email, name).catch(err =>
-      console.error('[signup] welcome email error:', err.message),
-    );
+    try {
+      await sendWelcomeEmail(email, name);
+      console.log(`[signup] welcome email sent to ${email}`);
+    } catch (err: any) {
+      console.error('[signup] welcome email error:', err.message);
+    }
 
     return res.json({
       success: true,
@@ -203,12 +206,14 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
   if (!email) return res.status(400).json({ success: false, error: 'email is required' });
 
   try {
+    console.log(`[auth] forgot-password request for ${email}`);
     const merchant = await prisma.merchant.findUnique({ where: { email } });
     if (!merchant) {
-      // Return success to avoid account enumeration
+      console.log(`[auth] merchant not found for ${email}, returning stealth success`);
       return res.json({ success: true, data: { message: 'If that account exists, reset instructions have been sent.' } });
     }
 
+    console.log(`[auth] creating otp challenge for ${merchant.id}`);
     const otpCode   = createOtpCode();
     const challenge = await prisma.otpChallenge.create({
       data: {
@@ -220,10 +225,15 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
       },
     });
 
-    // Production behavior: Always send email, never leak OTP in response.
-    sendPasswordResetEmail(email, otpCode, challenge.id).catch(err =>
-      console.error('[forgot-password] email error:', err.message),
-    );
+    console.log(`[auth] challenge created: ${challenge.id}, sending email...`);
+    try {
+      await sendPasswordResetEmail(email, otpCode, challenge.id);
+      console.log(`[auth] reset email sent to ${email}`);
+    } catch (err: any) {
+      console.error('[auth] forgot-password email error:', err.message);
+      // We still return success to the user to avoid leaking info, 
+      // but we log the internal failure.
+    }
 
     return res.json({
       success: true,

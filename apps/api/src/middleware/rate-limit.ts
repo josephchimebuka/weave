@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { redis } from '../lib/redis';
+import { redis } from '../lib/serverless-redis';
 
 interface RateLimitOptions {
   windowMs: number; // Time window in milliseconds
@@ -21,8 +21,7 @@ export function rateLimit(options: RateLimitOptions) {
     const key = `${keyPrefix}:${ip}`;
 
     try {
-      const current = await redis.get(key);
-      const count = current ? parseInt(current, 10) : 0;
+      const count = (await redis.get<number>(key)) || 0;
 
       if (count >= max) {
         return res.status(429).json({
@@ -31,16 +30,13 @@ export function rateLimit(options: RateLimitOptions) {
         });
       }
 
-      // Increment counter
-      const multi = redis.multi();
-      multi.incr(key);
-      
-      // Only set expiry if it's a new key
+      // Increment and set expiry in a single pipeline
+      const pipeline = redis.pipeline();
+      pipeline.incr(key);
       if (count === 0) {
-        multi.pexpire(key, windowMs);
+        pipeline.pexpire(key, windowMs);
       }
-      
-      await multi.exec();
+      await pipeline.exec();
       
       // Add rate limit headers
       res.setHeader('X-RateLimit-Limit', max);
