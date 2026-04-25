@@ -7,19 +7,25 @@
 // The secretKey NEVER belongs in browser code. WeaveCheckout accepts only
 // the publishable key (apiKey prop).
 
-const API_BASE =
-  (typeof window !== 'undefined' && (window as any).__WEAVE_API_BASE__) ||
-  (import.meta as any).env?.VITE_API_BASE ||
-  (import.meta as any).env?.NEXT_PUBLIC_API_BASE ||
-  'http://localhost:4000/api/v1';
+function getApiBase() {
+  if (typeof window !== 'undefined' && (window as any).__WEAVE_API_BASE__) {
+    return (window as any).__WEAVE_API_BASE__;
+  }
+  return (
+    (import.meta as any).env?.VITE_API_BASE ||
+    (import.meta as any).env?.NEXT_PUBLIC_API_BASE ||
+    'http://localhost:4000/api/v1'
+  );
+}
 
 async function apiFetch(path: string, publishableKey: string, options?: RequestInit) {
+  const base = getApiBase();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'x-api-key': publishableKey,
     ...(options?.headers as Record<string, string> | undefined),
   };
-  const res  = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res  = await fetch(`${base}${path}`, { ...options, headers });
   if (res.status === 204) return null;
   const json = await res.json();
   if (!json.success) throw new Error(json.error ?? 'API error');
