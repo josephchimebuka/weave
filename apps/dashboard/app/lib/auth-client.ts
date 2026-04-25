@@ -76,24 +76,24 @@ export function clearSessionToken() {
 }
 
 export function signup(email: string, password: string) {
-  return postJson<AuthSuccessData>('/auth/signup', { email, password });
+  return postJson<AuthSuccessData>('/signup', { email, password });
 }
 
 export function login(email: string, password: string) {
-  return postJson<AuthSuccessData>('/auth/login', { email, password });
+  return postJson<AuthSuccessData>('/login', { email, password });
 }
 
 export function forgotPassword(email: string) {
   return postJson<{ message: string; resetToken?: string; otpCode?: string; expiresAt?: string }>(
-    '/auth/forgot-password',
+    '/forgot-password',
     { email },
   );
 }
 
 export function resetPassword(resetToken: string, otp: string, newPassword: string) {
-  return postJson<AuthSuccessData>('/auth/reset-password', { resetToken, otp, newPassword });
+  return postJson<AuthSuccessData>('/reset-password', { resetToken, otp, newPassword });
 }
 
 export function logout(sessionToken: string) {
-  return postJson<{ loggedOut: boolean }>('/auth/logout', { sessionToken });
+  return postJson<{ loggedOut: boolean }>('/logout', { sessionToken });
 }

@@ -21,8 +21,18 @@ export async function POST(
       body: JSON.stringify(body),
     });
 
-    const data = await res.json();
-    return NextResponse.json(data, { status: res.status });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } else {
+      const text = await res.text();
+      console.warn('[auth-proxy] backend returned non-json:', text.slice(0, 200));
+      return NextResponse.json(
+        { success: false, error: `Backend error (${res.status}). Expected JSON, got ${contentType || 'text'}.` },
+        { status: res.status }
+      );
+    }
   } catch (error: any) {
     console.error('[auth-proxy] failure:', error.message);
     return NextResponse.json(
