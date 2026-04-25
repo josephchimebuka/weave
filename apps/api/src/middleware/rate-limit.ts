@@ -16,9 +16,14 @@ export function rateLimit(options: RateLimitOptions) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const { windowMs, max, message, keyPrefix = 'rl' } = options;
     
-    // Use IP address as the key (or merchantId if logged in)
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const key = `${keyPrefix}:${ip}`;
+    // Judge the "Role" of the request to give it a dedicated bucket
+    let role = 'anon';
+    if (req.headers['x-api-key'])     role = 'widget';
+    if (req.headers['x-session-token']) role = 'dashboard';
+    if (req.headers['x-secret-key'])   role = 'server';
+
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    const key = `${keyPrefix}:${role}:${ip}`;
 
     try {
       const count = (await redis.get<number>(key)) || 0;
@@ -62,7 +67,7 @@ export const authLimiter = rateLimit({
 
 export const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // 100 requests per minute
+  max: 100, // 100 requests per minute (now per Role:IP compound key)
   keyPrefix: 'api-limit',
 });
 
