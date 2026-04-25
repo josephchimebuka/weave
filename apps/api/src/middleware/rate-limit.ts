@@ -72,7 +72,7 @@ export const authLimiter = rateLimit({
 
 export const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // 100 requests per minute (now per Role:IP compound key)
+  max: 300, // 300 requests per minute
   keyPrefix: 'api-limit',
 });
 
