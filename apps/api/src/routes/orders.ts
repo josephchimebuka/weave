@@ -145,22 +145,41 @@ router.post('/', requireAuth, async (req, res) => {
       }
     } catch {}
 
-    // 4. Create the Order row before executing providers — gives us an id to
-    //    use as the reference and lets us attach RouteStep rows to it.
-    const order = await prisma.order.create({
-      data: {
-        merchantId:         merchant.id,
-        sourceInstrumentId: sourceInstrument.id,
-        destInstrumentId:   destInstrument.id,
-        sourceAssetKey:     sourceInstrument.assetKey,
-        destAssetKey:       destInstrument.assetKey,
-        sourceAmount,
-        status:             'awaiting_deposit',
-        routePlan:          plan as any,
-        quoteRate,
-        reference:          body.reference,
-      },
-    });
+    // 4. Create or Reuse the Order row (Idempotency)
+    // If the merchant provided a reference, check for an existing order first.
+    let order: any;
+    if (body.reference) {
+      order = await prisma.order.findFirst({
+        where: {
+          merchantId: merchant.id,
+          reference:  body.reference,
+          // Only reuse if it's the same amount and asset to avoid collisions
+          sourceAmount,
+          sourceAssetKey: sourceInstrument.assetKey,
+        },
+        include: { steps: { orderBy: { sequence: 'asc' } } }
+      });
+    }
+
+    if (!order) {
+      order = await prisma.order.create({
+        data: {
+          merchantId:         merchant.id,
+          sourceInstrumentId: sourceInstrument.id,
+          destInstrumentId:   destInstrument.id,
+          sourceAssetKey:     sourceInstrument.assetKey,
+          destAssetKey:       destInstrument.assetKey,
+          sourceAmount,
+          status:             'awaiting_deposit',
+          routePlan:          plan as any,
+          quoteRate,
+          reference:          body.reference,
+        },
+      });
+      console.log(`[orders] created new order: ${order.id}`);
+    } else {
+      console.log(`[orders] reusing existing order for ref ${body.reference}: ${order.id}`);
+    }
 
     // 5. Execute: create provider resources (reverse order), persist RouteSteps,
     //    return nextAction for the widget.

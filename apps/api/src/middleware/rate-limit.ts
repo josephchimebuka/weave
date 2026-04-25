@@ -25,6 +25,11 @@ export function rateLimit(options: RateLimitOptions) {
     const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
     const key = `${keyPrefix}:${role}:${ip}`;
 
+    // Bypass for low-weight background status checks
+    if (req.path.endsWith('/auth/session')) {
+      return next();
+    }
+
     try {
       const count = (await redis.get<number>(key)) || 0;
 
