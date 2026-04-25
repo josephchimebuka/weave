@@ -125,4 +125,20 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
   res.json({ success: true, count: openSteps.length });
 });
 
+// ── Cleanup Abandoned Payments ──────────────────────────────────────────────
+
+router.post('/cleanup-expired', verifyQStash, async (req, res) => {
+  const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  
+  const result = await prisma.order.updateMany({
+    where: {
+      status: 'awaiting_deposit',
+      createdAt: { lt: fiveHoursAgo }
+    },
+    data: { status: 'expired' }
+  });
+  
+  res.json({ success: true, count: result.count });
+});
+
 export default router;

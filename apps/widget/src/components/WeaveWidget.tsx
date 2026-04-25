@@ -1974,6 +1974,9 @@ export function WeaveCheckout({
             } else if (order.status === 'completed') {
               setOrderId(order.id);
               setScreen('success');
+            } else {
+              // Order is expired, failed, or refunded. Clear it so it doesn't linger.
+              localStorage.removeItem(`weave-order-${apiKey}`);
             }
           }).catch(() => {
             localStorage.removeItem(`weave-order-${apiKey}`);
