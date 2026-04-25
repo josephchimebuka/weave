@@ -76,26 +76,24 @@ export default function PayClient({ link }: { link: LinkData }) {
       </div>
 
       {/* Right Column: Checkout Widget */}
-      <div className="flex-1 flex flex-col items-center lg:items-start justify-center py-12 lg:py-24 px-6 lg:px-12 bg-cream-soft">
+      <div className="flex-1 flex flex-col items-center lg:items-start justify-center py-12 lg:py-24 px-6 lg:px-12">
         <div className="w-full max-w-[420px] fade-up lg:ml-8 xl:ml-16">
-          <div className="bg-white rounded-[32px] p-1 shadow-leaf border border-hair-soft overflow-hidden">
-            <WeaveCheckout 
-              apiKey={link.publishableKey}
-              merchant={{
-                name: link.merchantName,
-                amount: link.amount,
-                currency: token,
-                description: link.title,
-                amountIn: isP2P ? 'source' : 'dest',
-                sourceAssetKey: isP2P ? link.asset : undefined,
-              }}
-              theme="organic"
-              accentColor="forest"
-              borderRadius={28}
-              onSuccess={(data) => console.log("Payment success:", data)}
-              onClose={() => {}}
-            />
-          </div>
+          <WeaveCheckout 
+            apiKey={link.publishableKey}
+            merchant={{
+              name: link.merchantName,
+              amount: link.amount,
+              currency: token,
+              description: link.title,
+              amountIn: isP2P ? 'source' : 'dest',
+              sourceAssetKey: isP2P ? link.asset : undefined,
+            }}
+            theme="organic"
+            accentColor="forest"
+            borderRadius={28}
+            onSuccess={(data) => console.log("Payment success:", data)}
+            onClose={() => {}}
+          />
 
           {/* Checkout Footer */}
           <div className="mt-10 px-4">
