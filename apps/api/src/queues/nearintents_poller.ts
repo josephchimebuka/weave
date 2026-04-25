@@ -86,8 +86,8 @@ async function pollOne(step: {
     const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
     await markStepDone({ provider: 'nearintents', externalId: step.depositAddress, amountOut });
     console.log(`[nearpoll] ${step.depositAddress} → SUCCESS`);
-  } else if (outcome === 'failed') {
-    await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress });
+  } else if (outcome === 'failed' || outcome === 'refunded') {
+    await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, isRefund: outcome === 'refunded' });
     console.log(`[nearpoll] ${step.depositAddress} → ${status.status}`);
   } else if (step.status === 'awaiting_deposit' && status.status === 'KNOWN_DEPOSIT_TX') {
     // Promote to in_flight so the dashboard/widget reflect that funds landed.

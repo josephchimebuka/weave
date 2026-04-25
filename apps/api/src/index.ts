@@ -12,6 +12,8 @@ import merchantRouter     from './routes/merchant';
 import linksRouter        from './routes/links';
 import verificationRouter from './routes/verification';
 import adminRouter        from './routes/admin';
+import assetsRouter       from './routes/assets';
+import supportRouter      from './routes/support';
 
 import { ensureMerchantDefaultInstruments } from './lib/merchant';
 import { prisma } from './lib/prisma';
@@ -44,6 +46,8 @@ app.use('/api/v1/merchant',      merchantRouter);
 app.use('/api/v1/links',         linksRouter);
 app.use('/api/v1/verification',  verificationRouter);
 app.use('/api/v1/admin',         adminRouter);
+app.use('/api/v1/assets',        assetsRouter);
+app.use('/api/v1/support',       supportRouter);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 

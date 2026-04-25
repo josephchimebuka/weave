@@ -43,6 +43,9 @@ The API does **not** own end-user payment identity. The `Instrument` model allow
   - `POST /auth/forgot-password` — create an `OtpChallenge` (purpose `password_reset`); returns `resetToken` + `otpCode` in non-production.
   - `POST /auth/reset-password` — consume challenge + OTP, hash new password, delete all sessions, issue fresh session.
   - `POST /auth/logout` — delete session by token.
+- **Admin & Support:**
+  - `GET /admin/verify?id=&action=approve|reject&token=` — Secure "Magic Link" handler for KYB approval/rejection. Uses JWT verification. Rejections require a reason.
+  - `POST /support/contact` — Receives dashboard support inquiries and dispatches them via `email.service.ts`.
 
 ### Services (`src/services/`)
 
@@ -131,10 +134,20 @@ Both endpoints return `{ user: { id, email, ... }, session: { token, expiresAt }
 ### Layout & Routes
 
 - `app/layout.tsx` — Root HTML shell, mounts `SidebarLayout` (client component).
-- `components/SidebarLayout.tsx` — Detects auth routes vs authenticated routes and renders sidebar + content accordingly.
-- `app/page.tsx` · `app/transactions/page.tsx` — Server components that fetch orders server-side, require session.
-- `app/auth/*` — Client routes for signup, login, password reset (no sidebar).
-- `app/settings/page.tsx` · `app/compliance/page.tsx` · `app/onboarding/kyb/page.tsx` — Admin settings (scaffolding; not yet wired to API).
+- `components/SidebarLayout.tsx` — Detects auth routes vs authenticated routes and renders sidebar + content accordingly. Includes a `BusinessStatus` capsule.
+- `app/page.tsx` — Main dashboard. Includes `AutoRefresh` (20s polling) and revenue metrics using `netSettlement` (post-fee).
+- `app/transactions/page.tsx` — Transaction history with filtering and CSV export.
+- `app/links/page.tsx` — Payment link management. Includes a regex-validated numeric amount input and asset picker portal.
+- `app/onboarding/kyb/page.tsx` — Full KYB submission workflow (Personal -> Business -> Documents).
+- `app/support/page.tsx` — Integrated contact form (routes to API) + FAQ + links to legal pages.
+- `app/terms/page.tsx` & `app/privacy/page.tsx` — Legal documentation.
+- `app/settings/page.tsx` — Merchant profile and payout destination management.
+
+### Technical Patterns
+
+- **Auto-Refresh**: Dashboard pages use `app/AutoRefresh.tsx` to trigger `router.refresh()` every 20 seconds, ensuring data stays synced without full reloads.
+- **Revenue Calculation**: Revenue cards use `netSettlement(order)` to subtract provider/sender fees from gross `destAmount`, showing merchants what actually reaches their bank.
+- **Naira-First UI**: Currency symbols default to ₦ and formatting reflects Nigerian banking standards (whole numbers or 2 decimals).
 
 ## Conventions
 
@@ -146,8 +159,7 @@ Both endpoints return `{ user: { id, email, ... }, session: { token, expiresAt }
 - **Error shape:** every endpoint returns `{ success: boolean, data? , error? }`. Upstream provider failures map to HTTP `502`.
 - **Never commit `.env`** — `.env.example` is the source of truth for required keys.
 
-## What's not here yet
-
-- The PRD describes `/quotes/offramp`, `/quotes/onramp`, `/orders/offramp`, `/orders/onramp`, normalized webhook fan-out to merchant endpoints, sandbox mode, analytics, batch orders, and chain-auto-detection in the widget. The current API collapses both directions into a single `POST /orders` and a single `GET /quotes`; the widget demo screens are hard-coded against NGN + a mock balance list. Don't assume PRD endpoints exist — grep first.
-- `packages/shared` is a stub. Anything genuinely shared between apps is currently duplicated (e.g. `parseAsset` lives in `apps/api/src/lib/assets.ts` and `apps/dashboard/app/types.ts`).
-- Dashboard payout/settings/integration/compliance/KYB pages are currently UI scaffolding only; form submissions are not wired to live API calls.
+- The PRD describes normalized webhook fan-out to merchant endpoints, sandbox mode, analytics, batch orders, and chain-auto-detection in the widget. The widget demo screens are currently hard-coded against NGN + a mock balance list.
+- **KYB & Verification:** Now fully wired. Admins verify via secure email links. Merchants see real-time status in the sidebar.
+- **Settlement SLAs:** Formally updated to 30s – 2mins for bank-led corridors.
+- **Support System:** Fully functional and integrated with transactional emails.

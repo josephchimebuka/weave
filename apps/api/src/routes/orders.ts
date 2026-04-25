@@ -269,9 +269,9 @@ router.get('/:id', requireAuth, async (req, res) => {
           nearStatus = st.status;
           const outcome = classifyNearStatus(st.status);
           const bridged = outcome === 'done' || order.steps.some(s => s.status === 'done' && s.provider === 'nearintents');
-          const anyFail = outcome === 'failed';
+          const anyFail = outcome === 'failed' || outcome === 'refunded';
           const nearProcessing = st.status === 'PROCESSING';
-          const nextStatus = anyFail ? 'failed' : (nearProcessing || bridged) ? 'processing' : order.status;
+          const nextStatus = outcome === 'refunded' ? 'refunded' : anyFail ? 'failed' : (nearProcessing || bridged) ? 'processing' : order.status;
           if (nextStatus !== order.status) {
             order = await prisma.order.update({
               where:   { id: order.id },

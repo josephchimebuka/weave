@@ -4,6 +4,7 @@ import { requireServerSession } from './lib/auth-server';
 import { fetchOrders, fetchMerchantProfile } from './lib/dashboard-api';
 import { parseAsset } from './types';
 import type { Order } from './types';
+import AutoRefresh from './AutoRefresh';
 
 type StatusTone = {
   bg: string;
@@ -82,11 +83,21 @@ function formatUsd(n: number): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// Return the fiat destination amount explicitly. 
-// Previously misnamed 'approximateUsd', it's exactly the merchant's target fiat.
+function netSettlement(order: Order): number {
+  if (order.destAmount == null) return 0;
+  const isDestFiat = parseAsset(order.destAssetKey).kind === 'fiat';
+  if (!isDestFiat) return order.destAmount;
+
+  // For fiat settlements, Weave/Paycrest fee is often bundled in the gross destAmount.
+  // We subtract the fee at the target rate to show what actually hits the bank.
+  const feeInDest = (order.senderFeeUsd || 0) * (order.quoteRate || 0);
+  const net = Math.max(0, order.destAmount - feeInDest);
+  return Math.round(net);
+}
+
+// Previously misnamed 'approximateFiat', we now use the net settlement amount.
 function approximateFiat(o: Order): number {
-  if (o.destAmount == null) return 0;
-  return o.destAmount;
+  return netSettlement(o);
 }
 
 export default async function Page() {
@@ -102,10 +113,10 @@ export default async function Page() {
     ['awaiting_deposit', 'processing', 'bridging'].includes(o.status),
   );
 
-  // Determine active currency
-  let currencyCode = 'USD';
-  let currencySymbol = '$';
-  
+  // Determine active currency — Default to NGN as requested
+  let currencyCode = 'NGN';
+  let currencySymbol = '₦';
+
   if (orders.length > 0) {
     for (const o of orders) {
       if (o.destAssetKey) {
@@ -122,7 +133,9 @@ export default async function Page() {
   const fmtAggregate = (n: number | null | undefined): string => {
     if (n == null || isNaN(n)) return '—';
     const suffix = ['$', '₦', '€', '£'].includes(currencySymbol) ? '' : ` ${currencyCode}`;
-    return `${currencySymbol}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix}`;
+    // Nigerians usually expect whole numbers or 2 decimals for Naira
+    const formatted = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${currencySymbol}${formatted}${suffix}`;
   };
 
   // 30-day revenue window
@@ -163,6 +176,7 @@ export default async function Page() {
 
   return (
     <div className="space-y-8">
+      <AutoRefresh interval={20000} />
       {/* Top bar — greeting left, utility icons + CTAs right */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
         <div className="fade-up">
@@ -209,7 +223,7 @@ export default async function Page() {
           Export
         </Link>
         <Link
-          href="/settings"
+          href="/links"
           className="inline-flex items-center gap-2 bg-forest text-cream-soft px-6 py-3 rounded-full text-[14px] font-medium hover:bg-forest-deep transition-all shadow-leaf"
         >
           <Link2 size={16} strokeWidth={2} />
@@ -311,15 +325,29 @@ export default async function Page() {
                 <Briefcase size={17} strokeWidth={1.8} />
                 <p className="text-[14px] font-medium">Business Status</p>
               </div>
-              <span className="inline-flex items-center gap-1 bg-forest-surface text-forest-deep px-2.5 py-1 rounded-full text-[11px] font-semibold">
-                <CheckCircle2 size={12} strokeWidth={2.5} />
-                Verified
+              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold ${
+                merchant?.kycLevel === 'verified' ? 'bg-forest-surface text-forest-deep' : 
+                merchant?.kycLevel === 'pending' ? 'bg-tan-mist text-tan-deep' : 
+                'bg-cream-deep text-ink-muted'
+              }`}>
+                {merchant?.kycLevel === 'verified' ? <CheckCircle2 size={12} strokeWidth={2.5} /> : 
+                 merchant?.kycLevel === 'pending' ? <div className="w-1.5 h-1.5 rounded-full bg-tan animate-pulse" /> :
+                 null}
+                {merchant?.kycLevel === 'verified' ? 'Verified' : 
+                 merchant?.kycLevel === 'pending' ? 'Pending' : 
+                 'Action Req.'}
               </span>
             </div>
             <p className="mt-4 font-display text-[22px] font-semibold text-ink leading-tight">
-              KYB Approved
+              {merchant?.kycLevel === 'verified' ? 'KYB Approved' : 
+               merchant?.kycLevel === 'pending' ? 'Review Pending' : 
+               'KYB Action Required'}
             </p>
-            <p className="mt-1 text-[13px] text-ink-muted">Next review in 180 days.</p>
+            <p className="mt-1 text-[13px] text-ink-muted">
+              {merchant?.kycLevel === 'verified' ? 'Next review in 180 days.' : 
+               merchant?.kycLevel === 'pending' ? 'Est. review: 1-3 days.' : 
+               'Submit details to accept live payments.'}
+            </p>
             <Link
               href="/onboarding/kyb"
               className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-semibold text-forest-deep hover:text-forest transition-colors"
@@ -427,7 +455,7 @@ function EmptyRecent() {
         When customers complete a checkout, their transactions will appear here.
       </p>
       <Link
-        href="/settings"
+        href="/links"
         className="mt-5 inline-flex items-center gap-2 bg-forest text-cream-soft px-5 py-2.5 rounded-full text-[13px] font-semibold hover:bg-forest-deep transition-all shadow-leaf"
       >
         <Link2 size={14} strokeWidth={2} />

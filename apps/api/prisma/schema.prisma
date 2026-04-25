@@ -259,8 +259,8 @@ model PaymentLink {
   
   title       String
   description String?
-  amount      Float?   // if null, user can specify
-  currency    String   // e.g. "NGN", "USDC"
+  amount      Float    // if null, user can specify
+  asset       String   // e.g. "NGN", "USDC"
   
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())

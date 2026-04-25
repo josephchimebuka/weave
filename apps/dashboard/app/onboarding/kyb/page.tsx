@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Check, Info, ArrowRight, Upload, Building2, User, FileText, Search } from 'lucide-react';
+import { Check, Info, ArrowRight, Upload, Building2, User, FileText, Search, Bell } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 type StepStatus = 'done' | 'active' | 'pending';
@@ -57,6 +57,7 @@ export interface VerificationFormData {
   postalCode: string;
   website: string;
   taxId: string;
+  documentUrls?: Array<{ type: string; url: string }>;
 }
 
 export default function KybPage() {
@@ -64,6 +65,14 @@ export default function KybPage() {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<string>('none');
+  
+  // File state (kept in memory until final submission)
+  const [certificateFile, setCertificateFile] = useState<File | null>(null);
+  const [identityFile, setIdentityFile] = useState<File | null>(null);
+  
   const [formData, setFormData] = useState<VerificationFormData>({
     firstName: '',
     lastName: '',
@@ -89,6 +98,7 @@ export default function KybPage() {
         const json = await res.json();
         if (json.success && json.data) {
           setFormData(prev => ({ ...prev, ...json.data }));
+          setVerificationStatus(json.data.status || 'none');
         }
       } catch (err) {
         console.error('Failed to fetch verification progress', err);
@@ -126,22 +136,187 @@ export default function KybPage() {
     }
   };
 
+  const uploadToCloudinary = async (file: File): Promise<string> => {
+    const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'weave-cloud';
+    const preset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'kyb_documents';
+    
+    const data = new FormData();
+    data.append('file', file);
+    data.append('upload_preset', preset);
+
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+      method: 'POST',
+      body: data,
+    });
+    
+    if (!res.ok) throw new Error('Cloudinary upload failed');
+    const json = await res.json();
+    return json.secure_url;
+  };
+
   const handleSubmit = async () => {
     setSubmitting(true);
+    setUploading(true);
     try {
+      // Start with existing URLs so we don't overwrite with empty
+      const documentUrls: Array<{ type: string; url: string }> = [...(formData.documentUrls || [])];
+      
+      // 1. Upload new files only if selected
+      if (certificateFile) {
+        const url = await uploadToCloudinary(certificateFile);
+        // Replace existing of same type or add
+        const idx = documentUrls.findIndex(d => d.type === 'business_certificate');
+        if (idx > -1) documentUrls[idx].url = url;
+        else documentUrls.push({ type: 'business_certificate', url });
+      }
+      if (identityFile) {
+        const url = await uploadToCloudinary(identityFile);
+        const idx = documentUrls.findIndex(d => d.type === 'identity_document');
+        if (idx > -1) documentUrls[idx].url = url;
+        else documentUrls.push({ type: 'identity_document', url });
+      }
+
+      // 2. Save final metadata with URLs
+      await fetch('/api/verification', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formData, documentUrls }),
+      });
+
+      // 3. Final submission
       const res = await fetch('/api/verification/submit', { method: 'POST' });
       const json = await res.json();
       if (json.success) {
-        router.push('/settings?verification=pending');
+        setIsSuccess(true);
+        setVerificationStatus('pending');
       }
     } catch (err) {
       console.error('Submission failed', err);
+      alert('Failed to submit application. Please check your document sizes and try again.');
     } finally {
       setSubmitting(false);
+      setUploading(false);
     }
   };
 
   if (loading) return <div className="py-20 text-center text-ink-muted">Loading your progress...</div>;
+
+  if (isSuccess) {
+    return (
+      <div className="max-w-2xl mx-auto py-24 text-center space-y-10 fade-up">
+        <div className="relative mx-auto w-24 h-24">
+          <div className="absolute inset-0 bg-forest/20 rounded-full animate-ping opacity-25" />
+          <div className="relative w-24 h-24 bg-forest rounded-full flex items-center justify-center shadow-leaf-lg ring-8 ring-forest-surface">
+            <Check size={44} className="text-white" strokeWidth={3} />
+          </div>
+        </div>
+        <div className="space-y-4">
+          <h1 className="font-display text-[48px] lg:text-[56px] font-semibold text-ink tracking-tight leading-none">Application Under Review</h1>
+          <p className="text-ink-muted text-[17px] max-w-lg mx-auto leading-relaxed">
+            Your business verification is being processed by our compliance team. We've received your documents safely.
+          </p>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl mx-auto">
+          <div className="bg-cream-soft border border-hair-soft rounded-3xl p-6 text-left space-y-2 hover:border-forest/20 transition-colors">
+            <div className="w-10 h-10 bg-forest/10 rounded-full flex items-center justify-center text-forest-deep mb-2">
+              <Search size={20} />
+            </div>
+            <p className="text-[15px] font-semibold text-ink">1-3 Day Review</p>
+            <p className="text-[13px] text-ink-muted leading-snug">Our team manually verifies all documents to ensure platform security.</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-3xl p-6 text-left space-y-2 hover:border-forest/20 transition-colors">
+            <div className="w-10 h-10 bg-forest/10 rounded-full flex items-center justify-center text-forest-deep mb-2">
+              <Bell size={20} />
+            </div>
+            <p className="text-[15px] font-semibold text-ink">Email Update</p>
+            <p className="text-[13px] text-ink-muted leading-snug">We&apos;ll send you a confirmation email as soon as your account is approved.</p>
+          </div>
+        </div>
+
+        <div className="pt-4">
+          <button 
+            onClick={() => router.push('/settings')}
+            className="inline-flex items-center gap-2 bg-ink text-white px-10 py-4 rounded-full text-[15px] font-semibold hover:bg-forest-deep transition-all shadow-leaf"
+          >
+            Return to Dashboard
+            <ArrowRight size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (verificationStatus === 'verified') {
+    return (
+      <div className="max-w-2xl mx-auto py-24 text-center space-y-10 fade-up">
+        <div className="w-24 h-24 bg-forest/10 rounded-full flex items-center justify-center mx-auto text-forest ring-8 ring-forest/5">
+          <Check size={48} strokeWidth={3} />
+        </div>
+        <div className="space-y-4">
+          <h2 className="font-display text-[48px] font-semibold text-ink tracking-tight leading-tight">Merchant Verified</h2>
+          <p className="text-ink-muted text-[17px] max-w-lg mx-auto leading-relaxed">
+            Your business has been fully verified. Your account is active and you can now accept live payments with higher limits.
+          </p>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl mx-auto pt-4">
+          <div className="bg-forest/5 border border-forest/10 rounded-3xl p-6 text-left space-y-1">
+             <p className="text-[14px] font-semibold text-forest-deep">Compliance Status</p>
+             <p className="text-[12px] text-forest/70 uppercase font-bold tracking-widest">Active & Verified</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-3xl p-6 text-left space-y-1">
+             <p className="text-[14px] font-semibold text-ink">Next Renewal</p>
+             <p className="text-[12px] text-ink-muted uppercase font-bold tracking-widest">April 2027</p>
+          </div>
+        </div>
+
+        <div className="pt-8">
+          <button 
+            onClick={() => router.push('/settings')}
+            className="inline-flex items-center gap-2 bg-ink text-white px-10 py-4 rounded-full text-[15px] font-semibold hover:bg-forest-deep transition-all shadow-leaf"
+          >
+            Go to Settings
+            <ArrowRight size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (verificationStatus === 'pending') {
+    return (
+      <div className="max-w-2xl mx-auto py-24 text-center space-y-10 fade-up">
+        <div className="w-20 h-20 bg-cream-deep rounded-full flex items-center justify-center mx-auto text-ink-muted ring-8 ring-cream-soft">
+          <Search size={36} />
+        </div>
+        <div className="space-y-4">
+          <h2 className="font-display text-[42px] font-semibold text-ink tracking-tight leading-tight">Review in Progress</h2>
+          <p className="text-ink-muted text-[17px] max-w-lg mx-auto leading-relaxed">
+            We are currently reviewing your business details. This typically takes <strong>1-3 business days</strong>. We will notify you via email as soon as the review is complete.
+          </p>
+        </div>
+
+        <div className="rule-dotted max-w-xs mx-auto" />
+        
+        <div className="inline-flex items-center gap-3 bg-white border border-hair-soft px-5 py-3 rounded-2xl shadow-sm">
+          <div className="w-2 h-2 rounded-full bg-tan animate-pulse" />
+          <span className="text-[13px] font-semibold text-ink-soft uppercase tracking-widest">
+            Current Status: <span className="text-tan-deep underline decoration-2 underline-offset-4">{verificationStatus}</span>
+          </span>
+        </div>
+
+        <div className="pt-8">
+          <button 
+            onClick={() => router.push('/settings')}
+            className="text-[14px] font-semibold text-forest-deep hover:text-forest flex items-center justify-center gap-2 mx-auto transition-colors"
+          >
+            ← Back to settings
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 pb-10">
@@ -263,20 +438,41 @@ export default function KybPage() {
             </div>
             <div className="rule-dotted" />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="p-6 border-2 border-dashed border-hair rounded-[24px] hover:border-forest/40 transition-colors cursor-pointer bg-cream-deep/20 text-center">
-                <div className="w-12 h-12 rounded-full bg-forest/10 flex items-center justify-center mx-auto mb-4 text-forest-deep"><Upload size={20} /></div>
+              <label className={`block p-6 border-2 border-dashed rounded-[24px] transition-all cursor-pointer text-center ${certificateFile || formData.documentUrls?.some(d => d.type === 'business_certificate') ? 'border-forest bg-forest/5' : 'border-hair bg-cream-deep/20 hover:border-forest/40'}`}>
+                <input 
+                  type="file" 
+                  className="hidden" 
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setCertificateFile(e.target.files?.[0] || null)}
+                />
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${(certificateFile || formData.documentUrls?.some(d => d.type === 'business_certificate')) ? 'bg-forest text-white' : 'bg-forest/10 text-forest-deep'}`}>
+                  {(certificateFile || formData.documentUrls?.some(d => d.type === 'business_certificate')) ? <Check size={20} /> : <Upload size={20} />}
+                </div>
                 <h4 className="font-semibold text-ink text-[16px]">Business Certificate</h4>
-                <p className="text-ink-muted text-[12px] mt-1">Incorporation or Registration papers (PDF, JPG)</p>
-              </div>
-              <div className="p-6 border-2 border-dashed border-hair rounded-[24px] hover:border-forest/40 transition-colors cursor-pointer bg-cream-deep/20 text-center">
-                <div className="w-12 h-12 rounded-full bg-forest/10 flex items-center justify-center mx-auto mb-4 text-forest-deep"><User size={20} /></div>
+                <p className="text-ink-muted text-[12px] mt-1">
+                  {certificateFile ? certificateFile.name : formData.documentUrls?.find(d => d.type === 'business_certificate') ? 'Document attached' : 'Incorporation or Registration papers (PDF, JPG)'}
+                </p>
+              </label>
+
+              <label className={`block p-6 border-2 border-dashed rounded-[24px] transition-all cursor-pointer text-center ${identityFile || formData.documentUrls?.some(d => d.type === 'identity_document') ? 'border-forest bg-forest/5' : 'border-hair bg-cream-deep/20 hover:border-forest/40'}`}>
+                <input 
+                  type="file" 
+                  className="hidden" 
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setIdentityFile(e.target.files?.[0] || null)}
+                />
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${(identityFile || formData.documentUrls?.some(d => d.type === 'identity_document')) ? 'bg-forest text-white' : 'bg-forest/10 text-forest-deep'}`}>
+                  {(identityFile || formData.documentUrls?.some(d => d.type === 'identity_document')) ? <Check size={20} /> : <User size={20} />}
+                </div>
                 <h4 className="font-semibold text-ink text-[16px]">Identity Document</h4>
-                <p className="text-ink-muted text-[12px] mt-1">Passport or Government Issued ID</p>
-              </div>
+                <p className="text-ink-muted text-[12px] mt-1">
+                  {identityFile ? identityFile.name : formData.documentUrls?.find(d => d.type === 'identity_document') ? 'Document attached' : 'Passport or Government Issued ID'}
+                </p>
+              </label>
             </div>
             <div className="bg-tan-soft/30 rounded-2xl p-4 flex gap-3 border border-tan-mist/50">
               <Info size={16} className="text-tan-deep mt-0.5 shrink-0" />
-              <p className="text-[12.5px] text-tan-deep leading-relaxed">Please ensure all edges of the documents are visible and the text is clearly legible. Verification usually take 2-3 business days.</p>
+              <p className="text-[12.5px] text-tan-deep leading-relaxed">Please ensure all edges of the documents are visible and the text is clearly legible. Files are uploaded securely only when you click submit.</p>
             </div>
           </div>
         )}
@@ -294,6 +490,10 @@ export default function KybPage() {
                 <span className="text-ink-muted">Business</span><span className="font-medium text-ink">{formData.legalName}</span>
                 <span className="text-ink-muted">Type</span><span className="font-medium text-ink">{formData.entityType}</span>
                 <span className="text-ink-muted">Address</span><span className="font-medium text-ink">{formData.businessAddress}, {formData.city}, {formData.state}</span>
+                <span className="text-ink-muted">Documents</span><span className="font-medium text-ink">
+                  {((certificateFile || formData.documentUrls?.some(d => d.type === 'business_certificate')) ? 1 : 0) + 
+                   ((identityFile || formData.documentUrls?.some(d => d.type === 'identity_document')) ? 1 : 0)} files attached
+                </span>
               </div>
             </div>
           </div>
@@ -322,8 +522,8 @@ export default function KybPage() {
               disabled={submitting}
               className="inline-flex items-center gap-2 px-7 py-3 rounded-full bg-forest text-cream-soft text-[14px] font-semibold hover:bg-forest-deep transition-all shadow-leaf disabled:opacity-60"
             >
-              {submitting ? 'Submitting...' : currentIdx === STEPS.length - 1 ? 'Submit Application' : 'Continue'}
-              {!submitting && <ArrowRight size={14} strokeWidth={2.2} />}
+              {uploading ? 'Uploading Docs...' : submitting ? 'Submitting...' : currentIdx === STEPS.length - 1 ? 'Submit Application' : 'Continue'}
+              {!submitting && !uploading && <ArrowRight size={14} strokeWidth={2.2} />}
             </button>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
+import { sendMerchantKYBApprovalEmail, sendMerchantKYBRejectionEmail } from '../services/email.service';
 
 const router = Router();
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
@@ -9,12 +10,12 @@ if (!ADMIN_SECRET) {
 }
 
 /**
- * POST /api/v1/admin/verify
- * The "Magic Link" action endpoint. Changed to POST to prevent CSRF.
+ * GET /api/v1/admin/verify
+ * The "Magic Link" action endpoint.
  */
-router.post('/verify', async (req, res) => {
+router.get('/verify', async (req, res) => {
   if (!ADMIN_SECRET) return res.status(500).send('Admin service unavailable.');
-  const { id, action, token } = req.body as { id: string; action: string; token: string };
+  const { id, action, token } = req.query as { id: string; action: string; token: string };
 
   if (!id || !action || !token) {
     return res.status(400).send('Invalid request: missing parameters.');
@@ -51,6 +52,11 @@ router.post('/verify', async (req, res) => {
           data: { kycLevel: 'verified' }
         })
       ]);
+
+      // 4. Notify the merchant
+      sendMerchantKYBApprovalEmail(verification.merchantId).catch(err => {
+        console.error('[admin-verify] failed to notify merchant:', err.message);
+      });
       
       return res.send(`
         <div style="font-family: sans-serif; text-align: center; padding: 50px;">
@@ -61,21 +67,24 @@ router.post('/verify', async (req, res) => {
     }
 
     if (action === 'reject') {
-      await prisma.$transaction([
-        prisma.businessVerification.update({
-          where: { id },
-          data: { status: 'rejected', updatedAt: new Date() }
-        }),
-        prisma.merchant.update({
-          where: { id: verification.merchantId },
-          data: { kycLevel: 'none' }
-        })
-      ]);
-
       return res.send(`
-        <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-          <h1 style="color: #d94e4e;">❌ Merchant Rejected</h1>
-          <p>${verification.merchant.name} status reset to none.</p>
+        <div style="font-family: sans-serif; max-width: 500px; margin: 40px auto; padding: 32px; border: 1px solid #E8EAE6; border-radius: 24px; text-align: center;">
+          <h1 style="color: #d94e4e; font-size: 24px;">Reject KYB Application</h1>
+          <p style="color: #6B7572; margin-bottom: 24px;">Please provide a reason. This will be sent to <strong>${verification.merchant.email}</strong>.</p>
+          <form action="/api/v1/admin/verify" method="POST">
+            <input type="hidden" name="id" value="${id}" />
+            <input type="hidden" name="action" value="reject" />
+            <input type="hidden" name="token" value="${token}" />
+            <textarea 
+              name="reason" 
+              placeholder="e.g. Identity document is expired or blurry." 
+              required 
+              style="width: 100%; height: 120px; padding: 12px; border-radius: 12px; border: 1px solid #E8EAE6; font-family: inherit; margin-bottom: 16px;"
+            ></textarea>
+            <button type="submit" style="background: #A8321E; color: white; border: none; padding: 12px 24px; border-radius: 99px; font-weight: 600; cursor: pointer;">
+              Confirm Rejection
+            </button>
+          </form>
         </div>
       `);
     }
@@ -84,6 +93,51 @@ router.post('/verify', async (req, res) => {
   } catch (err: any) {
     console.error('[admin-verify] error:', err.message);
     res.status(401).send('Unauthorized: link expired or invalid.');
+  }
+});
+
+/**
+ * POST /api/v1/admin/verify
+ * Handles the submission of the rejection form.
+ */
+router.post('/verify', async (req, res) => {
+  if (!ADMIN_SECRET) return res.status(500).send('Admin service unavailable.');
+  const { id, action, token, reason } = req.body as { id: string; action: string; token: string; reason: string };
+
+  if (action !== 'reject') return res.status(400).send('Invalid action.');
+
+  try {
+    const decoded = jwt.verify(token, ADMIN_SECRET) as { sub: string; action: string };
+    if (decoded.sub !== id || decoded.action !== action) {
+      return res.status(403).send('Security violation: token mismatch.');
+    }
+
+    const v = await prisma.businessVerification.findUnique({ where: { id } });
+    if (!v) return res.status(404).send('Not found.');
+
+    await prisma.$transaction([
+      prisma.businessVerification.update({
+        where: { id },
+        data: { status: 'rejected', rejectionReason: reason, updatedAt: new Date() }
+      }),
+      prisma.merchant.update({
+        where: { id: v.merchantId },
+        data: { kycLevel: 'none' }
+      })
+    ]);
+
+    sendMerchantKYBRejectionEmail(v.merchantId, reason).catch(err => {
+      console.error('[admin-verify] failed to notify merchant of rejection:', err.message);
+    });
+
+    res.send(`
+      <div style="font-family: sans-serif; text-align: center; padding: 50px;">
+        <h1 style="color: #A8321E;">❌ Merchant Rejected Successfully</h1>
+        <p>Mail sent to merchant explaining: <em>"${reason}"</em></p>
+      </div>
+    `);
+  } catch (err: any) {
+    res.status(401).send('Unauthorized.');
   }
 });
 

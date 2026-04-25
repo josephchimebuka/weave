@@ -12,6 +12,7 @@ import {
   UserCircle2,
   ShieldCheck,
 } from 'lucide-react';
+import Link from 'next/link';
 
 type FAQCategory = {
   title: string;
@@ -21,48 +22,56 @@ type FAQCategory = {
 
 const FAQ: FAQCategory[] = [
   {
-    title: 'Payments',
+    title: 'Payouts & Settlement',
     icon: Wallet,
     items: [
       {
-        q: 'When do I receive my payouts?',
-        a: 'Settled funds arrive within 2 business days for fiat corridors and within minutes for crypto destinations. Check your Settings page for your active payout destination.',
+        q: 'How long do payouts take?',
+        a: 'Settlement times depend on your destination. We provide near-instant settlement across most corridors. Fiat bank transfers typically arrive within 30 seconds to 2 minutes, while crypto-native settlements (USDC/USDT) are virtually instant.',
       },
       {
-        q: 'How do I refund a transaction?',
-        a: 'Open the transaction from the Transactions page and click Issue Refund. Refunds are returned to the original payment method within 5–10 business days.',
+        q: 'Where are my funds settled?',
+        a: 'Funds are settled to the payout destination you configured in your Settings page. You can choose between a local bank account or a stablecoin wallet (USDC/USDT) across several supported chains.',
       },
       {
-        q: 'Which currencies and chains are supported?',
-        a: 'We support USD, NGN, and most G20 fiat currencies, plus USDC/USDT across Base, Ethereum, Polygon, Arbitrum, and NEAR Intents for other chains.',
+        q: 'Is there a minimum payout amount?',
+        a: 'Yes. For Naira (NGN) bank transfers, the minimum is ₦1,000. For cryptocurrency settlements, the minimum is 0.5 USDC (or equivalent) plus the network gas fee.',
       },
     ],
   },
   {
-    title: 'Account',
-    icon: UserCircle2,
-    items: [
-      {
-        q: 'How do I update my banking information?',
-        a: 'Go to Settings → Payout destination. Changes take effect after a 24-hour cooldown to protect against unauthorized changes.',
-      },
-      {
-        q: 'How do I invite a team member?',
-        a: 'Settings → Team. Invited members receive an email link to join with the role you assign.',
-      },
-    ],
-  },
-  {
-    title: 'Compliance',
+    title: 'Verification (KYB)',
     icon: ShieldCheck,
     items: [
       {
-        q: 'Why do I need to complete KYB?',
-        a: 'Know Your Business verification is required by payment regulations and partner banks before we can release merchant payouts.',
+        q: 'Why do I need to verify my business?',
+        a: 'Know Your Business (KYB) verification is a regulatory requirement that allows us to ensure platform security and comply with global anti-money laundering (AML) laws. It is required to move live funds.',
       },
       {
-        q: 'How long does KYB review take?',
-        a: 'Typical reviews complete in 1–3 business days once all documents are submitted.',
+        q: 'What documents are required for KYB?',
+        a: 'Generally, you need your Certificate of Incorporation, Proof of Address, and a government-issued ID for the primary director or business owner.',
+      },
+      {
+        q: 'How long does the review take?',
+        a: 'Our compliance team typically reviews applications within 1-3 business days. You will receive an automated email as soon as your account is approved or if we need more information.',
+      },
+    ],
+  },
+  {
+    title: 'Integration & API',
+    icon: Code2,
+    items: [
+      {
+        q: 'Where can I find my API keys?',
+        a: 'API keys are located in Settings → API Keys. You have both Public keys for front-end widgets and Secret keys for backend integrations. Never share your Secret key.',
+      },
+      {
+        q: 'How do I test before going live?',
+        a: 'Toggle the "Test Mode" switch in your dashboard. This allows you to generate test transactions and ensure your integration is working correctly without moving real funds.',
+      },
+      {
+        q: 'Do you provide a hosted checkout page?',
+        a: 'Yes! Our Payment Links feature allows you to generate a secure, Weave-hosted checkout page in seconds without writing any code.',
       },
     ],
   },
@@ -74,82 +83,58 @@ export default function SupportPage() {
   return (
     <div className="space-y-10">
       {/* Top utility bar */}
-      <div className="flex items-center justify-between gap-4 fade-up">
-        <div className="relative flex-1 max-w-md">
-          <Search size={15} strokeWidth={1.9} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-muted" />
-          <input
-            type="text"
-            placeholder="Search..."
-            className="w-full pl-10 pr-4 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 transition-colors shadow-leaf"
-          />
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            aria-label="Notifications"
-            className="w-11 h-11 rounded-full hover:bg-cream-deep/60 text-forest-deep flex items-center justify-center transition-colors"
-          >
-            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-            </svg>
-          </button>
-          <button
-            aria-label="Help"
-            className="w-11 h-11 rounded-full hover:bg-cream-deep/60 text-forest-deep flex items-center justify-center transition-colors"
-          >
-            <HelpCircle size={19} strokeWidth={1.75} />
-          </button>
-          <div className="w-11 h-11 rounded-full bg-forest-surface border-2 border-forest/20 text-forest-deep font-display font-semibold flex items-center justify-center text-sm">
-            S
-          </div>
+      <div className="flex items-center justify-end gap-3 fade-up">
+        <button
+          aria-label="Notifications"
+          className="w-11 h-11 rounded-full hover:bg-cream-deep/60 text-forest-deep flex items-center justify-center transition-colors"
+        >
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+          </svg>
+        </button>
+        <button
+          aria-label="Help"
+          className="w-11 h-11 rounded-full hover:bg-cream-deep/60 text-forest-deep flex items-center justify-center transition-colors"
+        >
+          <HelpCircle size={19} strokeWidth={1.75} />
+        </button>
+        <div className="w-11 h-11 rounded-full bg-forest-surface border-2 border-forest/20 text-forest-deep font-display font-semibold flex items-center justify-center text-sm">
+          S
         </div>
       </div>
 
       {/* Hero */}
-      <section className="text-center py-8 fade-up" style={{ animationDelay: '80ms' }}>
+      <section className="text-center py-12 md:py-20 fade-up" style={{ animationDelay: '80ms' }}>
         <h1 className="font-display font-display-tight text-[48px] md:text-[64px] lg:text-[72px] font-semibold text-ink leading-[1.05] tracking-tight max-w-4xl mx-auto">
-          How can we help you today?
+          How can we help?
         </h1>
-        <p className="text-ink-muted text-[16px] mt-5 max-w-xl mx-auto">
-          Search our knowledge base or browse categories below to find the answers you need.
+        <p className="text-ink-muted text-[17px] mt-6 max-w-xl mx-auto leading-relaxed">
+          Need assistance with your account or integration? Browse our most common questions below or message our support team directly.
         </p>
-
-        {/* Ask a question */}
-        <div className="mt-10 max-w-2xl mx-auto relative">
-          <div className="relative flex items-center gap-2 bg-cream-soft border border-hair rounded-full pl-6 pr-2 py-2 shadow-leaf-lg">
-            <Search size={18} strokeWidth={1.9} className="text-forest-deep shrink-0" />
-            <input
-              type="text"
-              placeholder="Ask a question..."
-              className="flex-1 bg-transparent py-3 text-[15px] text-ink placeholder:text-ink-faint focus:outline-none"
-            />
-            <button className="bg-forest text-cream-soft px-7 py-3 rounded-full text-[14px] font-semibold hover:bg-forest-deep transition-colors shrink-0">
-              Search
-            </button>
-          </div>
-        </div>
       </section>
 
       {/* Category tiles */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-5 fade-up" style={{ animationDelay: '140ms' }}>
-        <CategoryTile
-          icon={BookOpen}
-          iconTone="bg-forest-surface text-forest-deep"
-          title="Knowledge Base"
-          description="Detailed guides and tutorials"
-        />
-        <CategoryTile
-          icon={MessagesSquare}
-          iconTone="bg-tan-mist text-tan-deep"
-          title="Community Forum"
-          description="Connect with other merchants"
-        />
-        <CategoryTile
-          icon={Code2}
-          iconTone="bg-cream-deep text-ink-soft"
-          title="API Documentation"
-          description="Technical resources for devs"
-        />
+      {/* Legal Links Bar */}
+      <section className="bg-cream-soft border border-hair-soft rounded-3xl p-6 flex flex-wrap items-center justify-between gap-6 fade-up" style={{ animationDelay: '140ms' }}>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-forest/10 rounded-full flex items-center justify-center text-forest-deep">
+            <ShieldCheck size={20} />
+          </div>
+          <div>
+            <p className="text-[14px] font-semibold text-ink">Trust & Compliance</p>
+            <p className="text-[11px] text-ink-muted">Read our legal agreements and policies</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <Link href="/terms" className="text-[13px] font-semibold text-forest-deep hover:text-forest transition-colors">
+            Terms of Use
+          </Link>
+          <div className="w-1 h-1 rounded-full bg-hair" />
+          <Link href="/privacy" className="text-[13px] font-semibold text-forest-deep hover:text-forest transition-colors">
+            Privacy Policy
+          </Link>
+        </div>
       </section>
 
       {/* FAQ + Contact */}
@@ -185,11 +170,10 @@ export default function SupportPage() {
                       return (
                         <div
                           key={key}
-                          className={`rounded-2xl border transition-all ${
-                            isOpen
+                          className={`rounded-2xl border transition-all ${isOpen
                               ? 'bg-cream-soft border-hair shadow-leaf'
                               : 'bg-cream-soft/60 border-hair-soft hover:border-hair'
-                          }`}
+                            }`}
                         >
                           <button
                             onClick={() => setOpenFaq(isOpen ? null : key)}
@@ -229,69 +213,140 @@ export default function SupportPage() {
             Send us a message and our support team will get back to you within 24 hours.
           </p>
 
-          <form className="mt-6 space-y-5">
-            <div>
-              <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
-                Full Name
-              </label>
-              <input
-                type="text"
-                placeholder="Jane Doe"
-                className="mt-2 w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
-                Email Address
-              </label>
-              <input
-                type="email"
-                placeholder="jane@example.com"
-                className="mt-2 w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
-                Topic
-              </label>
-              <div className="relative mt-2">
-                <select
-                  defaultValue="payments"
-                  className="w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors appearance-none cursor-pointer pr-10"
-                >
-                  <option value="payments">Payments &amp; Payouts</option>
-                  <option value="account">Account</option>
-                  <option value="compliance">Compliance &amp; KYB</option>
-                  <option value="api">API &amp; Integration</option>
-                  <option value="other">Other</option>
-                </select>
-                <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-muted text-[11px]">▾</span>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
-                Message
-              </label>
-              <textarea
-                rows={4}
-                placeholder="Tell us what's going on…"
-                className="mt-2 w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors resize-none"
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full bg-forest text-cream-soft py-3.5 rounded-full text-[14px] font-semibold hover:bg-forest-deep transition-colors shadow-leaf"
-            >
-              Send Message
-            </button>
-          </form>
+          <SupportForm />
         </aside>
       </section>
     </div>
+  );
+}
+
+function SupportForm() {
+  const [formData, setFormData] = useState({ name: '', email: '', topic: 'payments', message: '' });
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setSuccess(false);
+    setError(null);
+
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api/v1';
+      const res = await fetch(`${apiBase}/support/contact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      });
+
+      if (!res.ok) throw new Error('Failed to send message. Please try again.');
+      
+      setSuccess(true);
+      setFormData({ name: '', email: '', topic: 'payments', message: '' });
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (success) {
+    return (
+      <div className="mt-8 bg-forest/5 border border-forest/20 rounded-2xl p-6 text-center space-y-3 fade-up">
+        <div className="w-12 h-12 bg-forest rounded-full flex items-center justify-center mx-auto text-white">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </div>
+        <p className="font-semibold text-forest-deep text-[15px]">Message Sent Successfully</p>
+        <p className="text-[13px] text-forest/70">Our team will get back to you within 24 hours via email.</p>
+        <button 
+          onClick={() => setSuccess(false)}
+          className="text-[13px] font-semibold text-forest-deep underline underline-offset-4 pt-2"
+        >
+          Send another message
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
+      {error && (
+        <div className="bg-terracotta/5 border border-terracotta/20 rounded-xl p-3 text-[13px] text-terracotta-deep font-medium">
+          {error}
+        </div>
+      )}
+      
+      <div>
+        <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
+          Full Name
+        </label>
+        <input
+          type="text"
+          required
+          value={formData.name}
+          onChange={e => setFormData(p => ({ ...p, name: e.target.value }))}
+          placeholder="Jane Doe"
+          className="mt-2 w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors"
+        />
+      </div>
+
+      <div>
+        <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
+          Email Address
+        </label>
+        <input
+          type="email"
+          required
+          value={formData.email}
+          onChange={e => setFormData(p => ({ ...p, email: e.target.value }))}
+          placeholder="jane@example.com"
+          className="mt-2 w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors"
+        />
+      </div>
+
+      <div>
+        <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
+          Topic
+        </label>
+        <div className="relative mt-2">
+          <select
+            value={formData.topic}
+            onChange={e => setFormData(p => ({ ...p, topic: e.target.value }))}
+            className="w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors appearance-none cursor-pointer pr-10"
+          >
+            <option value="payments">Payments &amp; Payouts</option>
+            <option value="account">Account Settings</option>
+            <option value="compliance">Compliance &amp; KYB</option>
+            <option value="api">API &amp; Integration</option>
+            <option value="other">Other</option>
+          </select>
+          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-muted text-[11px]">▾</span>
+        </div>
+      </div>
+
+      <div>
+        <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
+          Message
+        </label>
+        <textarea
+          rows={4}
+          required
+          value={formData.message}
+          onChange={e => setFormData(p => ({ ...p, message: e.target.value }))}
+          placeholder="Tell us what's going on…"
+          className="mt-2 w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors resize-none"
+        />
+      </div>
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full bg-forest text-cream-soft py-3.5 rounded-full text-[14px] font-semibold hover:bg-forest-deep transition-all shadow-leaf disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {loading ? 'Sending Message...' : 'Send Message'}
+      </button>
+    </form>
   );
 }
 

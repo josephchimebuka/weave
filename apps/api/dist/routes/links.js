@@ -23,9 +23,9 @@ router.get('/', auth_1.requireSession, async (req, res) => {
 // Creates a new payment link.
 router.post('/', auth_1.requireSession, rate_limit_1.linkCreationLimiter, async (req, res) => {
     try {
-        const { title, description, amount, currency } = req.body;
-        if (!title || !currency) {
-            return res.status(400).json({ success: false, error: 'Title and currency are required' });
+        const { title, description, amount, asset } = req.body;
+        if (!title || !asset || amount === undefined || amount === null) {
+            return res.status(400).json({ success: false, error: 'Title, asset, and amount are required' });
         }
         const merchant = await prisma_1.prisma.merchant.findUnique({ where: { id: req.merchantId } });
         if (!merchant)
@@ -35,8 +35,8 @@ router.post('/', auth_1.requireSession, rate_limit_1.linkCreationLimiter, async 
                 merchantId: merchant.id,
                 title,
                 description,
-                amount: amount || null,
-                currency,
+                amount: parseFloat(String(amount)),
+                asset,
                 isActive: true,
             },
         });
@@ -68,7 +68,7 @@ router.get('/public/:slug', rate_limit_1.apiLimiter, async (req, res) => {
                 title: link.title,
                 description: link.description,
                 amount: link.amount,
-                currency: link.currency,
+                asset: link.asset,
                 merchantName: link.merchant.name,
                 publishableKey: link.merchant.publishableKey,
             },
@@ -82,7 +82,7 @@ router.get('/public/:slug', rate_limit_1.apiLimiter, async (req, res) => {
 // Updates an existing payment link.
 router.patch('/:id', auth_1.requireSession, async (req, res) => {
     try {
-        const { title, description, amount, currency, isActive } = req.body;
+        const { title, description, amount, asset, isActive } = req.body;
         // Safety check: ensure the link belongs to the merchant
         const existing = await prisma_1.prisma.paymentLink.findFirst({
             where: { id: req.params.id, merchantId: req.merchantId }
@@ -94,8 +94,8 @@ router.patch('/:id', auth_1.requireSession, async (req, res) => {
             data: {
                 title: title ?? undefined,
                 description: description ?? undefined,
-                amount: amount !== undefined ? (amount ? parseFloat(amount) : null) : undefined,
-                currency: currency ?? undefined,
+                amount: amount !== undefined ? parseFloat(String(amount)) : undefined,
+                asset: asset ?? undefined,
                 isActive: isActive !== undefined ? isActive : undefined,
             },
         });

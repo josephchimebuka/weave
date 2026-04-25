@@ -74,8 +74,8 @@ async function pollOne(step) {
         await (0, executor_service_1.markStepDone)({ provider: 'nearintents', externalId: step.depositAddress, amountOut });
         console.log(`[nearpoll] ${step.depositAddress} → SUCCESS`);
     }
-    else if (outcome === 'failed') {
-        await (0, executor_service_1.markStepFailed)({ provider: 'nearintents', externalId: step.depositAddress });
+    else if (outcome === 'failed' || outcome === 'refunded') {
+        await (0, executor_service_1.markStepFailed)({ provider: 'nearintents', externalId: step.depositAddress, isRefund: outcome === 'refunded' });
         console.log(`[nearpoll] ${step.depositAddress} → ${status.status}`);
     }
     else if (step.status === 'awaiting_deposit' && status.status === 'KNOWN_DEPOSIT_TX') {

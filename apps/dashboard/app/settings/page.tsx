@@ -6,8 +6,9 @@ import Link from 'next/link';
 import {
   KeyRound, Copy, Eye, EyeOff, Webhook, Plus, Palette,
   FileText, ShoppingBag, Pencil, Check, User, Mail, Building2, Save,
-  Wallet, Landmark
+  Wallet, Landmark, AlertTriangle, X, Trash2
 } from 'lucide-react';
+import { createPortal } from 'react-dom';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ThemePreset = 'organic' | 'minimal';
@@ -77,6 +78,11 @@ function SettingsContent() {
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved]   = useState(false);
 
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteReason, setDeleteReason]           = useState('');
+  const [deletingAccount, setDeletingAccount]     = useState(false);
+  const [deleteSuccess, setDeleteSuccess]         = useState(false);
+
   // Payouts tab state
   const [payoutsLoading, setPayoutsLoading] = useState(true);
   const [payoutKind, setPayoutKind] = useState<'bank_account'|'crypto_wallet'>('bank_account');
@@ -89,6 +95,14 @@ function SettingsContent() {
   const [savingPayout, setSavingPayout] = useState(false);
   const [payoutSaved, setPayoutSaved] = useState(false);
   const [banks, setBanks] = useState<{name: string; code: string}[]>([]);
+
+  const SETTLEMENT_ASSETS = [
+    { key: 'crypto:BASE:USDC', label: 'USDC (Base)', active: true },
+    { key: 'crypto:SOLANA:USDT', label: 'USDT (Solana)', active: false },
+    { key: 'crypto:ETHEREUM:USDT', label: 'USDT (Ethereum)', active: false },
+    { key: 'crypto:POLYGON:USDC', label: 'USDC (Polygon)', active: false },
+  ];
+
 
   // Sync tab from URL if it changes externally
   useEffect(() => {
@@ -199,6 +213,21 @@ function SettingsContent() {
       }
     } catch {}
     finally { setSavingPayout(false); }
+  }
+
+  async function submitDeletionRequest() {
+    setDeletingAccount(true);
+    try {
+      const res = await fetch('/api/merchant/request-deletion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: deleteReason }),
+      });
+      if (res.ok) {
+        setDeleteSuccess(true);
+      }
+    } catch {}
+    finally { setDeletingAccount(false); }
   }
 
   const accentHex = ACCENT_OPTIONS.find((o) => o.key === accent)!.hex;
@@ -400,6 +429,25 @@ export default function CheckoutPage() {
               />
             </div>
           </Card>
+
+          {/* Danger Zone */}
+          <Card delay={160} className="border-red-500/20 bg-red-50/50">
+            <div className="flex items-center gap-3 mb-4 text-red-600">
+              <AlertTriangle size={18} strokeWidth={1.9} />
+              <h2 className="font-display text-[22px] font-semibold">Danger Zone</h2>
+            </div>
+            
+            <p className="text-[14px] text-red-950/70 mb-6 leading-relaxed">
+              Permanently close your Weave account. This will invalidate all API keys, cancel pending Webhooks, and remove your access. Financial audit logs will be retained to comply with AML laws.
+            </p>
+
+            <button
+              onClick={() => setIsDeleteModalOpen(true)}
+              className="px-5 py-2.5 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 hover:border-red-300 rounded-full text-[14px] font-semibold transition-all shadow-sm"
+            >
+              Request Account Deletion
+            </button>
+          </Card>
         </div>
       )}
 
@@ -495,7 +543,30 @@ export default function CheckoutPage() {
                    </div>
                 ) : (
                    <div className="space-y-4 fade-up">
-                     <p className="text-[12px] text-ink-muted mb-2">We will settle via NEAR Intents bridging exactly to this target address bypassing the fiat rail. Note: we default to Base EVM USDC settlement right now.</p>
+                      <p className="text-[12px] text-ink-muted mb-2">We will settle exactly to this target address bypassing the fiat rail.</p>
+                      
+                      <div>
+                        <label className="block text-[12px] font-medium text-ink-soft mb-1.5">Settlement Asset</label>
+                        <div className="grid grid-cols-2 gap-2 mb-4">
+                          {SETTLEMENT_ASSETS.map((asset) => (
+                            <button
+                              key={asset.key}
+                              type="button"
+                              disabled={!asset.active}
+                              onClick={() => setPayoutAssetKey(asset.key)}
+                              title={!asset.active ? 'Coming Soon' : ''}
+                              className={`px-3 py-2.5 rounded-xl border text-[13px] font-medium transition-all text-left flex items-center justify-between group relative ${
+                                payoutAssetKey === asset.key 
+                                  ? 'border-forest bg-forest/5 text-forest-deep' 
+                                  : 'border-hair-soft bg-cream-deep/30 text-ink-muted' + (asset.active ? ' hover:border-hair hover:text-ink-soft' : ' opacity-50 cursor-not-allowed')
+                              }`}
+                            >
+                              {asset.label}
+                              {!asset.active && <span className="text-[9px] uppercase tracking-tighter bg-hair px-1.5 py-0.5 rounded text-ink-muted group-hover:bg-ink group-hover:text-cream-soft transition-colors">Soon</span>}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                      <div>
                        <label className="block text-[12px] font-medium text-ink-soft mb-1.5">USDC Wallet Address</label>
                        <input 
@@ -759,10 +830,95 @@ export default function CheckoutPage() {
           </div>
         </div>
       )}
+
+      {/* Account Deletion Modal (Portal) */}
+      {isDeleteModalOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-ink/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div 
+            className="bg-cream-soft border border-hair-soft rounded-[24px] w-full max-w-md shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-hair-soft bg-white/50 shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3 text-red-600">
+                  <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                    <Trash2 size={20} strokeWidth={2} />
+                  </div>
+                  <h3 className="font-display text-lg font-semibold text-ink">Delete Account</h3>
+                </div>
+                <button 
+                  onClick={() => setIsDeleteModalOpen(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-ink-muted hover:text-ink hover:bg-hair transition-colors"
+                >
+                  <X size={18} strokeWidth={2.5} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {deleteSuccess ? (
+                <div className="text-center py-6">
+                  <div className="w-16 h-16 rounded-full bg-forest/10 border border-forest/20 text-forest mx-auto flex items-center justify-center mb-4">
+                    <Check size={32} strokeWidth={2.5} />
+                  </div>
+                  <h4 className="text-lg font-semibold text-ink mb-2">Request Submitted</h4>
+                  <p className="text-[14px] text-ink-muted leading-relaxed">
+                    Our compliance team has received your request. An account manager will reach out to <strong>{profile?.email}</strong> shortly to process the final settlement and closure.
+                  </p>
+                  <button
+                    onClick={() => { setIsDeleteModalOpen(false); setDeleteSuccess(false); setDeleteReason(''); }}
+                    className="mt-6 w-full py-3 bg-ink text-cream-soft rounded-xl font-semibold text-[14px] hover:bg-ink-deep transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p className="text-[14px] text-ink-muted leading-relaxed mb-6">
+                    Because your account holds potential financial balances and transaction history, our compliance team must verify this request and settle any remaining funds before full closure.
+                  </p>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[12px] font-semibold text-ink-soft mb-2 uppercase tracking-widest">
+                        Why are you leaving? (Optional)
+                      </label>
+                      <textarea 
+                        value={deleteReason}
+                        onChange={(e) => setDeleteReason(e.target.value)}
+                        placeholder="Missing features, pricing, etc."
+                        className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl p-4 text-[14px] text-ink focus:outline-none focus:border-red-400 transition-colors resize-none h-24"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-8 flex gap-3">
+                    <button
+                      onClick={() => setIsDeleteModalOpen(false)}
+                      disabled={deletingAccount}
+                      className="flex-1 py-3 bg-cream-deep/50 text-ink border border-hair hover:border-hair-soft rounded-xl text-[14px] font-semibold transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={submitDeletionRequest}
+                      disabled={deletingAccount}
+                      className="flex-1 py-3 bg-red-600 text-white rounded-xl text-[14px] font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {deletingAccount ? 'Submitting...' : 'Submit Request'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
     </div>
   );
 }
-
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function Card({ children, className = '', delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {

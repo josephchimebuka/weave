@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Link as LinkIcon, ExternalLink, Copy, Check, Info } from 'lucide-react';
+import { Plus, Link as LinkIcon, ExternalLink, Copy, Check, Info, Search, X } from 'lucide-react';
+import { isFiat } from '@weave/shared';
+import { createPortal } from 'react-dom';
 
 export default function LinksPage() {
   const [links, setLinks] = useState<any[]>([]);
@@ -11,14 +13,28 @@ export default function LinksPage() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState('NGN');
+  const [asset, setAsset] = useState('fiat:NGN');
+  const [isAssetPickerOpen, setIsAssetPickerOpen] = useState(false);
+  const [assetSearch, setAssetSearch] = useState('');
   
   const [saving, setSaving] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [supportedAssets, setSupportedAssets] = useState<{ fiat: any[], crypto: any[] }>({ fiat: [], crypto: [] });
 
   useEffect(() => {
     fetchLinks();
+    fetchSupportedAssets();
   }, []);
+
+  async function fetchSupportedAssets() {
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api/v1'}/assets`);
+      const json = await res.json();
+      if (json.success) setSupportedAssets(json.data);
+    } catch (e) {
+      console.error('Failed to fetch supported assets:', e);
+    }
+  }
 
   async function fetchLinks() {
     try {
@@ -40,8 +56,8 @@ export default function LinksPage() {
         body: JSON.stringify({
           title,
           description,
-          amount: amount ? parseFloat(amount) : null,
-          currency
+          amount: parseFloat(amount),
+          asset
         })
       });
       if (res.ok) {
@@ -134,29 +150,49 @@ export default function LinksPage() {
                   value={description} onChange={(e) => setDescription(e.target.value)}
                 />
               </div>
-              <div>
+               <div>
                 <label className="block text-[12px] font-semibold text-ink-soft uppercase tracking-widest mb-2">
-                  Fixed Amount (Leave blank if payer decides)
+                  Amount *
                 </label>
                 <input 
-                  type="number" 
-                  min="0" step="0.01"
+                  type="text" 
+                  required
+                  inputMode="decimal"
                   placeholder="0.00"
                   className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40"
-                  value={amount} onChange={(e) => setAmount(e.target.value)}
+                  value={amount} 
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                      setAmount(val);
+                    }
+                  }}
                 />
+                <p className="mt-1.5 text-[11px] text-ink-muted">
+                  {asset.startsWith('crypto:') 
+                    ? "Enter the exact token amount the customer will send."
+                    : "Enter the fiat amount the customer will pay."}
+                </p>
               </div>
               <div>
                 <label className="block text-[12px] font-semibold text-ink-soft uppercase tracking-widest mb-2">
-                  Currency
+                  Asset
                 </label>
-                <select 
-                  className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 appearance-none"
-                  value={currency} onChange={(e) => setCurrency(e.target.value)}
-                >
-                  <option value="NGN">NGN (Fiat Bank Transfer)</option>
-                  <option value="USDC">USDC (Crypto Base Network)</option>
-                </select>
+                <div className="relative">
+                  <button 
+                    type="button"
+                    onClick={() => setIsAssetPickerOpen(true)}
+                    className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink text-left flex items-center justify-between hover:border-forest/30 transition-all group"
+                  >
+                    <span>
+                      {isFiat(asset) 
+                        ? supportedAssets.fiat.find(f => f.key === asset)?.name || asset
+                        : supportedAssets.crypto.find(c => c.key === asset)?.token + ' (' + (supportedAssets.crypto.find(c => c.key === asset)?.name || asset) + ')'
+                      }
+                    </span>
+                    <svg className="text-ink-muted group-hover:text-forest transition-colors" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -216,7 +252,7 @@ export default function LinksPage() {
                     </td>
                     <td className="py-4 px-4">
                       <p className="text-[14px] text-ink font-medium tabular-nums">
-                        {link.amount ? `${link.amount.toLocaleString()} ${link.currency}` : `Any (${link.currency})`}
+                        {link.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })} {link.asset.split(':').pop()}
                       </p>
                     </td>
                     <td className="py-4 px-4">
@@ -270,6 +306,111 @@ export default function LinksPage() {
         <Info size={16} className="text-forest flex-shrink-0" />
         <p className="text-[13px] text-forest-deep">Payment links bypass server SDK setup and immediately use your Default Payout Destination rules from the Settings panel.</p>
       </div>
+
+      {/* Asset Picker Modal (Portal) */}
+      {isAssetPickerOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-ink/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div 
+            className="bg-cream-soft border border-hair-soft rounded-[24px] w-full max-w-sm shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-hair-soft bg-white/50 shrink-0">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-display text-lg font-semibold text-ink">Select Asset</h3>
+                <button 
+                  onClick={() => setIsAssetPickerOpen(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-ink-muted hover:text-ink hover:bg-hair transition-colors"
+                >
+                  <X size={18} strokeWidth={2.5} />
+                </button>
+              </div>
+              <div className="relative">
+                <input 
+                  autoFocus
+                  type="text" 
+                  placeholder="Search currency or token..."
+                  className="w-full bg-cream-deep/60 border border-hair-soft rounded-xl pl-9 pr-4 py-2.5 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
+                  value={assetSearch}
+                  onChange={(e) => setAssetSearch(e.target.value)}
+                />
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted">
+                  <Search size={16} strokeWidth={2.5} />
+                </div>
+              </div>
+            </div>
+
+            <div className="max-h-[350px] overflow-y-auto p-2 scrollbar-thin">
+              {/* Fiat Section */}
+              {supportedAssets.fiat.filter(f => f.name.toLowerCase().includes(assetSearch.toLowerCase()) || f.key.toLowerCase().includes(assetSearch.toLowerCase())).length > 0 && (
+                <div className="mb-2">
+                  <div className="sticky top-0 z-10 bg-cream-soft/95 backdrop-blur-sm px-4 py-2 text-[10px] font-bold text-ink-muted uppercase tracking-[0.1em]">Fiat Currencies</div>
+                  {supportedAssets.fiat.filter(f => f.name.toLowerCase().includes(assetSearch.toLowerCase()) || f.key.toLowerCase().includes(assetSearch.toLowerCase())).map(f => (
+                    <button
+                      key={f.key}
+                      onClick={() => { setAsset(f.key); setIsAssetPickerOpen(false); setAssetSearch(''); }}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all hover:bg-white group ${asset === f.key ? 'bg-forest/5 border border-forest/10 shadow-sm' : 'border border-transparent'}`}
+                    >
+                      <div className="w-8 h-8 shrink-0 rounded-full bg-cream-deep flex items-center justify-center text-lg shadow-sm border border-hair-soft">
+                        {f.flag}
+                      </div>
+                      <div className="text-left flex-1">
+                        <div className="text-[14px] font-semibold text-ink leading-tight">{f.name}</div>
+                        <div className="text-[11px] text-ink-muted uppercase tracking-wider mt-0.5">{f.symbol} • {f.country}</div>
+                      </div>
+                      {asset === f.key && <div className="text-forest shrink-0"><Check size={16} strokeWidth={3} /></div>}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Crypto Section */}
+              {supportedAssets.crypto.filter(c => c.token.toLowerCase().includes(assetSearch.toLowerCase()) || c.name.toLowerCase().includes(assetSearch.toLowerCase())).length > 0 && (
+                <div>
+                  <div className="sticky top-0 z-10 bg-cream-soft/95 backdrop-blur-sm px-4 py-2 text-[10px] font-bold text-ink-muted uppercase tracking-[0.1em]">Crypto Tokens</div>
+                  {supportedAssets.crypto.filter(c => c.token.toLowerCase().includes(assetSearch.toLowerCase()) || c.name.toLowerCase().includes(assetSearch.toLowerCase())).map(c => (
+                    <button
+                      key={c.key}
+                      onClick={() => { setAsset(c.key); setIsAssetPickerOpen(false); setAssetSearch(''); }}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all hover:bg-white group ${asset === c.key ? 'bg-forest/5 border border-forest/10 shadow-sm' : 'border border-transparent'}`}
+                    >
+                      <div className="w-8 h-8 shrink-0 rounded-full overflow-hidden shadow-sm border border-hair-soft relative bg-cream-deep">
+                        <img 
+                          src={c.logo} 
+                          alt={c.name} 
+                          className="w-full h-full object-cover" 
+                          onError={(e) => { 
+                            e.currentTarget.style.display = 'none'; 
+                            e.currentTarget.nextElementSibling?.classList.remove('hidden'); 
+                          }} 
+                        />
+                        <div className="hidden absolute inset-0 flex items-center justify-center text-[10px] font-bold text-ink-soft uppercase bg-hair">
+                          {c.token.slice(0, 2)}
+                        </div>
+                      </div>
+                      <div className="text-left flex-1">
+                        <div className="text-[14px] font-semibold text-ink group-hover:text-forest transition-colors leading-tight">{c.token}</div>
+                        <div className="text-[11px] text-ink-muted mt-0.5">{c.name}</div>
+                      </div>
+                      {asset === c.key && <div className="text-forest shrink-0"><Check size={16} strokeWidth={3} /></div>}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Empty State */}
+              {supportedAssets.fiat.filter(f => f.name.toLowerCase().includes(assetSearch.toLowerCase())).length === 0 && 
+               supportedAssets.crypto.filter(c => c.token.toLowerCase().includes(assetSearch.toLowerCase()) || c.name.toLowerCase().includes(assetSearch.toLowerCase())).length === 0 && (
+                 <div className="py-12 text-center text-ink-muted">
+                   <div className="mb-3 opacity-20"><Search size={32} className="mx-auto" /></div>
+                   <p className="text-[14px] font-medium text-ink">No assets found</p>
+                   <p className="text-[12px] mt-1">Try another search term</p>
+                 </div>
+               )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

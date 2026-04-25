@@ -16,6 +16,8 @@ const merchant_1 = __importDefault(require("./routes/merchant"));
 const links_1 = __importDefault(require("./routes/links"));
 const verification_1 = __importDefault(require("./routes/verification"));
 const admin_1 = __importDefault(require("./routes/admin"));
+const assets_1 = __importDefault(require("./routes/assets"));
+const support_1 = __importDefault(require("./routes/support"));
 const merchant_2 = require("./lib/merchant");
 const prisma_1 = require("./lib/prisma");
 // Start BullMQ workers (webhook-driven + NEAR Intents poller + outgoing dispatch)
@@ -41,6 +43,8 @@ app.use('/api/v1/merchant', merchant_1.default);
 app.use('/api/v1/links', links_1.default);
 app.use('/api/v1/verification', verification_1.default);
 app.use('/api/v1/admin', admin_1.default);
+app.use('/api/v1/assets', assets_1.default);
+app.use('/api/v1/support', support_1.default);
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 // ── Global error handler ─────────────────────────────────────────────────────
 // Catches any unhandled errors thrown inside route handlers / middleware.

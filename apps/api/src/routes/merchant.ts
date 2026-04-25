@@ -2,6 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
 import { requireSession } from '../middleware/auth';
+import { sendDeletionRequestEmail } from '../services/email.service';
 
 const router = Router();
 
@@ -229,6 +230,22 @@ router.put('/payouts', requireSession, async (req, res) => {
         walletAddress:         newInst.walletAddress,
       },
     });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/v1/merchant/request-deletion
+// Submits an account deletion request to the admin support team
+router.post('/request-deletion', requireSession, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
+
+    await sendDeletionRequestEmail(merchant.id, merchant.email, merchant.name, reason || '');
+
+    return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }

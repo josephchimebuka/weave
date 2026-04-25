@@ -383,7 +383,7 @@ async function markStepFailed(params) {
         }),
         prisma_1.prisma.order.update({
             where: { id: step.orderId },
-            data: { status: 'failed' },
+            data: { status: params.isRefund ? 'refunded' : 'failed' },
         }),
     ]);
     return { orderId: step.orderId, stepId: step.id };

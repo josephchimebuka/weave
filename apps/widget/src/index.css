@@ -19,3 +19,12 @@ button:active, a:active {
 input[type="radio"], input[type="checkbox"] {
   cursor: pointer;
 }
+
+.weaving-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #E8EAE6;
+  border-top-color: #0F5D4C;
+  border-radius: 50%;
+  animation: wspin 0.8s linear infinite;
+}

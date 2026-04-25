@@ -133,3 +133,7 @@ export async function fetchOrder(publishableKey: string, orderId: string) {
 export async function fetchCountries(publishableKey: string) {
   return apiFetch('/ramp/countries', publishableKey);
 }
+
+export async function fetchAssets(publishableKey: string) {
+  return apiFetch('/assets', publishableKey);
+}

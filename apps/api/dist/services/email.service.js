@@ -5,9 +5,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendWelcomeEmail = sendWelcomeEmail;
 exports.sendAdminKYBNotification = sendAdminKYBNotification;
+exports.sendMerchantKYBApprovalEmail = sendMerchantKYBApprovalEmail;
+exports.sendMerchantKYBRejectionEmail = sendMerchantKYBRejectionEmail;
+exports.sendSupportEmail = sendSupportEmail;
 exports.sendMerchantPaymentNotification = sendMerchantPaymentNotification;
 exports.sendOtpEmail = sendOtpEmail;
 exports.sendPasswordResetEmail = sendPasswordResetEmail;
+exports.sendDeletionRequestEmail = sendDeletionRequestEmail;
 const prisma_1 = require("../lib/prisma");
 const resend_1 = require("../lib/resend");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
@@ -91,18 +95,32 @@ async function sendAdminKYBNotification(verificationId) {
           
           <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
             <h3 style="margin-top: 0;">Business Meta</h3>
-            <table style="width: 100%; font-size: 14px;">
-              <tr><td style="color: #6B7572; pb: 8px;">Legal Name</td><td style="font-weight: 600; pb: 8px;">${v.legalName}</td></tr>
-              <tr><td style="color: #6B7572; pb: 8px;">Entity Type</td><td style="font-weight: 600; pb: 8px;">${v.entityType}</td></tr>
-              <tr><td style="color: #6B7572; pb: 8px;">Reg Number</td><td style="font-weight: 600; pb: 8px;">${v.regNumber}</td></tr>
-              <tr><td style="color: #6B7572; pb: 8px;">Merchant Name</td><td style="font-weight: 600; pb: 8px;">${v.merchant.name}</td></tr>
-              <tr><td style="color: #6B7572;">Merchant Email</td><td style="font-weight: 600;">${v.merchant.email}</td></tr>
+            <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
+              <tr><td style="color: #6B7572; padding: 6px 0;">Legal Name</td><td style="font-weight: 600; padding: 6px 0;">${v.legalName}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Entity Type</td><td style="font-weight: 600; padding: 6px 0;">${v.entityType}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Reg Number</td><td style="font-weight: 600; padding: 6px 0;">${v.regNumber}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Address</td><td style="font-weight: 600; padding: 6px 0;">${v.businessAddress}, ${v.city}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">State/Postal</td><td style="font-weight: 600; padding: 6px 0;">${v.state} ${v.postalCode}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Merchant Email</td><td style="font-weight: 600; padding: 6px 0;">${v.merchant.email}</td></tr>
             </table>
+
+            <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 20px 0;" />
+            
+            <h3 style="margin-top: 0; font-size: 16px;">Documents</h3>
+            <div style="margin-top: 10px;">
+              ${v.documentUrls?.map(doc => `
+                <div style="margin-bottom: 8px;">
+                  <a href="${doc.url}" target="_blank" style="color: #0F5D4C; font-weight: 600; text-decoration: none;">
+                    View ${doc.type.replace(/_/g, ' ')} →
+                  </a>
+                </div>
+              `).join('') || '<p style="color: #9B9FA1;">No documents attached</p>'}
+            </div>
           </div>
 
           <p>Review the application and take action below. These links are secure and expire in 48 hours.</p>
           
-          <div style="display: flex; gap: 16px; margin-top: 32px;">
+          <div style="margin-top: 32px;">
             <a href="${approveUrl}" style="background: #0F5D4C; color: white; padding: 12px 24px; border-radius: 99px; text-decoration: none; font-weight: 600;">
               Approve Merchant
             </a>
@@ -125,6 +143,149 @@ async function sendAdminKYBNotification(verificationId) {
     }
     catch (err) {
         console.error(`[admin-notify] fatal error:`, err.message);
+    }
+}
+/**
+ * Notifies the merchant that their KYB application has been approved.
+ */
+async function sendMerchantKYBApprovalEmail(merchantId) {
+    try {
+        const m = await prisma_1.prisma.merchant.findUnique({ where: { id: merchantId } });
+        if (!m || !m.email)
+            return;
+        const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
+        const { data, error } = await resend_1.resend.emails.send({
+            from: process.env.RESEND_FROM_EMAIL || 'Weave <onboarding@weave.com>',
+            to: [m.email],
+            subject: 'Verification Approved: Welcome to Weave Live! ⚡️',
+            html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #0B0F0E;">
+          <h1 style="color: #0F5D4C; font-size: 32px;">You're verified!</h1>
+          <p>Hi ${m.name},</p>
+          <p>Great news! Our compliance team has approved your business verification. Your Weave account is now fully active with live transaction limits.</p>
+          
+          <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 20px; padding: 32px; margin: 32px 0;">
+            <h3 style="margin-top: 0; color: #0F5D4C;">Next Steps</h3>
+            <p>You can now start processing live payments and settle them to your local bank or crypto wallet.</p>
+            
+            <ul style="padding-left: 20px; color: #4B5552;">
+              <li style="margin-bottom: 12px;"><strong>Set Payouts</strong>: Ensure your payout destination is correctly set in settings.</li>
+              <li style="margin-bottom: 12px;"><strong>Integrate</strong>: Use your live API keys to start accepting payments.</li>
+              <li style="margin-bottom: 12px;"><strong>Payment Links</strong>: Create professional payment links for your customers in seconds.</li>
+            </ul>
+            
+            <a href="${dashboardUrl}/settings" style="display: inline-block; background: #0F5D4C; color: white; padding: 14px 28px; border-radius: 99px; text-decoration: none; font-weight: 600; margin-top: 16px;">
+              Launch Live Dashboard
+            </a>
+          </div>
+          
+          <p style="font-size: 11px; color: #9B9FA1; text-align: center; margin-top: 48px; border-top: 1px solid #E8EAE6; padding-top: 24px;">
+            Weave is a product of <strong>Dewdrop Labs</strong>.
+          </p>
+        </div>
+      `
+        });
+        if (error) {
+            console.error(`[email-kyb-ok] Resend Error:`, error);
+        }
+        else {
+            console.log(`[email-kyb-ok] approval sent to ${m.email} (id: ${data?.id})`);
+        }
+    }
+    catch (err) {
+        console.error(`[email-kyb-ok] fatal error:`, err.message);
+    }
+}
+/**
+ * Notifies the merchant that their KYB application has been rejected.
+ */
+async function sendMerchantKYBRejectionEmail(merchantId, reason) {
+    try {
+        const m = await prisma_1.prisma.merchant.findUnique({ where: { id: merchantId } });
+        if (!m || !m.email)
+            return;
+        const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
+        const { data, error } = await resend_1.resend.emails.send({
+            from: process.env.RESEND_FROM_EMAIL || 'Weave <onboarding@weave.com>',
+            to: [m.email],
+            subject: 'Action Required: Your Verification Update ⚠️',
+            html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #0B0F0E;">
+          <h1 style="color: #A8321E; font-size: 28px;">Verification Update</h1>
+          <p>Hi ${m.name},</p>
+          <p>Our compliance team has completed the review of your business verification request. Unfortunately, we are unable to approve your application at this time due to the following reason:</p>
+          
+          <div style="background: #FFF0F0; border: 1px solid #FFD1D1; border-radius: 16px; padding: 24px; margin: 24px 0; color: #A8321E;">
+            <p style="margin: 0; font-weight: 600;">Reason for Rejection:</p>
+            <p style="margin: 8px 0 0 0; line-height: 1.5;">${reason || 'One or more documents were invalid or unclear.'}</p>
+          </div>
+
+          <p><strong>What should you do next?</strong></p>
+          <p>You can rectify the issues mentioned above and update your application details. Please ensure all documents are clear, valid, and match your business registration.</p>
+          
+          <a href="${dashboardUrl}/onboarding/kyb" style="display: inline-block; background: #0F5D4C; color: white; padding: 14px 28px; border-radius: 99px; text-decoration: none; font-weight: 600; margin-top: 16px;">
+            Update Application
+          </a>
+          
+          <p style="margin-top: 32px; font-size: 13px; color: #6B7572;">
+            If you have any questions or believe this was a mistake, please reply to this email to speak with our support team.
+          </p>
+          
+          <p style="font-size: 11px; color: #9B9FA1; text-align: center; margin-top: 48px; border-top: 1px solid #E8EAE6; padding-top: 24px;">
+            Weave is a product of <strong>Dewdrop Labs</strong>.
+          </p>
+        </div>
+      `
+        });
+        if (error) {
+            console.error(`[email-kyb-no] Resend Error:`, error);
+        }
+        else {
+            console.log(`[email-kyb-no] rejection sent to ${m.email} (id: ${data?.id})`);
+        }
+    }
+    catch (err) {
+        console.error(`[email-kyb-no] fatal error:`, err.message);
+    }
+}
+/**
+ * Sends a support ticket from a merchant to the Weave support team.
+ */
+async function sendSupportEmail(payload) {
+    try {
+        const supportEmail = process.env.SUPPORT_EMAIL || 'support@weave.com';
+        const { data, error } = await resend_1.resend.emails.send({
+            from: process.env.RESEND_FROM_EMAIL || 'Weave Support <support@weave.com>',
+            to: [supportEmail],
+            subject: `[Support Request] ${payload.topic}: ${payload.name}`,
+            html: `
+        <div style="font-family: sans-serif; max-width: 600px; color: #0B0F0E;">
+          <h2 style="color: #0F5D4C;">New Support Inbound</h2>
+          <p>You have received a new message from the merchant dashboard.</p>
+          
+          <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
+             <p><strong>Merchant:</strong> ${payload.name}</p>
+             <p><strong>Email:</strong> ${payload.email}</p>
+             <p><strong>Topic:</strong> ${payload.topic}</p>
+             <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 16px 0;" />
+             <p style="white-space: pre-wrap; line-height: 1.6;">${payload.message}</p>
+          </div>
+          
+          <p style="font-size: 12px; color: #9B9FA1;">
+            Reply directly to this email to contact <strong>${payload.email}</strong>.
+          </p>
+        </div>
+      `
+        });
+        if (error) {
+            console.error(`[email-support] Resend Error:`, error);
+        }
+        else {
+            console.log(`[email-support] ticket sent to ${supportEmail} (id: ${data?.id})`);
+        }
+    }
+    catch (err) {
+        console.error(`[email-support] fatal error:`, err.message);
     }
 }
 /**
@@ -281,5 +442,51 @@ async function sendPasswordResetEmail(email, otpCode, resetToken) {
     }
     catch (err) {
         console.error(`[email-reset] fatal error:`, err.message);
+    }
+}
+/**
+ * Notifies the Weave admins that a merchant has requested account deletion.
+ */
+async function sendDeletionRequestEmail(merchantId, email, name, reason) {
+    try {
+        const { data, error } = await resend_1.resend.emails.send({
+            from: process.env.RESEND_FROM_EMAIL || 'Weave System <system@weave.com>',
+            to: [COMPANY_ADMIN_EMAIL],
+            subject: `⚠️ Account Deletion Request: ${name}`,
+            html: `
+        <div style="font-family: sans-serif; max-width: 600px; color: #0B0F0E;">
+          <h2 style="color: #d94e4e;">Merchant Deletion Request</h2>
+          <p>A merchant has requested to delete their account. As per policy, support must reach out to settle their account and clear compliance checks.</p>
+          
+          <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
+            <h3 style="margin-top: 0;">Merchant Details</h3>
+            <table style="width: 100%; font-size: 14px;">
+              <tr><td style="color: #6B7572; pb: 8px;">Merchant ID</td><td style="font-weight: 600; pb: 8px;">${merchantId}</td></tr>
+              <tr><td style="color: #6B7572; pb: 8px;">Name</td><td style="font-weight: 600; pb: 8px;">${name}</td></tr>
+              <tr><td style="color: #6B7572; pb: 8px;">Email</td><td style="font-weight: 600; pb: 8px;">${email}</td></tr>
+              <tr><td style="color: #6B7572;">Provided Reason</td><td style="font-weight: 600;">${reason || 'None provided'}</td></tr>
+            </table>
+          </div>
+
+          <div style="display: flex; gap: 16px; margin-top: 32px;">
+            <a href="mailto:${email}?subject=Regarding your Weave account closure request" style="background: #0F5D4C; color: white; padding: 12px 24px; border-radius: 99px; text-decoration: none; font-weight: 600;">
+              Contact Merchant
+            </a>
+          </div>
+          <p style="font-size: 11px; color: #9B9FA1; margin-top: 48px; border-top: 1px solid #E8EAE6; padding-top: 24px;">
+            Weave is a product of <strong>Dewdrop Labs</strong>.
+          </p>
+        </div>
+      `
+        });
+        if (error) {
+            console.error(`[admin-notify] Resend Error for deletion request:`, error);
+        }
+        else {
+            console.log(`[admin-notify] Deletion request alert sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
+        }
+    }
+    catch (err) {
+        console.error(`[admin-notify] fatal error sending deletion request:`, err.message);
     }
 }

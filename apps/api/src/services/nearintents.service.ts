@@ -301,13 +301,13 @@ export const nearIntents = new NearIntentsService();
 
 // ── Status classification ───────────────────────────────────────────────────
 
-export type NearOutcome = 'done' | 'failed' | 'progress';
+export type NearOutcome = 'done' | 'failed' | 'progress' | 'refunded';
 
 export function classifyNearStatus(status: NearStatus): NearOutcome {
   switch (status) {
     case 'SUCCESS':            return 'done';
-    case 'FAILED':
-    case 'REFUNDED':           return 'failed';
+    case 'FAILED':             return 'failed';
+    case 'REFUNDED':           return 'refunded';
     case 'KNOWN_DEPOSIT_TX':
     case 'PENDING_DEPOSIT':
     case 'INCOMPLETE_DEPOSIT':

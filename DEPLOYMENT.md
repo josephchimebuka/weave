@@ -23,6 +23,7 @@ Before deploying, ensure you have the following accounts/services ready:
 | `REDIS_PORT` | Redis Port | `6379` |
 | `REDIS_PASSWORD`| Redis Auth | `your-password` |
 | `ADMIN_EMAIL` | KYB Alerts | Your personal/work email |
+| `SUPPORT_EMAIL` | Dashboard Inquiries | `support@yourdomain.com` |
 | `ADMIN_SECRET` | Magic Link Signing | A long random string |
 | `RESEND_API_KEY`| Email Delivery | `re_...` |
 | `API_URL` | API Base (Backend) | `https://api.yourdomain.com/api/v1` |

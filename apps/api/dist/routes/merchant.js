@@ -7,6 +7,7 @@ const express_1 = require("express");
 const crypto_1 = __importDefault(require("crypto"));
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
+const email_service_1 = require("../services/email.service");
 const router = (0, express_1.Router)();
 function generatePublishableKey() {
     return 'pk_live_' + crypto_1.default.randomBytes(24).toString('hex');
@@ -216,6 +217,21 @@ router.put('/payouts', auth_1.requireSession, async (req, res) => {
                 walletAddress: newInst.walletAddress,
             },
         });
+    }
+    catch (err) {
+        return res.status(500).json({ success: false, error: err.message });
+    }
+});
+// POST /api/v1/merchant/request-deletion
+// Submits an account deletion request to the admin support team
+router.post('/request-deletion', auth_1.requireSession, async (req, res) => {
+    try {
+        const { reason } = req.body;
+        const merchant = await prisma_1.prisma.merchant.findUnique({ where: { id: req.merchantId } });
+        if (!merchant)
+            return res.status(404).json({ success: false, error: 'merchant not found' });
+        await (0, email_service_1.sendDeletionRequestEmail)(merchant.id, merchant.email, merchant.name, reason || '');
+        return res.json({ success: true });
     }
     catch (err) {
         return res.status(500).json({ success: false, error: err.message });

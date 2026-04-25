@@ -177,8 +177,8 @@ exports.nearIntents = new NearIntentsService();
 function classifyNearStatus(status) {
     switch (status) {
         case 'SUCCESS': return 'done';
-        case 'FAILED':
-        case 'REFUNDED': return 'failed';
+        case 'FAILED': return 'failed';
+        case 'REFUNDED': return 'refunded';
         case 'KNOWN_DEPOSIT_TX':
         case 'PENDING_DEPOSIT':
         case 'INCOMPLETE_DEPOSIT':

@@ -458,7 +458,7 @@ export async function markStepDone(params: {
   return { orderId: step.orderId, stepId: step.id, orderStatus: nextOrderStatus };
 }
 
-export async function markStepFailed(params: { provider: string; externalId: string; reason?: string }) {
+export async function markStepFailed(params: { provider: string; externalId: string; reason?: string; isRefund?: boolean }) {
   const step = await prisma.routeStep.findFirst({
     where: { provider: params.provider, externalId: params.externalId },
   });
@@ -471,7 +471,7 @@ export async function markStepFailed(params: { provider: string; externalId: str
     }),
     prisma.order.update({
       where: { id: step.orderId },
-      data:  { status: 'failed' },
+      data:  { status: params.isRefund ? 'refunded' : 'failed' },
     }),
   ]);
 

@@ -1,3 +1,24 @@
+export interface FiatMeta {
+    key: string;
+    name: string;
+    symbol: string;
+    flag: string;
+    rate: number;
+    min: number;
+    country: string;
+}
+export interface CryptoMeta {
+    key: string;
+    id: string;
+    name: string;
+    token: string;
+    tint: string;
+    icon: string;
+    network: string;
+    logo: string;
+}
+export declare const SUPPORTED_FIAT: FiatMeta[];
+export declare const SUPPORTED_CRYPTO: CryptoMeta[];
 export type AssetKey = string;
 export interface FiatAsset {
     kind: 'fiat';
@@ -29,6 +50,10 @@ export declare const isCrypto: (key: string) => boolean;
  * Returns a human-friendly label for an asset key.
  */
 export declare function assetLabel(key: string): string;
+/**
+ * Returns the meta for a known asset key.
+ */
+export declare function assetMeta(key: string): FiatMeta | CryptoMeta | undefined;
 export type OrderDirection = 'offramp' | 'onramp' | 'bridge' | 'transfer';
 /**
  * Determines the logical direction of an order based on source/dest assets.
