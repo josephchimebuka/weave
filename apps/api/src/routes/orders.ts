@@ -100,32 +100,46 @@ router.post('/', requireAuth, async (req, res) => {
         quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
       }
 
-      if (srcP.kind === 'crypto' && dstP.kind === 'fiat' && body.amountIn === 'dest') {
-         destAmountFiat = body.amount;
-         const targetFiat = new Decimal(body.amount);
-         const sr = new Decimal(sellRate);
-         const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
-         
-         const netUsdc = targetFiat.div(sr);
-         // exact required USDC for paycrest
-         const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
-         
-         // convert slippage buffer to explicit App Fee revenue
-         const appFeePct = new Decimal(APP_FEE_BPS).plus(SLIPPAGE_BUFFER_BPS).div(10000);
-         const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
-         
-         usdEquivalent = totalUsdc.toNumber();
-         appFeeBps = APP_FEE_BPS + SLIPPAGE_BUFFER_BPS;
+      if (body.amountIn === 'dest') {
+         if (srcP.kind === 'crypto' && dstP.kind === 'fiat') {
+            // Offramp: User pays crypto (sourceAmount), Merchant gets target fiat (body.amount)
+            destAmountFiat = body.amount;
+            const targetFiat = new Decimal(body.amount);
+            const sr = new Decimal(sellRate);
+            const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+            
+            const netUsdc = targetFiat.div(sr);
+            const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+            
+            const appFeePct = new Decimal(APP_FEE_BPS).plus(SLIPPAGE_BUFFER_BPS).div(10000);
+            const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+            
+            usdEquivalent = totalUsdc.toNumber();
+            appFeeBps = APP_FEE_BPS + SLIPPAGE_BUFFER_BPS;
+         } else if (srcP.kind === 'fiat' && dstP.kind === 'crypto') {
+            // Onramp: User pays fiat (sourceAmount), Merchant gets target crypto value (body.amount in fiat)
+            const targetFiat = new Decimal(body.amount);
+            const br = new Decimal(buyRate);
+            const feePct = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS).div(10000);
+            
+            // Total fiat needed = Target / (1 - fee%)
+            const totalFiat = targetFiat.div(new Decimal(1).minus(feePct));
+            sourceAmount = totalFiat.toNumber();
+            usdEquivalent = totalFiat.div(br).toNumber();
+            appFeeBps = APP_FEE_BPS;
+         }
       } else {
+         // Standard 'amountIn === source' logic
          if (srcP.kind === 'crypto') {
            const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
            if (token.price > 0) usdEquivalent = body.amount * token.price;
          } else if (srcP.kind === 'fiat') {
+           sourceAmount = body.amount;
            usdEquivalent = body.amount / buyRate;
          }
       }
       
-      if (srcP.kind === 'crypto' && body.amountIn === 'dest') {
+      if (srcP.kind === 'crypto' && body.amountIn === 'dest' && !sourceAmount) {
         const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
         if (token.price > 0) sourceAmount = usdEquivalent / token.price;
       }

@@ -269,7 +269,64 @@ async function runNearIntentsSwap(
 // ── Orchestrator ────────────────────────────────────────────────────────────
 
 export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult> {
-  const { plan } = input;
+  const { plan, orderId } = input;
+
+  // 1. Idempotency Check: If we already have recorded steps for this order,
+  //    reconstruct the ExecuteResult from them instead of calling providers again.
+  const existingSteps = await prisma.routeStep.findMany({
+    where: { orderId },
+    orderBy: { sequence: 'asc' }
+  });
+
+  if (existingSteps.length > 0) {
+    const first = existingSteps[0];
+    const last = existingSteps[existingSteps.length - 1];
+
+    // Reconstruct nextAction from stored data
+    const from = parseAsset(first.fromAsset);
+    const nextAction: FirstStepAction = from.kind === 'crypto'
+      ? {
+          screen:         'collect_crypto',
+          depositAddress: first.depositAddress ?? undefined,
+          depositMemo:    first.depositMemo ?? undefined,
+          amount:         first.amountIn ?? input.sourceAmount,
+          token:          from.token,
+          chain:          from.chain,
+          expiresAt:      undefined, // We don't store expiresAt in RouteStep yet
+        }
+      : {
+          screen:      'collect_fiat',
+          bankDetails: {
+              institution:       '', // Minimal reconstruction; usually handled by resuming widget state
+              accountIdentifier: '',
+              accountName:       '',
+              amountToTransfer:  String(first.amountOut ?? 0),
+              currency:          from.currency,
+          },
+          expiresAt:   undefined,
+        };
+
+    const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
+    const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS    / 10000);
+    const bridgeFeeUsd = existingSteps.reduce((s, e, i) => {
+      const p = existingSteps[i].provider;
+      return s + ((p === 'chainrails' || p === 'nearintents') ? (e.feeUsd ?? 0) : 0);
+    }, 0);
+
+    return {
+      firstStep:  { sequence: 0, provider: first.provider, fromAsset: first.fromAsset, toAsset: first.toAsset },
+      nextAction,
+      destAmount: last.amountOut ?? 0,
+      steps: existingSteps.map(e => ({
+        sequence:   e.sequence,
+        externalId: e.externalId,
+        amountIn:   e.amountIn ?? 0,
+        amountOut:  e.amountOut ?? 0,
+      })),
+      feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd },
+    };
+  }
+
   const last = plan.steps.length - 1;
 
   // Walk steps last → first, each step's depositAddress feeds the previous.
