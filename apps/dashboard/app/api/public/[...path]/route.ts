@@ -19,7 +19,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 async function proxy(request: NextRequest, path: string) {
   try {
     const url = new URL(request.url);
-    const targetUrl = new URL(`${API_BASE}/${path}${url.search}`);
+    
+    // Ensure API_BASE ends with /api/v1
+    let base = API_BASE.replace(/\/$/, '');
+    if (!base.endsWith('/api/v1')) {
+      if (base.endsWith('/v1')) {
+        base = base.replace('/v1', '/api/v1');
+      } else {
+        base = `${base}/api/v1`;
+      }
+    }
+    
+    const targetUrl = new URL(`${base}/${path}${url.search}`);
     
     const headers = new Headers();
     // Forward the public API Key

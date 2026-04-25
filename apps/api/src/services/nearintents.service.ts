@@ -152,11 +152,15 @@ export interface NearStatusResponse {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Human amount → smallest-unit integer string. */
+/** Human amount → smallest-unit integer string. Handles scientific notation. */
 export function toSmallestUnit(amount: number | string, decimals: number): string {
-  const [whole, frac = ''] = String(amount).split('.');
-  const fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
-  const combined = (whole + fracPadded).replace(/^0+/, '');
+  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+  if (!Number.isFinite(num)) return '0';
+  
+  // Use toFixed to avoid scientific notation (1e-7 -> 0.0000001)
+  const fixed = num.toFixed(decimals);
+  const [whole, frac = ''] = fixed.split('.');
+  const combined = (whole + frac).replace(/^0+/, '');
   return combined || '0';
 }
 

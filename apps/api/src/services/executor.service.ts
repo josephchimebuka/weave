@@ -312,10 +312,18 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       if (!downstreamRecipient) throw new Error('chainrails step needs downstreamRecipient');
       exec = await runChainRailsBridge(step, amountIn, downstreamRecipient, input.refundAddress ?? '', input.reference);
     } else if (step.provider === 'nearintents') {
+      const from = parseAsset(step.fromAsset);
       // For the external-wallet flow the user may not have a refund address
-      // until they pick one. Fall back to destWallet — if the swap fails, at
-      // least the refund lands somewhere the merchant can recover from.
-      const refundTo = input.refundAddress || input.destWallet || downstreamRecipient || '';
+      // until they pick one. We MUST ensure the refundTo is valid for the 
+      // source chain. If it's missing, we don't fall back to an EVM address
+      // if the source is not EVM (e.g. Starknet).
+      const sourceIsEvm = from.kind === 'crypto' && ['BASE', 'ETHEREUM', 'ARBITRUM', 'OPTIMISM', 'POLYGON', 'BSC', 'AVALANCHE'].includes(from.chain.toUpperCase());
+      const refundTo = input.refundAddress || (sourceIsEvm ? (input.destWallet || downstreamRecipient) : '');
+      
+      if (!refundTo) {
+        throw new Error(`Refund address is required for ${from.kind === 'crypto' ? from.chain : from.currency} payments.`);
+      }
+
       exec = await runNearIntentsSwap(
         step, 
         amountIn, 
