@@ -49,6 +49,7 @@ app.use('/api/v1/admin',         adminRouter);
 app.use('/api/v1/assets',        assetsRouter);
 app.use('/api/v1/support',       supportRouter);
 
+app.get('/', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 
 // ── Global error handler ─────────────────────────────────────────────────────
