@@ -172,7 +172,10 @@ export class PaycrestService {
     const expected = crypto.createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex');
     const sig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
     try {
-      return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
+      const sigBuf = Buffer.from(sig, 'hex');
+      const expectedBuf = Buffer.from(expected, 'hex');
+      if (sigBuf.length !== expectedBuf.length) return false;
+      return crypto.timingSafeEqual(sigBuf, expectedBuf);
     } catch {
       return false;
     }

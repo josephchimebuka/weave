@@ -38,12 +38,7 @@ const verifyQStash = async (req: Request, res: Response, next: Function) => {
 
 // ── Webhook Processing Job ──────────────────────────────────────────────────
 
-const PAYCREST_OUTCOME: Record<string, 'done' | 'failed' | 'progress'> = {
-  'payment_order.settled':   'done',
-  'payment_order.refunding': 'failed',
-  'payment_order.refunded':  'failed',
-  'payment_order.expired':   'failed',
-};
+
 
 const CHAINRAILS_OUTCOME: Record<string, 'done' | 'failed' | 'progress'> = {
   'intent.completed': 'done',
@@ -57,11 +52,27 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
   const externalId = String(
     source === 'chainrails' ? (data?.data?.id ?? '') : (data?.data?.id ?? data?.id ?? '')
   );
-  
   if (!externalId) return res.status(200).json({ skipped: true, reason: 'missing externalId' });
 
-  const outcome = source === 'paycrest' ? PAYCREST_OUTCOME[event] : CHAINRAILS_OUTCOME[event];
-  if (!outcome || outcome === 'progress') return res.status(200).json({ skipped: true, reason: 'unhandled event' });
+  let outcome: 'done' | 'failed' | 'progress' = 'progress';
+
+  if (source === 'paycrest') {
+    const payload = data?.data ?? data; 
+    const direction = payload?.direction || '';
+
+    if (['payment_order.validated', 'payment_order.settled', 'payment_order.completed', 'payment_order.paid'].includes(event)) {
+      // Documentation rules:
+      if (direction === 'offramp' && event === 'payment_order.validated') outcome = 'done';
+      else if (event === 'payment_order.settled') outcome = 'done';
+      else if (event === 'payment_order.completed' || event === 'payment_order.paid') outcome = 'done';
+    } else if (['payment_order.failed', 'payment_order.expired', 'payment_order.refunded'].includes(event)) {
+      outcome = 'failed';
+    }
+  } else {
+    outcome = CHAINRAILS_OUTCOME[event] ?? 'progress';
+  }
+
+  if (outcome === 'progress') return res.status(200).json({ skipped: true, reason: 'unhandled event' });
 
   // Idempotency gate
   const logKey = { source_event_externalId: { source, event, externalId } };

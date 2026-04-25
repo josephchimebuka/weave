@@ -525,13 +525,20 @@ export async function syncOrder(orderId: string) {
         }
       } else if (step.provider === 'paycrest' && step.externalId) {
         console.log(`[sync] checking paycrest step ${step.id} for order ${step.externalId}`);
-        const pc = await paycrest.getOrder(step.externalId);
-        console.log(`[sync] paycrest status for ${step.id}: ${pc.status}`);
+        const pc = await paycrest.getOrder(step.externalId) as any;
+        console.log(`[sync] paycrest status for ${step.id}: ${pc.status} (dir: ${pc.direction})`);
         
-        // Comprehensive success statuses for Paycrest
-        const isDone = ['successful', 'completed', 'settled', 'paid'].includes(pc.status.toLowerCase());
-        const isFailed = ['expired', 'failed', 'cancelled'].includes(pc.status.toLowerCase());
-        const isRefund = ['refunded', 'refunding'].includes(pc.status.toLowerCase());
+        const direction = pc.direction || '';
+        const status = pc.status.toLowerCase();
+
+        // Documentation Poll rules:
+        // validated -> offramp complete
+        // settled -> onramp or fully complete
+        const isDone = (direction === 'offramp' && status === 'validated') || 
+                       (['settled', 'completed', 'paid', 'successful'].includes(status));
+        
+        const isFailed = ['expired', 'failed', 'cancelled'].includes(status);
+        const isRefund = ['refunded', 'refunding'].includes(status);
 
         if (isDone) {
           await markStepDone({ provider: 'paycrest', externalId: step.externalId, amountOut: Number(pc.amount) });

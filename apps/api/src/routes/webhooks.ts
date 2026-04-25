@@ -44,9 +44,14 @@ router.post('/chainrails', async (req: Request, res: Response) => {
 // POST /api/v1/webhooks/paycrest
 router.post('/paycrest', async (req: Request, res: Response) => {
   const rawBody   = req.body.toString();
-  const signature = (req.headers['x-paycrest-signature'] as string) ?? '';
+  const signature = (req.headers['x-paycrest-signature'] as string) ?? 
+                    (req.headers['x-pay-signature'] as string) ?? 
+                    '';
+
+  console.log(`[webhook] paycrest received. sig: ${signature.slice(0, 12)}... len: ${rawBody.length}`);
 
   if (!paycrest.verifyWebhookSignature(rawBody, signature)) {
+    console.warn(`[webhook] paycrest signature mismatch. length: ${rawBody.length}`);
     return res.status(401).json({ success: false, error: 'Invalid signature' });
   }
 
@@ -59,6 +64,7 @@ router.post('/paycrest', async (req: Request, res: Response) => {
 
   const event = payload?.event ?? payload?.type;
   if (!event) {
+    console.warn(`[webhook] paycrest missing event field:`, payload);
     return res.status(400).json({ success: false, error: 'Missing event field' });
   }
 
