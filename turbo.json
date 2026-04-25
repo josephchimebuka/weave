@@ -1,5 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "NODE_ENV",
+    "API_BASE",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "SUPPORT_EMAIL",
+    "ADMIN_SECRET"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

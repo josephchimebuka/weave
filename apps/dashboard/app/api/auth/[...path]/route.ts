@@ -8,10 +8,11 @@ const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
  */
 export async function POST(
   request: Request,
-  { params }: { params: { path: string[] } }
+  props: { params: Promise<{ path: string[] }> }
 ) {
   try {
-    const path = (await params).path.join('/');
+    const params = await props.params;
+    const path = params.path.join('/');
     const body = await request.json();
 
     const res = await fetch(`${API_BASE}/auth/${path}`, {
