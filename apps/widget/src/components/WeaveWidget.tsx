@@ -1935,8 +1935,8 @@ export function WeaveCheckout({
     if (saved) {
       try {
         const { orderId: savedId, screen: savedScreen, createdAt } = JSON.parse(saved);
-        // Don't resume orders older than 24h
-        if (Date.now() - createdAt < 24 * 60 * 60 * 1000) {
+        // Don't resume orders older than 1h
+        if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
           fetchOrder(apiKey, savedId).then(data => {
             const order = data;
             if (['awaiting_deposit', 'processing'].includes(order.status)) {

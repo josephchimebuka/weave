@@ -551,7 +551,7 @@ export async function syncOrder(orderId: string) {
     where: { id: orderId },
     include: { steps: true }
   });
-  if (!order || ['completed', 'failed', 'refunded'].includes(order.status)) return;
+  if (!order || ['completed', 'failed', 'refunded', 'expired'].includes(order.status)) return;
 
   const { classifyNearStatus } = await import('./nearintents.service');
 

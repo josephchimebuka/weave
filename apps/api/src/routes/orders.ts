@@ -256,7 +256,7 @@ const PAYCREST_STATUS_ONRAMP: Record<string, string> = {
   initiated: 'awaiting_deposit',
   pending:   'awaiting_deposit',
 };
-const TERMINAL = new Set(['completed', 'failed', 'refunded']);
+const TERMINAL = new Set(['completed', 'failed', 'refunded', 'expired']);
 
 // GET /api/v1/orders/:id — poll fallback kicks in when the webhook is late.
 router.get('/:id', requireAuth, async (req, res) => {
