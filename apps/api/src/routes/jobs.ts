@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
+import { paystack } from '../services/paystack.service';
 
 const router = Router();
 
@@ -50,7 +51,7 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
   const { source, event, data } = req.body;
 
   const externalId = String(
-    source === 'chainrails' ? (data?.data?.id ?? '') : (data?.data?.id ?? data?.id ?? '')
+    source === 'chainrails' ? (data?.data?.id ?? '') : (data?.data?.id ?? data?.id ?? data?.reference ?? '')
   );
   if (!externalId) return res.status(200).json({ skipped: true, reason: 'missing externalId' });
 
@@ -67,6 +68,10 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
       else if (event === 'payment_order.completed' || event === 'payment_order.paid') outcome = 'done';
     } else if (['payment_order.failed', 'payment_order.expired', 'payment_order.refunded'].includes(event)) {
       outcome = 'failed';
+    }
+  } else if (source === 'paystack') {
+    if (event === 'charge.success') {
+      outcome = 'done';
     }
   } else {
     outcome = CHAINRAILS_OUTCOME[event] ?? 'progress';
@@ -99,6 +104,29 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
   });
 
   res.json({ success: true });
+});
+
+// POST /api/v1/jobs/cleanup-expired-dva
+router.post('/cleanup-expired-dva', verifyQStash, async (req, res) => {
+  const expiredSteps = await prisma.routeStep.findMany({
+    where: {
+      paystackDvaAcct: { not: null },
+      dvaExpiresAt:    { lt: new Date() },
+      status:          { not: 'done' },
+    } as any,
+  });
+
+  for (const step of expiredSteps) {
+    try {
+      await paystack.deactivateDVA((step as any).paystackDvaAcct!);
+      await prisma.routeStep.update({
+        where: { id: step.id },
+        data:  { status: 'failed', paystackDvaAcct: null } as any,
+      });
+    } catch { /* skip err for this loop */ }
+  }
+
+  res.json({ success: true, cleaned: expiredSteps.length });
 });
 
 // ── Outgoing Webhook Job ────────────────────────────────────────────────────

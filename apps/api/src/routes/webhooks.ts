@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { chainRails } from '../services/chainrails.service';
 import { paycrest } from '../services/paycrest.service';
+import { paystack } from '../services/paystack.service';
 
 const router = Router();
 
@@ -76,6 +77,44 @@ router.post('/paycrest', async (req: Request, res: Response) => {
       source: 'paycrest',
       event,
       data:   payload,
+    },
+  });
+
+  res.json({ success: true });
+});
+
+// POST /api/v1/webhooks/paystack
+router.post('/paystack', async (req: Request, res: Response) => {
+  const signature = (req.headers['x-paystack-signature'] as string) ?? '';
+  const rawBody   = (req as any).rawBody || '';
+
+  if (!paystack.verifyWebhookSignature(rawBody, signature)) {
+    console.warn(`[webhook] paystack signature mismatch`);
+    return res.status(401).json({ success: false, error: 'Invalid signature' });
+  }
+
+  let payload: any;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid JSON body' });
+  }
+
+  // Paystack uses 'event' for the type
+  const event = payload?.event;
+  if (!event) {
+    return res.status(400).json({ success: false, error: 'Missing event field' });
+  }
+
+  const { qstash } = await import('../lib/qstash');
+  const baseUrl = process.env.API_BASE || `https://${req.headers.host}/api/v1`;
+
+  await qstash.publishJSON({
+    url: `${baseUrl}/jobs/process-webhook`,
+    body: {
+      source: 'paystack',
+      event,
+      data:   payload.data,
     },
   });
 

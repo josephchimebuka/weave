@@ -90,7 +90,7 @@ export type InlineInstrument = InlineBankInstrument | InlineWalletInstrument;
 export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstrument };
 
 export interface NextAction {
-  screen:          'collect_crypto' | 'collect_fiat';
+  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_bank_transfer';
   depositAddress?: string;
   depositMemo?:    string;
   amount?:         number;
@@ -102,6 +102,12 @@ export interface NextAction {
     accountName:       string;
     amountToTransfer:  string;
     currency:          string;
+  };
+  paystackDetails?: {
+    bankName:      string;
+    accountNumber: string;
+    amount:        number;
+    reference:     string;
   };
   expiresAt?: string;
 }

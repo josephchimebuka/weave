@@ -173,6 +173,13 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
                     <span>ID: <span className="font-mono text-ink-soft">{step.externalId?.slice(0, 12) || '—'}</span></span>
                     <span>Deposit: <span className="font-mono text-ink-soft">{step.depositAddress?.slice(0, 12) || '—'}</span></span>
                     {step.depositMemo && <span>Memo: <span className="font-mono text-ink-soft">{step.depositMemo}</span></span>}
+                    {step.paystackDvaAcct && (
+                      <div className="col-span-3 flex flex-wrap gap-x-6 gap-y-2 mt-1.5 pt-1.5 border-t border-hair-soft/50">
+                        <span>Bank: <span className="text-ink-soft">{step.paystackDvaBank}</span></span>
+                        <span>Account: <span className="font-mono text-ink-soft">{step.paystackDvaAcct}</span></span>
+                        <span>Ref: <span className="font-mono text-ink-soft">{step.paystackDvaRef}</span></span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

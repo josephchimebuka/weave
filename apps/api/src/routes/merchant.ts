@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { requireSession } from '../middleware/auth';
 import { sendDeletionRequestEmail } from '../services/email.service';
+import { syncPaystackSubaccount } from '../lib/merchant';
 
 const router = Router();
 
@@ -122,6 +123,9 @@ router.patch('/profile', requireSession, async (req, res) => {
       data:  { name },
     });
 
+    // Mirror to Paystack (async)
+    syncPaystackSubaccount(merchant.id).catch(() => {});
+
     return res.json({
       success: true,
       data: {
@@ -218,6 +222,9 @@ router.put('/payouts', requireSession, async (req, res) => {
       where: { id: merchant.id },
       data:  { defaultPayoutInstrumentId: newInst.id },
     });
+
+    // Mirror to Paystack (async)
+    syncPaystackSubaccount(merchant.id).catch(() => {});
 
     return res.json({
       success: true,

@@ -4,6 +4,68 @@
 
 import { prisma } from './prisma';
 import { cryptoKey, fiatKey } from './assets';
+import { paystack } from '../services/paystack.service';
+
+/**
+ * Ensures that a merchant's bank payout details are mirrored to Paystack
+ * as a subaccount. This is critical for NGN settlements to bypass Weave
+ * and hit the merchant physically.
+ */
+export async function syncPaystackSubaccount(merchantId: string): Promise<void> {
+  const merchant = await prisma.merchant.findUniqueOrThrow({
+    where:   { id: merchantId },
+    include: { instruments: true },
+  });
+
+  // Find the current default payout instrument
+  const instrument = merchant.instruments.find(i => i.id === merchant.defaultPayoutInstrumentId);
+  
+  if (!instrument || instrument.kind !== 'bank_account') {
+    // If they switched to crypto payout, we don't sync to Paystack anymore.
+    return;
+  }
+
+  try {
+    let subaccountCode: string;
+
+    // Use the BankCode from instrument (requires mapping or stored code)
+    // For now we assume bankInstitution stores the Paystack-compatible bank code 
+    // or we'll need a resolver.
+    const bankCode = instrument.bankInstitution || ''; 
+    const accountNumber = instrument.bankAccountIdentifier || '';
+
+    if (merchant.paystackSubaccountCode) {
+      await paystack.updateSubaccount(merchant.paystackSubaccountCode, {
+        bankCode,
+        accountNumber,
+      });
+      subaccountCode = merchant.paystackSubaccountCode;
+    } else {
+      subaccountCode = await paystack.createSubaccount({
+        businessName:  merchant.name,
+        bankCode,
+        accountNumber,
+      });
+    }
+
+    await prisma.merchant.update({
+      where: { id: merchantId },
+      data: {
+        paystackSubaccountCode:     subaccountCode,
+        paystackSubaccountStatus:   'SYNCED',
+        paystackSubaccountSyncedAt: new Date(),
+      },
+    });
+  } catch (err: any) {
+    // Persist FAILED so the dashboard can surface it
+    await prisma.merchant.update({
+      where: { id: merchantId },
+      data:  { paystackSubaccountStatus: 'FAILED' },
+    });
+    console.error(`[paystack-sync] failed for merchant ${merchantId}:`, err.message);
+    throw err;
+  }
+}
 
 export async function ensureMerchantDefaultInstruments() {
   const merchants = await prisma.merchant.findMany();

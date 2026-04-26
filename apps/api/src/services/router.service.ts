@@ -6,7 +6,7 @@
 import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
 
-export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack';
 
 // Which checkout flow the caller is in. 'self' means the user signs with a
 // connected wallet (ChainRails can do this once it's fully wired). 'external'
@@ -55,6 +55,16 @@ type Edge = {
 const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM'];
 
 const EDGES: Edge[] = [
+  // Paystack: Direct NGN to NGN.
+  {
+    provider:       'paystack',
+    from:           (a) => a.kind === 'fiat' && a.currency === 'NGN',
+    to:             (a) => a.kind === 'fiat' && a.currency === 'NGN',
+    expectedFeeBps: 150, // 1.5% baseline
+    expectedSecs:   30,
+    note:           'paystack (domestic NGN transfer)',
+    flows:          ['external'],
+  },
   // Paycrest offramp: any supported EVM USDC → fiat. Terminal edge; flow-agnostic.
   {
     provider:       'paycrest',
@@ -154,7 +164,7 @@ export function planRoute(req: RouteRequest): RoutePlan {
         if (seen.has(nextKey) && nextKey !== req.destAsset) continue;
         const nextAsset = parseAsset(nextKey);
         if (!edge.to(nextAsset)) continue;
-        if (cur.key === nextKey) continue;
+        if (cur.key === nextKey && edge.provider !== 'paystack') continue;
 
         const step: RoutePlanStep = {
           provider:       edge.provider,
@@ -173,14 +183,17 @@ export function planRoute(req: RouteRequest): RoutePlan {
     }
   }
 
+  console.log(`[router] NO ROUTE FOUND for ${req.sourceAsset} -> ${req.destAsset}`);
   throw new Error(`no route from ${req.sourceAsset} to ${req.destAsset}`);
 }
 
 function summarize(steps: RoutePlanStep[]): RoutePlan {
-  return {
+  const plan = {
     steps,
     totalExpectedFeeBps: steps.reduce((s, x) => s + (x.expectedFeeBps ?? 0), 0),
     totalExpectedSecs:   steps.reduce((s, x) => s + (x.expectedSecs   ?? 0), 0),
     summary:             steps.map(s => `${s.provider}:${s.fromAsset}→${s.toAsset}`).join(' · '),
   };
+  console.log(`[router] planned: ${plan.summary}`);
+  return plan;
 }
