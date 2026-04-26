@@ -181,7 +181,7 @@ export default async function Page() {
       {/* Top bar — greeting left, utility icons + CTAs right */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
         <div className="fade-up">
-          <h1 className="font-display text-[44px] lg:text-[52px] font-semibold leading-[1.05] text-ink tracking-tight">
+          <h1 className="font-display text-[32px] sm:text-[44px] lg:text-[52px] font-semibold leading-[1.05] text-ink tracking-tight">
             {greeting()}, {merchantFirstName(merchantName)}
           </h1>
           <p className="text-ink-muted text-[15px] mt-2">
@@ -386,10 +386,10 @@ export default async function Page() {
               <thead>
                 <tr className="text-ink-muted text-[11px] tracking-[0.14em] uppercase">
                   <th className="py-4 px-6 font-semibold font-body">Customer</th>
-                  <th className="py-4 px-6 font-semibold font-body">Date</th>
+                  <th className="hidden sm:table-cell py-4 px-6 font-semibold font-body">Date</th>
                   <th className="py-4 px-6 font-semibold font-body">Amount</th>
                   <th className="py-4 px-6 font-semibold font-body">Status</th>
-                  <th className="py-4 px-6 font-semibold font-body text-right">Action</th>
+                  <th className="hidden sm:table-cell py-4 px-6 font-semibold font-body text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -409,10 +409,10 @@ export default async function Page() {
                           <div className={`w-9 h-9 rounded-full flex items-center justify-center font-semibold text-[11px] ${tone}`}>
                             {avatarInitials(o)}
                           </div>
-                          <p className="font-medium text-ink text-[14px]">{counterpartyName(o)}</p>
+                          <p className="font-medium text-ink text-[14px] truncate max-w-[100px] sm:max-w-none">{counterpartyName(o)}</p>
                         </Link>
                       </td>
-                      <td className="py-4 px-6 text-ink-muted text-[14px]">{formatWhen(o.createdAt)}</td>
+                      <td className="hidden sm:table-cell py-4 px-6 text-ink-muted text-[14px]">{formatWhen(o.createdAt)}</td>
                       <td className="py-4 px-6 font-semibold text-ink tabular-nums text-[14px]">
                         {(o.sourceAmount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: dp })}
                         <span className="text-ink-muted font-normal ml-1">{tick}</span>
@@ -423,7 +423,7 @@ export default async function Page() {
                           {status.label}
                         </span>
                       </td>
-                      <td className="py-4 px-6 text-right">
+                      <td className="hidden sm:table-cell py-4 px-6 text-right">
                         <Link
                           href={`/transactions/${o.id}`}
                           className="text-ink-muted hover:text-forest-deep opacity-0 group-hover:opacity-100 transition-all text-[13px] font-medium"
