@@ -16,6 +16,7 @@ const STATUS_META: Record<string, { tone: string; label: string; icon: React.Com
   in_flight:        { tone: 'bg-tan-mist text-tan-deep',           label: 'In flight',  icon: Loader2 },
   refunded:         { tone: 'bg-cream-deep text-ink-soft',         label: 'Refunded',   icon: CheckCircle2 },
   failed:           { tone: 'bg-terracotta-soft text-terracotta',  label: 'Failed',     icon: XCircle },
+  expired:          { tone: 'bg-terracotta-soft text-terracotta',  label: 'Expired',    icon: XCircle },
   done:             { tone: 'bg-forest-surface text-forest-deep',  label: 'Done',       icon: CheckCircle2 },
   pending:          { tone: 'bg-cream-deep text-ink-muted',        label: 'Pending',    icon: Clock },
 };

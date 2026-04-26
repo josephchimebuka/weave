@@ -34,6 +34,7 @@ const STATUS_PALETTE: Record<string, { chip: string; dot: string; label: string 
   awaiting_deposit: { chip: 'bg-tan-mist text-tan-deep', dot: 'bg-tan', label: 'Awaiting' },
   refunded: { chip: 'bg-cream-deep text-ink-soft', dot: 'bg-ink-muted', label: 'Refunded' },
   failed: { chip: 'bg-terracotta-soft text-terracotta', dot: 'bg-terracotta', label: 'Failed' },
+  expired: { chip: 'bg-terracotta-soft text-terracotta', dot: 'bg-terracotta', label: 'Expired' },
 };
 
 function counterpartyName(order: Order): string {

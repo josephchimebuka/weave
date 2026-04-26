@@ -20,6 +20,7 @@ const STATUS_PALETTE: Record<string, StatusTone> = {
   awaiting_deposit: { bg: 'bg-tan-mist', dot: 'bg-tan', text: 'text-tan-deep', label: 'Awaiting' },
   refunded: { bg: 'bg-cream-deep', dot: 'bg-ink-muted', text: 'text-ink-soft', label: 'Refunded' },
   failed: { bg: 'bg-terracotta-soft', dot: 'bg-terracotta', text: 'text-terracotta', label: 'Failed' },
+  expired: { bg: 'bg-terracotta-soft', dot: 'bg-terracotta', text: 'text-terracotta', label: 'Expired' },
 };
 
 const AVATAR_TONES = [
