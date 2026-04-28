@@ -209,12 +209,6 @@ model RouteStep {
   startedAt      DateTime?
   completedAt    DateTime?
 
-  // Paystack-specific. Null for all other providers.
-  paystackDvaBank  String?   // e.g. "Wema Bank" — shown in widget
-  paystackDvaAcct  String?   // account number — shown in widget
-  paystackDvaRef   String?   // reference sent to Paystack, e.g. "order-uuid-0"
-  dvaExpiresAt     DateTime? // when to deactivate if unpaid
-
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 

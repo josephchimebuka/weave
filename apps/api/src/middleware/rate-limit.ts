@@ -29,7 +29,7 @@ export function rateLimit(options: RateLimitOptions) {
     const key = `${keyPrefix}:${role}:${ip}`;
 
     // ── Bypass & Special Handling ───────────────────────────────────────────
-    
+
     // 1. Critical session polling bypass
     if (req.path.endsWith('/auth/session')) {
       return next();
@@ -38,6 +38,18 @@ export function rateLimit(options: RateLimitOptions) {
     // 2. Dashboards are state-heavy. Authenticated GET requests from the
     // dashboard are exempted from the global limit to prevent auto-refresh lockout.
     if (role === 'dashboard' && req.method === 'GET') {
+      return next();
+    }
+
+    // 3. /orders — order creation and status polling must never be rate-limited.
+    //    The widget polls GET /orders/:id every few seconds during an active
+    //    checkout; capping it would break payment confirmation for real users.
+    if (req.path.startsWith('/v1/orders')) {
+      return next();
+    }
+
+    // 4. /assets — static supported-asset list, safe to call freely.
+    if (req.path.startsWith('/v1/assets')) {
       return next();
     }
 
@@ -84,7 +96,7 @@ export const authLimiter = rateLimit({
 
 export const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 300, // 300 requests per minute
+  max: 360,
   keyPrefix: 'api-limit',
 });
 

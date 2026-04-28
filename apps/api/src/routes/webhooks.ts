@@ -86,7 +86,9 @@ router.post('/paycrest', async (req: Request, res: Response) => {
 // POST /api/v1/webhooks/paystack
 router.post('/paystack', async (req: Request, res: Response) => {
   const signature = (req.headers['x-paystack-signature'] as string) ?? '';
-  const rawBody   = (req as any).rawBody || '';
+  // express.raw() already ran for /webhooks/* — req.body is a Buffer here,
+  // same as the Paycrest and ChainRails handlers above.
+  const rawBody   = (req.body as Buffer).toString();
 
   if (!paystack.verifyWebhookSignature(rawBody, signature)) {
     console.warn(`[webhook] paystack signature mismatch`);

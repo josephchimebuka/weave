@@ -4,7 +4,6 @@ import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
-import { paystack } from '../services/paystack.service';
 
 const router = Router();
 
@@ -43,17 +42,50 @@ const verifyQStash = async (req: Request, res: Response, next: Function) => {
 
 // ── Webhook Processing Job ──────────────────────────────────────────────────
 
-
-
 const CHAINRAILS_OUTCOME: Record<string, 'done' | 'failed' | 'progress'> = {
   'intent.completed': 'done',
-  'intent.refunded':  'failed',
-  'intent.expired':   'failed',
+  'intent.refunded': 'failed',
+  'intent.expired': 'failed',
 };
 
 router.post('/process-webhook', verifyQStash, async (req, res) => {
   const { source, event, data } = req.body;
 
+  // ── Paystack DVA bank transfers ────────────────────────────────────────────
+  // DVA payments are matched by virtual account number from the webhook, not
+  // by a reference we set at order creation (which is unknown to Paystack).
+  if (source === 'paystack') {
+    if (event !== 'charge.success') {
+      return res.status(200).json({ skipped: true, reason: 'unhandled event' });
+    }
+
+    const txRef = String(data?.reference ?? '');
+    if (!txRef) return res.status(200).json({ skipped: true, reason: 'missing reference' });
+
+    const logKey = { source_event_externalId: { source, event, externalId: txRef } };
+    const existing = await prisma.webhookLog.findUnique({ where: logKey });
+    if (existing?.processed) return res.status(200).json({ skipped: true, reason: 'already processed' });
+
+    // Popup flow: reference = our paystackRef stored in externalId
+    let step = await prisma.routeStep.findFirst({
+      where: { provider: 'paystack', externalId: txRef },
+      select: { id: true, orderId: true, externalId: true },
+    });
+
+    if (!step) return res.status(200).json({ skipped: true, reason: 'no step found' });
+
+    await markStepDone({ provider: 'paystack', externalId: step.externalId! });
+
+    await prisma.webhookLog.upsert({
+      where: logKey,
+      create: { orderId: step.orderId, source, event, externalId: txRef, payload: data, processed: true },
+      update: { processed: true },
+    });
+
+    return res.json({ success: true });
+  }
+
+  // ── Paycrest + ChainRails ──────────────────────────────────────────────────
   const externalId = String(
     source === 'chainrails' ? (data?.data?.id ?? '') : (data?.data?.id ?? data?.id ?? data?.reference ?? '')
   );
@@ -62,20 +94,15 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
   let outcome: 'done' | 'failed' | 'progress' = 'progress';
 
   if (source === 'paycrest') {
-    const payload = data?.data ?? data; 
+    const payload = data?.data ?? data;
     const direction = payload?.direction || '';
 
     if (['payment_order.validated', 'payment_order.settled', 'payment_order.completed', 'payment_order.paid'].includes(event)) {
-      // Documentation rules:
       if (direction === 'offramp' && event === 'payment_order.validated') outcome = 'done';
       else if (event === 'payment_order.settled') outcome = 'done';
       else if (event === 'payment_order.completed' || event === 'payment_order.paid') outcome = 'done';
     } else if (['payment_order.failed', 'payment_order.expired', 'payment_order.refunded'].includes(event)) {
       outcome = 'failed';
-    }
-  } else if (source === 'paystack') {
-    if (event === 'charge.success') {
-      outcome = 'done';
     }
   } else {
     outcome = CHAINRAILS_OUTCOME[event] ?? 'progress';
@@ -102,35 +129,12 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
   }
 
   await prisma.webhookLog.upsert({
-    where:  logKey,
+    where: logKey,
     create: { orderId: step.orderId, source, event, externalId, payload: data, processed: true },
     update: { processed: true },
   });
 
   res.json({ success: true });
-});
-
-// POST /api/v1/jobs/cleanup-expired-dva
-router.post('/cleanup-expired-dva', verifyQStash, async (req, res) => {
-  const expiredSteps = await prisma.routeStep.findMany({
-    where: {
-      paystackDvaAcct: { not: null },
-      dvaExpiresAt:    { lt: new Date() },
-      status:          { not: 'done' },
-    } as any,
-  });
-
-  for (const step of expiredSteps) {
-    try {
-      await paystack.deactivateDVA((step as any).paystackDvaAcct!);
-      await prisma.routeStep.update({
-        where: { id: step.id },
-        data:  { status: 'failed', paystackDvaAcct: null } as any,
-      });
-    } catch { /* skip err for this loop */ }
-  }
-
-  res.json({ success: true, cleaned: expiredSteps.length });
 });
 
 // ── Outgoing Webhook Job ────────────────────────────────────────────────────
@@ -153,7 +157,7 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
   const openStepsCount = await prisma.routeStep.count({
     where: {
       provider: 'nearintents',
-      status:   { notIn: ['done', 'failed'] },
+      status: { notIn: ['done', 'failed'] },
       depositAddress: { not: null },
     },
   });
@@ -165,7 +169,7 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
   const openSteps = await prisma.routeStep.findMany({
     where: {
       provider: 'nearintents',
-      status:   { notIn: ['done', 'failed'] },
+      status: { notIn: ['done', 'failed'] },
       depositAddress: { not: null },
     },
     take: 15,
@@ -192,7 +196,7 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
 
 router.post('/cleanup-expired', verifyQStash, async (req, res) => {
   const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
-  
+
   const result = await prisma.order.updateMany({
     where: {
       status: 'awaiting_deposit',
@@ -200,7 +204,7 @@ router.post('/cleanup-expired', verifyQStash, async (req, res) => {
     },
     data: { status: 'expired' }
   });
-  
+
   res.json({ success: true, count: result.count });
 });
 

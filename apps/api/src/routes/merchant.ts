@@ -165,13 +165,16 @@ router.get('/payouts', requireSession, async (req, res) => {
     return res.json({
       success: true,
       data: {
-        id:                    inst.id,
-        kind:                  inst.kind,
-        assetKey:              inst.assetKey,
-        bankInstitution:       inst.bankInstitution,
-        bankAccountIdentifier: inst.bankAccountIdentifier,
-        bankAccountName:       inst.bankAccountName,
-        walletAddress:         inst.walletAddress,
+        id:                          inst.id,
+        kind:                        inst.kind,
+        assetKey:                    inst.assetKey,
+        bankInstitution:             inst.bankInstitution,
+        bankAccountIdentifier:       inst.bankAccountIdentifier,
+        bankAccountName:             inst.bankAccountName,
+        walletAddress:               inst.walletAddress,
+        paystackSubaccountStatus:    merchant.paystackSubaccountStatus,
+        paystackSubaccountCode:      merchant.paystackSubaccountCode,
+        paystackSubaccountSyncedAt:  merchant.paystackSubaccountSyncedAt,
       },
     });
   } catch (err: any) {

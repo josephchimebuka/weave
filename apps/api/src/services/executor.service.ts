@@ -37,9 +37,8 @@ export interface ExecutorInput {
   destWallet?: string;  // crypto dest
 }
 
-// Minimum unit for a user-facing step that needs UI.
 export interface FirstStepAction {
-  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_bank_transfer';
+  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup';
   depositAddress?: string;                // crypto
   depositMemo?: string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
   amount?: number;                // crypto
@@ -52,10 +51,10 @@ export interface FirstStepAction {
     amountToTransfer: string;
     currency: string;
   };
-  paystackDetails?: {
-    bankName: string;
-    accountNumber: string;
-    amount: number;
+  paystackPopupDetails?: {
+    accessCode: string;
+    publicKey: string;
+    amount: number;       // gross NGN — shown to payer
     reference: string;
   };
   expiresAt?: string;
@@ -292,33 +291,23 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
     // Reconstruct nextAction from stored data
     const from = parseAsset(first.fromAsset);
-    const nextAction: FirstStepAction = from.kind === 'crypto'
-      ? {
-        screen: 'collect_crypto',
-        depositAddress: first.depositAddress ?? undefined,
-        depositMemo: first.depositMemo ?? undefined,
-        amount: first.amountIn ?? input.sourceAmount,
-        token: from.token,
-        chain: from.chain,
-        expiresAt: undefined, // We don't store expiresAt in RouteStep yet
-      }
-      : {
-        screen: 'collect_fiat',
-        bankDetails: {
-          institution: '', // Minimal reconstruction; usually handled by resuming widget state
-          accountIdentifier: '',
-          accountName: '',
-          amountToTransfer: String((first as any).paystackDvaAcct || first.amountOut || 0),
-          currency: from.currency,
-        },
-        paystackDetails: first.provider === 'paystack' ? {
-          bankName: (first as any).paystackDvaBank || '',
-          accountNumber: (first as any).paystackDvaAcct || '',
-          amount: first.amountOut || 0, // gross amount is stored in amountOut for the user-facing step
-          reference: (first as any).paystackDvaRef || '',
-        } : undefined,
-        expiresAt: (first as any).dvaExpiresAt?.toISOString(),
-      };
+    const nextAction: FirstStepAction = {
+      screen: first.provider === 'paystack' ? 'paystack_popup' : (from.kind === 'crypto' ? 'collect_crypto' : 'collect_fiat'),
+      depositAddress: first.depositAddress ?? undefined,
+      depositMemo: first.depositMemo ?? undefined,
+      amount: Number(first.amountIn || input.sourceAmount),
+      token: from.kind === 'crypto' ? from.token : '',
+      chain: from.kind === 'crypto' ? from.chain : '',
+      bankDetails: (from.kind === 'fiat' && first.provider !== 'paystack') ? {
+        institution: '',
+        accountIdentifier: '',
+        accountName: '',
+        amountToTransfer: String(first.amountOut || 0),
+        currency: from.currency,
+      } : undefined,
+      paystackPopupDetails: first.provider === 'paystack' ? (first as any).paystackPopupDetails : undefined,
+      expiresAt: '',
+    };
 
     const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
     const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
@@ -355,59 +344,56 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     let exec: StepExecution;
 
     if (step.provider === 'paystack') {
-      // 1. Guard: Merchant must have a SYNCED Paystack subaccount
+      // Guard: merchant must have a SYNCED subaccount so funds route to their bank
       const merchant = await prisma.merchant.findUniqueOrThrow({
         where: { id: input.merchantId },
       });
-
-      if ((merchant as any).paystackSubaccountStatus !== 'SYNCED') {
+      if (merchant.paystackSubaccountStatus !== 'SYNCED') {
         throw new Error(
-          `Merchant ${input.merchantId} Paystack subaccount not synced. Status: ${(merchant as any).paystackSubaccountStatus}`
+          `Merchant ${input.merchantId} Paystack subaccount not synced. Status: ${merchant.paystackSubaccountStatus}`
         );
       }
 
-      // 2. Resolve Rate & Gross-up
-      // Note: order.quoteRate (snapshot) might be null if no fiat was involved in original quote? 
-      // But Paystack IS fiat, so we expect a rate.
-      const rate = input.destAmountFiat ? (input.destAmountFiat / input.usdEquivalent) : 1200; // fallback just in case
+      // Gross-up: payer pays net + Paystack fee so the merchant receives exactly amountIn
+      const rate = input.destAmountFiat ? (input.destAmountFiat / input.usdEquivalent) : 1500;
+      const { chargeAmountNgn, feeUsd, weaveFeeNgn, paystackFeeNgn } = paystack.grossUp(amountIn, rate);
 
-      const { chargeAmountNgn, feeUsd } = paystack.grossUp(amountIn, rate);
+      const paystackRef = `${input.orderId}-${i}`;
 
-      // 3. Provision Customer (Paystack dedupes by email)
-      // We don't have payer name/email here? I need to add them to ExecutorInput or fetch from order.
-      const order = await prisma.order.findUniqueOrThrow({ where: { id: input.orderId } });
-      const customerCode = await paystack.createOrFetchCustomer({
-        email: 'payer@weave.dev', // Fallback for v1 if we don't store payer data in Order
-        firstName: 'Weave',
-        lastName: 'Customer',
+      // Initialize a standard Paystack transaction with a Split.
+      // Weave takes its app fee (main account), Merchant gets target + paystack fee (subaccount).
+      // Since bearer_type is subaccount, Paystack takes its cut from the merchant's share.
+      const txn = await paystack.initializeTransaction({
+        email: 'admin@dewdroplabs.com',
+        amountNgn: chargeAmountNgn,
+        reference: paystackRef,
+        split: {
+          type: 'flat',
+          bearer_type: 'subaccount',
+          subaccounts: [
+            {
+              subaccount: merchant.paystackSubaccountCode!,
+              share: Math.round((amountIn + paystackFeeNgn) * 100)
+            }
+          ]
+        },
       });
-
-      // 4. Assign DVA
-      const dva = await paystack.createDVA({
-        customerCode,
-        preferredBank: 'wema-bank',
-      });
-
-      const paystackDvaRef = `${input.orderId}-${i}`;
-      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
       exec = {
-        externalId: paystackDvaRef,
-        amountIn: amountIn,
-        amountOut: chargeAmountNgn, // gross-up amount the user pays
-        depositAddress: dva.accountNumber,
+        externalId: paystackRef,
+        amountIn,
+        amountOut: amountIn,
+        depositAddress: null,
         depositMemo: null,
-        expiresAt: expiresAt.toISOString(),
+        expiresAt: null,
         feeUsd,
-        note: `Paystack DVA: ${dva.bankName} ${dva.accountNumber}`,
       };
 
-      // Store DVA specifics in the execution so the transaction persists them
-      (exec as any).paystackDetails = {
-        bankName: dva.bankName,
-        accountNumber: dva.accountNumber,
-        reference: paystackDvaRef,
-        expiresAt,
+      (exec as any).paystackPopupDetails = {
+        accessCode: txn.access_code,
+        publicKey: process.env.PAYSTACK_PUBLIC_KEY || '',
+        amount: chargeAmountNgn,
+        reference: paystackRef,
       };
     } else if (step.provider === 'paycrest') {
       if (!input.refundAccount) throw new Error('paycrest onramp requires refundAccount');
@@ -501,8 +487,8 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       }
       : firstStep.provider === 'paystack'
         ? {
-          screen: 'paystack_bank_transfer',
-          paystackDetails: (firstExec as any).paystackDetails,
+          screen: 'paystack_popup',
+          paystackPopupDetails: (firstExec as any).paystackPopupDetails,
           expiresAt: firstExec.expiresAt ?? undefined,
         }
         : {
@@ -656,6 +642,16 @@ export async function syncOrder(orderId: string) {
           await markStepDone({ provider: 'paycrest', externalId: step.externalId, amountOut: Number(pc.amount) });
         } else if (isFailed || isRefund) {
           await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund });
+        }
+      } else if (step.provider === 'paystack' && step.externalId) {
+        console.log(`[sync] checking paystack step ${step.id} for ref ${step.externalId}`);
+        const ps = await paystack.verifyTransaction(step.externalId);
+        console.log(`[sync] paystack status for ${step.id}: ${ps.status}`);
+
+        if (ps.status === 'success') {
+          await markStepDone({ provider: 'paystack', externalId: step.externalId, amountOut: ps.amount / 100 });
+        } else if (['failed', 'abandoned'].includes(ps.status)) {
+          await markStepFailed({ provider: 'paystack', externalId: step.externalId });
         }
       }
     } catch (err: any) {

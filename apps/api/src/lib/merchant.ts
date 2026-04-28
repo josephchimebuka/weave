@@ -28,11 +28,10 @@ export async function syncPaystackSubaccount(merchantId: string): Promise<void> 
   try {
     let subaccountCode: string;
 
-    // Use the BankCode from instrument (requires mapping or stored code)
-    // For now we assume bankInstitution stores the Paystack-compatible bank code 
-    // or we'll need a resolver.
-    const bankCode = instrument.bankInstitution || ''; 
     const accountNumber = instrument.bankAccountIdentifier || '';
+    // Resolve to Paystack's numeric bank code — tries direct, slug, and SWIFT lookup
+    // against the live /bank list (cached 24 h).
+    const bankCode = await paystack.resolveBankCode(instrument.bankInstitution || '');
 
     if (merchant.paystackSubaccountCode) {
       await paystack.updateSubaccount(merchant.paystackSubaccountCode, {

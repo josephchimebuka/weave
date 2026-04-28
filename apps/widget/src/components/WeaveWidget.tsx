@@ -71,9 +71,10 @@ interface Currency {
   method: string;
 }
 
-interface PaystackDetails {
-  bankName: string;
-  accountNumber: string;
+
+interface PaystackPopupDetails {
+  accessCode: string;
+  publicKey: string;
   amount: number;
   reference: string;
 }
@@ -744,75 +745,90 @@ function WeavingLoader() {
   );
 }
 
-function ScreenPaystackBankTransfer({
-  onNext, merchant, details, apiKey, orderId, currencies, fmtCur
+
+function ScreenPaystackPopup({
+  onNext,
+  details,
 }: {
   onNext: (s: string) => void;
-  merchant: Merchant;
-  details: PaystackDetails | null;
-  apiKey: string;
-  orderId: string | null;
-  currencies: Record<string, Currency>;
-  fmtCur: (n: number, cur: string) => string;
+  details: PaystackPopupDetails | null;
 }) {
-  const [timeLeft, setTimeLeft] = useState(1800); // 30m
-  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const launched = useRef(false);
 
-  useEffect(() => {
-    const timer = setInterval(() => setTimeLeft(t => Math.max(0, t - 1)), 1000);
-    return () => clearInterval(timer);
-  }, []);
+  const launch = () => {
+    if (!details) { setError('Payment details unavailable. Please retry.'); setLoading(false); return; }
+    const { accessCode } = details;
 
-  const copy = (val: string) => {
-    navigator.clipboard.writeText(val);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const open = () => {
+      if (launched.current) return;
+      launched.current = true;
+      setLoading(false);
+      const Pop = (window as any).PaystackPop;
+      if (!Pop) {
+        setError('Paystack failed to load. Please check your connection and retry.');
+        launched.current = false;
+        return;
+      }
+      const popup = new Pop();
+      popup.resumeTransaction(accessCode, {
+        onSuccess: () => onNext('processing'),
+        onCancel:  () => { launched.current = false; },
+      });
+    };
+
+    if ((window as any).PaystackPop) { open(); return; }
+
+    const script = document.createElement('script');
+    script.src = 'https://js.paystack.co/v2/inline.js';
+    script.onload = open;
+    script.onerror = () => {
+      setLoading(false);
+      setError('Could not load Paystack. Check your network and try again.');
+    };
+    document.head.appendChild(script);
   };
 
-  const m = Math.floor(timeLeft / 60);
-  const s = timeLeft % 60;
+  useEffect(() => { launch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!details) return <div style={{ padding: 40, textAlign: 'center' }}><WeavingLoader /></div>;
+  if (loading) {
+    return (
+      <Stack gap={24} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            border: `3px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent,
+            animation: 'wspin 0.8s linear infinite', margin: '0 auto',
+          }} />
+          <div style={{ marginTop: 14, fontSize: 14, color: WEAVE.mute }}>Opening payment popup…</div>
+        </div>
+      </Stack>
+    );
+  }
+
+  if (error) {
+    return (
+      <Stack gap={16} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.err, padding: '8px 0' }}>{error}</div>
+        <button onClick={() => { launched.current = false; setError(null); setLoading(true); launch(); }} style={primaryBtn}>
+          Retry
+        </button>
+      </Stack>
+    );
+  }
 
   return (
-    <Stack gap={16} style={{ padding: '18px 20px 6px' }}>
-      <Stack gap={4} style={{ textAlign: 'center', padding: '4px 0' }}>
-        <div style={{ fontSize: 13, color: WEAVE.mute }}>Transfer exactly</div>
-        <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.6 }}>{fmtCur(details.amount, 'NGN')}</div>
-        <Pill tone="accent">Bank Transfer</Pill>
-      </Stack>
-
-      <div style={{ background: WEAVE.panel, borderRadius: 12, padding: 16, border: `1px solid ${WEAVE.hair}` }}>
-        <Stack gap={14}>
-          <div onClick={() => copy(details.accountNumber)} style={{ cursor: 'pointer' }}>
-            <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', marginBottom: 4 }}>Account Number</div>
-            <Row justify="space-between">
-              <div style={{ fontSize: 20, fontWeight: 600, fontFamily: 'ui-monospace, monospace' }}>{details.accountNumber}</div>
-              <div style={{ color: WEAVE.accent, fontSize: 12 }}>{copied ? 'Copied!' : 'Copy'}</div>
-            </Row>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', marginBottom: 4 }}>Bank Name</div>
-            <div style={{ fontSize: 16, fontWeight: 500 }}>{details.bankName}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', marginBottom: 4 }}>Account Name</div>
-            <div style={{ fontSize: 16, fontWeight: 500 }}>Weave / {merchant.name}</div>
-          </div>
-        </Stack>
+    <Stack gap={16} style={{ padding: '28px 20px' }}>
+      <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.mute, padding: '12px 0' }}>
+        A Paystack payment popup has opened. Complete payment there to continue.
       </div>
-
-      <div style={{ textAlign: 'center', fontSize: 12, color: WEAVE.mute }}>
-        This account expires in <span style={{ color: WEAVE.warn, fontWeight: 600 }}>{m}:{s < 10 ? '0' + s : s}</span>
-      </div>
-
-      <button onClick={() => onNext('processing')} style={primaryBtn}>
-        I've made the transfer
+      <button
+        onClick={() => { launched.current = false; launch(); }}
+        style={{ ...primaryBtn, background: WEAVE.page, color: WEAVE.ink }}
+      >
+        Re-open popup
       </button>
-
-      <div style={{ fontSize: 11, color: WEAVE.mute, textAlign: 'center' }}>
-        We'll automatically detect your payment and notify the merchant.
-      </div>
     </Stack>
   );
 }
@@ -2004,7 +2020,7 @@ export function WeaveCheckout({
   });
   const [orderId, setOrderId] = useState<string | null>(null);
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
-  const [paystackDetails, setPaystackDetails] = useState<PaystackDetails | null>(null);
+  const [paystackPopupDetails, setPaystackPopupDetails] = useState<PaystackPopupDetails | null>(null);
   const [depositAddress, setDepositAddress] = useState<string | null>(null);
   const [depositMemo, setDepositMemo] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState<number | null>(null);
@@ -2216,7 +2232,6 @@ export function WeaveCheckout({
       setDepositAddress(res.nextAction.depositAddress ?? null);
       setDepositMemo(res.nextAction.depositMemo ?? null);
       setBankDetails(res.nextAction.bankDetails ?? null);
-      setPaystackDetails(res.nextAction.paystackDetails ?? null);
       setDepositAmount(typeof res.nextAction.amount === 'number' ? res.nextAction.amount : null);
       setDepositToken(res.nextAction.token ?? token);
       setDepositChain(res.nextAction.chain ?? apiChain);
@@ -2299,8 +2314,11 @@ export function WeaveCheckout({
       });
       setOrderId(res.order.id);
       setBankDetails(res.nextAction.bankDetails ?? null);
-      setPaystackDetails(res.nextAction.paystackDetails ?? null);
-      setScreen(res.nextAction.screen === 'paystack_bank_transfer' ? 'paystack_vaccount' : 'vaccount');
+      setPaystackPopupDetails(res.nextAction.paystackPopupDetails ?? null);
+      const nextScreen =
+        res.nextAction.screen === 'paystack_popup' ? 'paystack_popup' :
+        'vaccount';
+      setScreen(nextScreen);
     } catch (e: any) {
       setApiError(e.message ?? 'Failed to create order');
       onError?.(e);
@@ -2369,6 +2387,7 @@ export function WeaveCheckout({
     setOrderId(null);
     setApiError(null);
     setBankDetails(null);
+    setPaystackPopupDetails(null);
     setDepositAddress(null);
     setDepositMemo(null);
     setDepositError(null);
@@ -2381,7 +2400,7 @@ export function WeaveCheckout({
     if (isOnramp) {
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
-      if (screen === 'paystack_vaccount') return <ScreenPaystackBankTransfer onNext={advance} merchant={merchant} details={paystackDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'paystack_popup') return <ScreenPaystackPopup onNext={advance} details={paystackPopupDetails} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} />;

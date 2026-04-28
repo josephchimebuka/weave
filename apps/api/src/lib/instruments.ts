@@ -35,11 +35,10 @@ export async function resolveInstrument(
   }
 
   const d = ref.inline;
-  if (d.kind === 'bank_account' && (!d.bankInstitution || !d.bankAccountIdentifier || !d.bankAccountName)) {
-    throw new Error('inline bank_account requires bankInstitution, bankAccountIdentifier, bankAccountName');
-  }
   // walletAddress is optional for crypto_wallet: the 'external' deposit flow
   // does not know the sender's address at order-creation time.
+  // Bank fields are optional for bank_account: Paystack DVA flows don't require
+  // payer bank details. The executor enforces them only when Paycrest needs a refund account.
 
   return prisma.instrument.create({
     data: {

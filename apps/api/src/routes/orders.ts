@@ -42,9 +42,9 @@ router.post('/', requireAuth, async (req, res) => {
       if (!d?.kind || !d?.assetKey) {
         return res.status(400).json({ success: false, error: 'source.inline requires kind and assetKey' });
       }
-      if (d.kind === 'bank_account' && (!d.bankInstitution || !d.bankAccountIdentifier || !d.bankAccountName)) {
-        return res.status(400).json({ success: false, error: 'source.inline bank_account requires bankInstitution, bankAccountIdentifier, bankAccountName' });
-      }
+      // Bank details are optional at this layer — Paystack DVA flows don't need
+      // them (payer just transfers to the DVA). The executor enforces them when
+      // the route requires a Paycrest refund account.
     }
 
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
@@ -310,51 +310,23 @@ router.get('/:id', requireAuth, async (req, res) => {
     let paycrestStatus: string | null = null;
     let nearStatus: string | null = null;
     if (!TERMINAL.has(order.status)) {
-      // Find the earliest not-done step that has a Paycrest externalId — that's
-      // the one currently gating order progress.
-      const activePaycrestStep = order.steps.find((s: any) => s.provider === 'paycrest' && s.status !== 'done' && s.externalId);
-      if (activePaycrestStep?.externalId) {
-        try {
-          const pc = await paycrest.getOrder(activePaycrestStep.externalId);
-          paycrestStatus = pc.status ?? null;
+      const { syncOrder } = await import('../services/executor.service');
+      await syncOrder(order.id);
 
-          const srcKind = parseAsset(order.sourceAssetKey).kind;
-          const map = srcKind === 'fiat' ? PAYCREST_STATUS_ONRAMP : PAYCREST_STATUS_OFFRAMP;
-          const mapped = map[pc.status];
-          if (mapped && mapped !== order.status) {
-            order = await prisma.order.update({
-              where: { id: order.id },
-              data: { status: mapped },
-              include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
-            });
-          }
-        } catch (e: any) {
-          console.warn('paycrest poll failed:', e.message);
-        }
-      }
+      // Re-fetch with fresh status
+      const updated = await prisma.order.findFirst({
+        where: { id: req.params.id, merchantId: req.merchantId },
+        include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
+      });
+      if (updated) {
+        order = updated as any;
 
-      // Same shape for NEAR Intents: safety net for the nearintents_poller
-      // worker so a stale GET-by-id still forces a status sync.
-      const activeNearStep = order.steps.find((s: any) => s.provider === 'nearintents' && s.status !== 'done' && s.depositAddress);
-      if (activeNearStep?.depositAddress) {
-        try {
-          const st = await nearIntents.getStatus(activeNearStep.depositAddress, activeNearStep.depositMemo ?? undefined);
-          nearStatus = st.status;
-          const outcome = classifyNearStatus(st.status);
-          const bridged = outcome === 'done' || order.steps.some((s: any) => s.status === 'done' && s.provider === 'nearintents');
-          const anyFail = outcome === 'failed' || outcome === 'refunded';
-          const nearProcessing = st.status === 'PROCESSING';
-          const nextStatus = outcome === 'refunded' ? 'refunded' : anyFail ? 'failed' : (nearProcessing || bridged) ? 'processing' : order.status;
-          if (nextStatus !== order.status) {
-            order = await prisma.order.update({
-              where: { id: order.id },
-              data: { status: nextStatus },
-              include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
-            });
-          }
-        } catch (e: any) {
-          console.warn('nearintents poll failed:', e.message);
-        }
+        // Backward compatibility for status strings if needed by widget
+        const activePaycrestStep = order?.steps.find((s: any) => s.provider === 'paycrest' && s.externalId);
+        if (activePaycrestStep) paycrestStatus = activePaycrestStep.status;
+
+        const activeNearStep = order?.steps.find((s: any) => s.provider === 'nearintents' && s.depositAddress);
+        if (activeNearStep) nearStatus = activeNearStep.status;
       }
     }
 

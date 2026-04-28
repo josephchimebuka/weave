@@ -114,19 +114,19 @@ export async function sendAdminKYBNotification(verificationId: string) {
             <h3 style="margin-top: 0; font-size: 16px;">Documents</h3>
             <div style="margin-top: 10px;">
               ${(v.documentUrls as any[])?.map(doc => {
-                // Only render URLs that are safe Cloudinary origins
-                const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '';
-                const isSafeUrl = typeof doc.url === 'string' &&
-                  (doc.url.startsWith(`https://res.cloudinary.com/${cloudName}/`) ||
-                   doc.url.startsWith('https://res.cloudinary.com/'));
-                if (!isSafeUrl) return '';
-                return `
+        // Only render URLs that are safe Cloudinary origins
+        const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '';
+        const isSafeUrl = typeof doc.url === 'string' &&
+          (doc.url.startsWith(`https://res.cloudinary.com/${cloudName}/`) ||
+            doc.url.startsWith('https://res.cloudinary.com/'));
+        if (!isSafeUrl) return '';
+        return `
                 <div style="margin-bottom: 8px;">
                   <a href="${escHtml(doc.url)}" target="_blank" rel="noopener noreferrer" style="color: #0F5D4C; font-weight: 600; text-decoration: none;">
                     View ${escHtml(doc.type.replace(/_/g, ' '))} →
                   </a>
                 </div>`;
-              }).join('') || '<p style="color: #9B9FA1;">No documents attached</p>'}
+      }).join('') || '<p style="color: #9B9FA1;">No documents attached</p>'}
             </div>
           </div>
 
@@ -342,14 +342,16 @@ export async function sendMerchantPaymentNotification(orderId: string) {
             
             <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 20px 0;" />
             
-            <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
-              <span style="color: #6B7572;">Order ID</span>
-              <span style="font-weight: 600;">${order.id.slice(0, 8).toUpperCase()}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #6B7572;">Customer</span>
-              <span style="font-weight: 600;">${order.sourceInstrument?.bankAccountName || 'Verified Customer'}</span>
-            </div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <tr>
+                <td style="color: #6B7572; padding-bottom: 12px;">Order ID</td>
+                <td style="font-weight: 600; text-align: right; padding-bottom: 12px;">${order.id.slice(0, 8).toUpperCase()}</td>
+              </tr>
+              <tr>
+                <td style="color: #6B7572;">Customer</td>
+                <td style="font-weight: 600; text-align: right;">${order.sourceInstrument?.bankAccountName || 'Verified Customer'}</td>
+              </tr>
+            </table>
           </div>
           
           <p>The funds have been automatically settled to your designated payout account.</p>
@@ -359,8 +361,8 @@ export async function sendMerchantPaymentNotification(orderId: string) {
             View Transaction details
           </a>
           
-          <p style="font-size: 13px; color: #6B7572; margin-top: 40px; border-top: 1px solid #E8EAE6; pt: 20px;">
-            This email was sent by Weave. If you have any questions, reply to this email or contact support.
+          <p style="font-size: 13px; color: #6B7572; margin-top: 40px; border-top: 1px solid #E8EAE6; padding-top: 20px;">
+            This is an automated notification. Please do not reply to this email. If you have any questions, please contact support.
           </p>
           <p style="font-size: 11px; color: #9B9FA1; text-align: center; margin-top: 24px;">
             Weave is a product of <strong>Dewdrop Labs</strong>.

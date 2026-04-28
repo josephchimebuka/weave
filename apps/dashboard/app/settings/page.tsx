@@ -206,10 +206,17 @@ function SettingsContent() {
         }),
       });
       if (res.ok) {
-        const d = await res.json();
-        setActivePayout(d);
         setPayoutSaved(true);
         setTimeout(() => setPayoutSaved(false), 2000);
+        // The Paystack subaccount sync runs async after the PUT returns, so the
+        // PUT response body won't have the updated status. Re-fetch after a short
+        // delay to pick up the sync result and show the correct badge.
+        setTimeout(() => {
+          fetch('/api/merchant/payouts')
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d) setActivePayout(d); })
+            .catch(() => {});
+        }, 1200);
       }
     } catch {}
     finally { setSavingPayout(false); }
@@ -578,6 +585,25 @@ export default function CheckoutPage() {
                        />
                      </div>
                    </div>
+                )}
+
+                {/* Paystack subaccount sync status — only shown for NGN bank accounts */}
+                {payoutKind === 'bank_account' && activePayout?.paystackSubaccountStatus && (
+                  <div className={`flex items-center gap-2 text-[12px] px-3 py-2 rounded-xl border ${
+                    activePayout.paystackSubaccountStatus === 'SYNCED'
+                      ? 'bg-forest/5 border-forest/20 text-forest-deep'
+                      : activePayout.paystackSubaccountStatus === 'FAILED'
+                      ? 'bg-red-50 border-red-200 text-red-700'
+                      : 'bg-amber-50 border-amber-200 text-amber-700'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      activePayout.paystackSubaccountStatus === 'SYNCED' ? 'bg-forest' :
+                      activePayout.paystackSubaccountStatus === 'FAILED' ? 'bg-red-500' : 'bg-amber-500'
+                    }`} />
+                    {activePayout.paystackSubaccountStatus === 'SYNCED' && 'Paystack settlement active — NGN payments route directly to your bank'}
+                    {activePayout.paystackSubaccountStatus === 'PENDING' && 'Paystack sync pending — save your payout details to activate NGN settlements'}
+                    {activePayout.paystackSubaccountStatus === 'FAILED' && 'Paystack sync failed — re-save your payout details to retry'}
+                  </div>
                 )}
 
                 <div className="pt-4 flex items-center justify-between border-t border-hair-soft">
