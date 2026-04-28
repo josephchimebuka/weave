@@ -52,7 +52,7 @@ type Edge = {
   flows?:         Flow[];
 };
 
-const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM'];
+const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM', 'BSC', 'AVALANCHE'];
 
 const EDGES: Edge[] = [
   // Paycrest offramp: any supported EVM USDC → fiat. Terminal edge; flow-agnostic.
@@ -90,21 +90,12 @@ const EDGES: Edge[] = [
   // fully wired; it never fires today because no caller passes flow: 'self'.
   {
     provider:       'chainrails',
-    from:           (a) => a.kind === 'crypto' && a.token === 'USDC' && EVM_CHAINS.includes(a.chain),
+    from:           (a) => a.kind === 'crypto' && ['USDC', 'ETH', 'USDT', 'DAI', 'BNB'].includes(a.token) && EVM_CHAINS.includes(a.chain),
     to:             (a) => a.kind === 'crypto' && a.token === 'USDC' && a.chain === 'BASE',
     expectedFeeBps: 15,
     expectedSecs:   60,
-    note:           'chainrails USDC bridge → Base',
+    note:           'chainrails bridge → Base USDC',
     flows:          ['self'],
-  },
-  // Direct: same asset, no hop.
-  {
-    provider:       'direct',
-    from:           (a) => a.kind === 'crypto',
-    to:             (a) => a.kind === 'crypto',
-    expectedFeeBps: 0,
-    expectedSecs:   30,
-    note:           'direct crypto transfer',
   },
 ];
 

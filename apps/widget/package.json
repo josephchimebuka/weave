@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.0.0",
+    "@wagmi/core": "^3.4.6",
     "@weave/shared": "workspace:*",
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",

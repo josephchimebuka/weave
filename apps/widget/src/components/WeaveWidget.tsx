@@ -20,6 +20,7 @@ import {
   useAccount, useConnect, useDisconnect, useSwitchChain,
   useWriteContract, useSendTransaction, useBalance, useReadContract,
 } from 'wagmi';
+import { waitForTransactionReceipt } from '@wagmi/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { erc20Abi, formatEther, formatUnits, parseEther, parseUnits } from 'viem';
 import {
@@ -802,7 +803,7 @@ function ScreenProcessing({
     { label: 'Confirming your transfer', sub: `Matching the ${fiatDisplay} from your bank`, dur: 1600 },
     { label: 'Completing payment', sub: `Sending to ${merchant.name}`, dur: 2400 },
   ] : [
-    { label: 'Deposit detected', sub: 'Processing your transaction on-chain', dur: 1400 },
+    { label: 'Confirming transaction', sub: 'Processing your transaction on-chain', dur: 1400 },
     { label: 'Confirming your payment', sub: `Settling ${c?.name || merchant.currency} to ${merchant.name}`, dur: 2600 },
   ];
 
@@ -2140,6 +2141,7 @@ function ScreenWalletSign() {
         <div style={{ fontSize: 12.5, color: WEAVE.mute, textAlign: 'center', maxWidth: 260, lineHeight: 1.6 }}>
           Check your wallet extension or app and approve the transaction to send funds.
         </div>
+        <a href="ethereum:" style={{ fontSize: 13, color: WEAVE.accent, textDecoration: 'none', fontWeight: 500, marginTop: 12 }}>Open wallet</a>
       </Stack>
     </Stack>
   );
@@ -2204,6 +2206,10 @@ function WeaveCheckoutInner({
   // Wagmi wallet hooks
   const { address: wagmiAddress, chainId: wagmiChainId, isConnected: wagmiConnected } = useAccount();
   const { disconnect: wagmiDisconnect } = useDisconnect();
+  const disconnect = () => {
+    wagmiDisconnect();
+    localStorage.clear();
+  };
   const { writeContractAsync } = useWriteContract();
   const { sendTransactionAsync } = useSendTransaction();
 
@@ -2626,8 +2632,9 @@ function WeaveCheckoutInner({
         // Self flow: prompt wallet to sign the transfer to the ChainRails intent address
         setScreen('walletSign');
         const sourceAmt = res.order.sourceAmount;
+        let hash: `0x${string}`;
         if (token === 'ETH') {
-          await sendTransactionAsync({
+          hash = await sendTransactionAsync({
             to: depositAddr as `0x${string}`,
             value: parseEther(sourceAmt.toString()),
             chainId: wagmiChainId!,
@@ -2637,13 +2644,22 @@ function WeaveCheckoutInner({
             ? USDC_BY_CHAIN_ID[wagmiChainId!]
             : USDT_BY_CHAIN_ID[wagmiChainId!];
           if (!tokenAddr) throw new Error(`${token} is not available on this chain`);
-          await writeContractAsync({
+          hash = await writeContractAsync({
             address: tokenAddr,
             abi: erc20Abi,
             functionName: 'transfer',
             args: [depositAddr as `0x${string}`, parseUnits(sourceAmt.toString(), 6)],
             chainId: wagmiChainId!,
           });
+        }
+        // Wait for on-chain confirmation before moving to processing screen.
+        // We timeout after 60s to avoid hanging if the txn is stuck in mempool.
+        try {
+          await waitForTransactionReceipt(wagmiConfig, { hash, timeout: 60000 });
+        } catch (err: any) {
+          console.warn('[widget] transaction wait timed out or failed:', err.message);
+          // We continue to processing screen anyway; the backend will eventually see it
+          // OR the user will see it's still awaiting deposit.
         }
       } else {
         setDepositAddress(depositAddr ?? null);
@@ -2744,7 +2760,7 @@ function WeaveCheckoutInner({
         onClose={() => { setClosed(true); onClose?.(); }}
         showBack={showBack}
         onBack={() => {
-          if (screen === 'walletAsset') wagmiDisconnect();
+          if (screen === 'walletAsset') disconnect();
           setScreen(backTarget);
         }}
       />

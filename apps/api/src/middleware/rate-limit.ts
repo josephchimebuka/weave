@@ -30,8 +30,10 @@ export function rateLimit(options: RateLimitOptions) {
 
     // ── Bypass & Special Handling ───────────────────────────────────────────
     
-    // 1. Critical session polling bypass
-    if (req.path.endsWith('/auth/session')) {
+    // 1. Critical polling bypass (session, orders, quotes)
+    const isOrderPoll = req.method === 'GET' && /\/orders\/[0-9a-fA-F-]+$/.test(req.path);
+    const isQuotePoll = req.method === 'GET' && req.path.includes('/v1/quotes');
+    if (req.path.endsWith('/auth/session') || isOrderPoll || isQuotePoll) {
       return next();
     }
 
@@ -84,7 +86,7 @@ export const authLimiter = rateLimit({
 
 export const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 300, // 300 requests per minute
+  max: 360, // 360 requests per minute
   keyPrefix: 'api-limit',
 });
 

@@ -45,6 +45,8 @@ const verifyQStash = async (req: Request, res: Response, next: Function) => {
 
 
 const CHAINRAILS_OUTCOME: Record<string, 'done' | 'failed' | 'progress'> = {
+  'intent.funded':    'progress',
+  'intent.initiated': 'progress',
   'intent.completed': 'done',
   'intent.refunded':  'failed',
   'intent.expired':   'failed',
@@ -94,6 +96,9 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
     await markStepDone({ provider: source, externalId, amountOut });
   } else if (outcome === 'failed') {
     await markStepFailed({ provider: source, externalId });
+  } else if (outcome === 'progress') {
+    const { markStepProgress } = await import('../services/executor.service');
+    await markStepProgress({ provider: source, externalId });
   }
 
   await prisma.webhookLog.upsert({
