@@ -161,7 +161,7 @@ export default function DemoPage() {
   }, [fiatAccount, fiatBank]);
 
   return (
-    <div className="min-h-screen bg-[#F5F4EF] flex flex-col font-sans text-[#0B0F0E] overflow-hidden w-full relative">
+    <div className="min-h-screen h-full bg-[#F5F4EF] flex flex-col font-sans text-[#0B0F0E] overflow-hidden w-full relative ">
 
       <WovenBackground />
       {/* Top Nav */}
@@ -187,21 +187,20 @@ export default function DemoPage() {
       </header>
 
       {/* Main Content */}
-      <main className="z-50 max-w-[1280px] w-full mx-auto px-6 md:px-14 py-10 flex-1 grid grid-cols-1 lg:grid-cols-2 gap-12 items-start overflow-hidden">
+      <main className="z-50 h-full max-w-[1280px] w-full mx-auto px-6 md:px-14 py-10 flex-1  gap-12 items-start overflow-hidden">
+        <div className="flex flex-col gap-2 mb-4">
+          <h1 className="text-4xl font-serif font-medium tracking-tight">
+            Try it <span className="italic text-[#0F5D4C]">live.</span>
+          </h1>
+          <p className="text-[#3A4240] leading-relaxed max-w-xl">
+            This is a <strong className="text-[#0B0F0E]">real-life demo</strong>. You can run through the actual checkout experience.
+            Payments are live but capped at <span className="font-semibold text-[#0B0F0E]">₦1,000</span> for safety.
+          </p>
+          <p className="text-[#3A4240] leading-relaxed max-w-xl">Changes here update the widget on the right in real time. Press the <span className="font-bold text-[#0B0F0E]">Bank transfer</span> or <span className="font-bold text-[#0B0F0E]">Pay with crypto wallet</span> button in the widget to walk through the customer&apos;s checkout.</p>
+        </div>
         {/* Config Panel */}
-        <div className="flex flex-col gap-8 lg:max-h-[calc(100vh-160px)] lg:overflow-y-auto lg:pr-4 custom-scrollbar">
-          <div className="flex flex-col gap-2">
-            <h1 className="text-4xl font-serif font-medium tracking-tight">
-              Try it <span className="italic text-[#0F5D4C]">live.</span>
-            </h1>
-            <p className="text-[#3A4240] leading-relaxed max-w-lg">
-              This is a <strong className="text-[#0B0F0E]">real-life demo</strong>. You can run through the actual checkout experience.
-              Payments are live but capped at <span className="font-semibold text-[#0B0F0E]">₦1,000</span> for safety.
-            </p>
-          </div>
-
+        <div className=" grid grid-cols-1 lg:grid-cols-2 gap-8 lg:max-h-[calc(100vh-160px)] lg:overflow-y-auto lg:pr-4 custom-scrollbar">
           <div className="bg-white border border-[#E8EAE6] rounded-2xl p-6 shadow-sm flex flex-col gap-4">
-
             <div className="flex flex-col gap-1">
               <span className="text-[10px] text-[#6B7572] uppercase tracking-widest font-bold">Step 1</span>
               <h3 className="text-lg font-semibold tracking-tight">Your business</h3>
@@ -215,7 +214,6 @@ export default function DemoPage() {
                   placeholder="e.g. Acme Inc"
                 />
               </Field>
-
 
               <Field label="Amount to charge" hint="Capped at ₦1,000">
                 <div className="relative">
@@ -289,7 +287,7 @@ export default function DemoPage() {
                     className="w-full h-11 px-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none transition-colors"
                     value={fiatAccount}
                     onChange={(e) => setFiatAccount(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                    placeholder=""
+                    placeholder="1234567890"
                   />
                 </Field>
                 <Field label="Account name" hint={resolvingName ? 'Resolving name...' : (resolutionError || undefined)}>
@@ -332,59 +330,54 @@ export default function DemoPage() {
               </div>
             )}
           </div>
+          {/* Live Preview Container */}
+          <div className="w-full relative aspect-4/5 h-full lg:bg-white lg:border lg:border-dashed lg:border-[#E8EAE6] rounded-3xl overflow-hidden flex items-center justify-center lg:shadow-inner ">
+            {/* Faint dot pattern */}
+            <div
+              className="hidden lg:absolute inset-0 opacity-40 pointer-events-none"
+              style={{ backgroundImage: 'radial-gradient(#E8EAE6 1.5px, transparent 1.5px)', backgroundSize: '24px 24px' }}
+            />
 
-          <div className="bg-[#F5F4EF] border border-black/5 rounded-2xl p-4 text-[11px] leading-relaxed text-[#5A5A55] animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
-            Changes here update the widget on the right in real time. Press the <span className="font-bold text-[#0B0F0E]">Bank transfer</span> or <span className="font-bold text-[#0B0F0E]">Pay with crypto wallet</span> button in the widget to walk through the customer&apos;s checkout.
-          </div>
-        </div>
+            {/* Live Preview Label */}
+            <div className="hidden lg:absolute top-2 left-2.5 lg:top-6 lg:left-6 flex items-center gap-2 z-10">
+              <div className="w-2 h-2 rounded-full bg-[#0F5D4C] animate-pulse" />
+              <span className="text-[11px] font-bold text-[#6B7572] uppercase tracking-widest">Live Preview</span>
+            </div>
 
-        {/* Live Preview Container */}
-        <div className="relative aspect-4/5 h-auto lg:h-[calc(100vh-160px)] lg:bg-white lg:border lg:border-dashed lg:border-[#E8EAE6] rounded-3xl overflow-hidden flex items-center justify-center lg:shadow-inner ">
-          {/* Faint dot pattern */}
-          <div
-            className="hidden lg:absolute inset-0 opacity-40 pointer-events-none"
-            style={{ backgroundImage: 'radial-gradient(#E8EAE6 1.5px, transparent 1.5px)', backgroundSize: '24px 24px' }}
-          />
-
-          {/* Live Preview Label */}
-          <div className="hidden lg:absolute top-2 left-2.5 lg:top-6 lg:left-6 flex items-center gap-2 z-10">
-            <div className="w-2 h-2 rounded-full bg-[#0F5D4C] animate-pulse" />
-            <span className="text-[11px] font-bold text-[#6B7572] uppercase tracking-widest">Live Preview</span>
-          </div>
-
-          <div className="relative w-full h-full flex items-center justify-center">
-            {/* The Real Widget */}
-            <div className="relative z-10 scale-[60%] min-[375px]:scale-[75%] min-[420px]:scale-[85%] lg:scale-100 ">
-              <WeaveCheckout
-                key={payoutMode === 'fiat'
-                  ? (fiatBank !== 'SELECT AN INSTITUTION' && fiatAccount.length === 10 && fiatAccountName.length > 0
-                    ? `fiat-${fiatBank}-${fiatAccount}`
-                    : 'fiat-incomplete')
-                  : (cryptoAddress.length >= 42
-                    ? `crypto-${cryptoAddress}`
-                    : 'crypto-incomplete')
-                }
-                merchant={{
-                  ...merchant,
-                  destAssetKey: payoutMode === 'fiat'
-                    ? `fiat:${merchant.currency}`
-                    : `crypto:BASE:USDC`,
-                  destInstrument: payoutMode === 'fiat' ? {
-                    kind: 'bank_account',
-                    assetKey: `fiat:${merchant.currency}`,
-                    bankAccountName: fiatAccountName,
-                    bankAccountIdentifier: fiatAccount,
-                    bankInstitution: fiatBank,
-                  } : {
-                    kind: 'crypto_wallet',
-                    assetKey: 'crypto:BASE:USDC',
-                    walletAddress: cryptoAddress,
+            <div className="relative w-full h-full flex items-center justify-center">
+              {/* The Real Widget */}
+              <div className="relative z-10 scale-[60%] min-[375px]:scale-[75%] min-[420px]:scale-[85%] lg:scale-100 ">
+                <WeaveCheckout
+                  key={payoutMode === 'fiat'
+                    ? (fiatBank !== 'SELECT AN INSTITUTION' && fiatAccount.length === 10 && fiatAccountName.length > 0
+                      ? `fiat-${fiatBank}-${fiatAccount}`
+                      : 'fiat-incomplete')
+                    : (cryptoAddress.length >= 42
+                      ? `crypto-${cryptoAddress}`
+                      : 'crypto-incomplete')
                   }
-                }}
-                theme="organic"
-                onSuccess={(txn) => console.log('Payment Success:', txn)}
-                apiKey={process.env.NEXT_PUBLIC_API_KEY || ''}
-              />
+                  merchant={{
+                    ...merchant,
+                    destAssetKey: payoutMode === 'fiat'
+                      ? `fiat:${merchant.currency}`
+                      : `crypto:BASE:USDC`,
+                    destInstrument: payoutMode === 'fiat' ? {
+                      kind: 'bank_account',
+                      assetKey: `fiat:${merchant.currency}`,
+                      bankAccountName: fiatAccountName,
+                      bankAccountIdentifier: fiatAccount,
+                      bankInstitution: fiatBank,
+                    } : {
+                      kind: 'crypto_wallet',
+                      assetKey: 'crypto:BASE:USDC',
+                      walletAddress: cryptoAddress,
+                    }
+                  }}
+                  theme="organic"
+                  onSuccess={(txn) => console.log('Payment Success:', txn)}
+                  apiKey={process.env.NEXT_PUBLIC_API_KEY || ''}
+                />
+              </div>
             </div>
           </div>
         </div>
