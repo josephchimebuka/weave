@@ -86,7 +86,7 @@ router.post('/', requireAuth, async (req, res) => {
     const dstP = parseAsset(destInstrument.assetKey);
     let quoteRate: number | null = null;
     let usdEquivalent = body.amount;
-    let sourceAmount = body.amount;
+    let sourceAmount = body.amountIn === 'dest' ? 0 : body.amount;
     let destAmountFiat: number | undefined = undefined;
     let appFeeBps: number | undefined = undefined;
     
@@ -111,11 +111,13 @@ router.post('/', requireAuth, async (req, res) => {
             const netUsdc = targetFiat.div(sr);
             const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
             
-            const appFeePct = new Decimal(APP_FEE_BPS).plus(SLIPPAGE_BUFFER_BPS).div(10000);
-            const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+            const hasSwap = plan.steps.some(s => s.provider === 'nearintents');
+            const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
+            const slippagePct = hasSwap ? new Decimal(SLIPPAGE_BUFFER_BPS).div(10000) : new Decimal(0);
+            const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct).minus(slippagePct));
             
             usdEquivalent = totalUsdc.toNumber();
-            appFeeBps = APP_FEE_BPS + SLIPPAGE_BUFFER_BPS;
+            appFeeBps = APP_FEE_BPS + (hasSwap ? SLIPPAGE_BUFFER_BPS : 0);
          } else if (srcP.kind === 'fiat' && dstP.kind === 'crypto') {
             // Onramp: User pays fiat (sourceAmount), Merchant gets target crypto value (body.amount in fiat)
             const targetFiat = new Decimal(body.amount);

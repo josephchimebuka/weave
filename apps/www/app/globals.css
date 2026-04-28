@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cream: #F5F4EF;
+  --color-cream-soft: #F9F8F4;
+  --color-ink: #0B0F0E;
+  --color-forest: #0F5D4C;
+  --color-forest-deep: #0A4035;
+  --color-mute: #6B7572;
+  --color-hair: #E8EAE6;
+}
+
+html, body {
+  background: var(--color-cream);
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-ink);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(15, 93, 76, 0.04) 0%, transparent 42%),
+    radial-gradient(circle at 92% 94%, rgba(107, 117, 114, 0.04) 0%, transparent 38%),
+    var(--color-cream);
+  background-attachment: fixed;
+}

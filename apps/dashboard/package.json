@@ -10,6 +10,7 @@
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
     "@weave/shared": "workspace:*",
+    "@weave/ui": "workspace:*",
     "@weave/widget": "workspace:*",
     "clsx": "^2.0.0",
     "lucide-react": "^0.300.0",

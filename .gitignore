@@ -1,5 +1,52 @@
+# dependencies
 node_modules
-.env
+.pnpm-debug.log*
+
+# build artifacts
 .next
 .turbo
+dist
+build
+out
+.expo
+.swc
+.vercel
+*.tsbuildinfo
+
+# env files
+.env
+.env.*
+!.env.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# system files
+.DS_Store
+Thumbs.db
+
+# ide / tools
+.vscode
+.idea
 .claude
+.gemini
+antigravity.log
+*.log
+.tempmediaStorage
+browser/
+scratch/
+implementation_plan.md
+task.md
+walkthrough.md
+research_notes.md
+analysis_results.md
+experiment_results.md
+implementation_plan.md
+walkthrough.md
+task.md
+research_notes.md
+analysis_results.md
+experiment_results.md
+/artifacts

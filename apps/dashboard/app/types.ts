@@ -54,6 +54,7 @@ import {
   parseAsset, 
   assetLabel as sharedAssetLabel, 
   directionOf as sharedDirectionOf, 
+  institutionName as sharedInstitutionName,
   type OrderDirection as Direction 
 } from '@weave/shared';
 
@@ -69,6 +70,13 @@ export function directionOf(order: Pick<Order, 'sourceAssetKey' | 'destAssetKey'
  */
 export function assetLabel(key: string): string {
   return sharedAssetLabel(key);
+}
+
+/**
+ * Resolves an institution code to its human-friendly name.
+ */
+export function institutionName(currency: string, code: string): string {
+  return sharedInstitutionName(currency, code);
 }
 
 export { parseAsset };

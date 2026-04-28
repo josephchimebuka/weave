@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { 
-  type AssetKey, 
-  parseAsset, 
-  assetLabel, 
-  isFiat, 
-  isCrypto, 
+import {
+  type AssetKey,
+  parseAsset,
+  assetLabel,
+  assetMeta,
+  isFiat,
+  isCrypto,
   directionOf,
+  institutionName,
+  INSTITUTIONS_BY_CUR,
   SUPPORTED_FIAT,
   SUPPORTED_CRYPTO,
   type CryptoMeta
@@ -31,8 +34,8 @@ import {
 
 const ACCENT_MAP: Record<string, string> = {
   forest: '#3D6B50',
-  tan:    '#B8935A',
-  ink:    '#1C1B17',
+  tan: '#B8935A',
+  ink: '#1C1B17',
 };
 
 const WEAVE = {
@@ -69,16 +72,16 @@ interface Currency {
 
 const CURRENCIES: Record<string, Currency> = SUPPORTED_FIAT.reduce((acc, f) => {
   const code = f.key.split(':').pop()!;
-  acc[code] = { 
-    name: f.name, 
-    symbol: f.symbol, 
-    flag: f.flag, 
-    rate: f.rate, 
-    min: f.min, 
-    country: f.country, 
+  acc[code] = {
+    name: f.name,
+    symbol: f.symbol,
+    flag: f.flag,
+    rate: f.rate,
+    min: f.min,
+    country: f.country,
     psp: 'GTBank', // default for now
-    bank: 'GTBank ••7890', 
-    method: 'Bank transfer' 
+    bank: 'GTBank ••7890',
+    method: 'Bank transfer'
   };
   return acc;
 }, {} as any);
@@ -94,25 +97,25 @@ interface Balance {
 }
 
 const BALANCES: Balance[] = [
-  { 
-    token: 'ETH', chain: 'Optimism', amount: 0.312, usd: 1024.40, 
-    icon: 'Ξ', chainTint: '#ff3f57', 
-    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' 
+  {
+    token: 'ETH', chain: 'Optimism', amount: 0.312, usd: 1024.40,
+    icon: 'Ξ', chainTint: '#ff3f57',
+    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png'
   },
-  { 
-    token: 'USDC', chain: 'Base', amount: 150.00, usd: 150.00, 
-    icon: '$', chainTint: '#1C4FE0', 
-    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' 
+  {
+    token: 'USDC', chain: 'Base', amount: 150.00, usd: 150.00,
+    icon: '$', chainTint: '#1C4FE0',
+    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png'
   },
-  { 
-    token: 'STRK', chain: 'Starknet', amount: 840.0, usd: 184.80, 
-    icon: 'S', chainTint: '#EC796B', 
-    logo: 'https://assets.coingecko.com/coins/images/35293/standard/starknet.png' 
+  {
+    token: 'STRK', chain: 'Starknet', amount: 840.0, usd: 184.80,
+    icon: 'S', chainTint: '#EC796B',
+    logo: 'https://assets.coingecko.com/coins/images/35293/standard/starknet.png'
   },
-  { 
-    token: 'DAI', chain: 'Ethereum', amount: 502.00, usd: 502.00, 
-    icon: 'D', chainTint: '#F5AC37', 
-    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x6B175474E89094C44Da98b954EedeAC495271d0F/logo.png' 
+  {
+    token: 'DAI', chain: 'Ethereum', amount: 502.00, usd: 502.00,
+    icon: 'D', chainTint: '#F5AC37',
+    logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x6B175474E89094C44Da98b954EedeAC495271d0F/logo.png'
   },
 ];
 
@@ -123,6 +126,8 @@ export interface Merchant {
   description?: string;
   amountIn?: 'source' | 'dest';
   sourceAssetKey?: string;
+  destAssetKey?: string;
+  destInstrument?: InlineBankInstrument | InlineWalletInstrument;
 }
 
 const fmtMoney = (n: number, cur: string, fractionDigits?: number) => {
@@ -130,11 +135,11 @@ const fmtMoney = (n: number, cur: string, fractionDigits?: number) => {
   const isFiat = !!c;
   const defDp = isFiat ? 0 : 4;
   const dp = fractionDigits ?? (Number.isInteger(n) ? 0 : defDp);
-  
+
   // For crypto/tokens, use higher precision to avoid overcharging due to rounding
   const factor = Math.pow(10, dp);
   const rounded = dp > 0 ? Math.ceil(n * factor) / factor : Math.ceil(n);
-  
+
   const formatted = new Intl.NumberFormat('en-US', {
     minimumFractionDigits: dp,
     maximumFractionDigits: dp,
@@ -173,7 +178,7 @@ const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string
   ctx.fillStyle = accent;
   ctx.font = '700 32px Figtree, Inter, sans-serif';
   ctx.fillText('Weave', 80, 110);
-  
+
   ctx.fillStyle = '#6B7572';
   ctx.font = '500 16px Inter, sans-serif';
   ctx.fillText('PAYMENT RECEIPT', width - 240, 105);
@@ -185,7 +190,7 @@ const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string
   ctx.beginPath();
   ctx.roundRect(80, 160, badgeWidth, badgeHeight, 8);
   ctx.fill();
-  
+
   ctx.fillStyle = accent; // use brand accent color
   ctx.font = '700 12px Inter, sans-serif';
   ctx.textAlign = 'center';
@@ -207,7 +212,7 @@ const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string
     ctx.fillStyle = '#6B7572';
     ctx.font = '500 15px Inter, sans-serif';
     ctx.fillText(label, 80, y);
-    
+
     ctx.fillStyle = '#0B0F0E';
     ctx.font = '600 16px Inter, sans-serif';
     ctx.textAlign = 'right';
@@ -235,11 +240,11 @@ const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string
   // 6. Security & Footer
   ctx.fillStyle = '#F5F4EF';
   ctx.fillRect(80, 800, width - 160, 120);
-  
+
   ctx.fillStyle = '#0B0F0E';
   ctx.font = '600 16px Inter, sans-serif';
   ctx.fillText('Security Verification', 110, 845);
-  
+
   ctx.fillStyle = '#6B7572';
   ctx.font = '400 14px Inter, sans-serif';
   ctx.fillText('This transaction was secured with 256-bit encryption by Paycrest.', 110, 875);
@@ -249,7 +254,7 @@ const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string
   ctx.fillStyle = '#0B0F0E';
   ctx.font = '700 24px Figtree, Inter, sans-serif';
   ctx.fillText('Thank you for using Weave.', width / 2, 1020);
-  
+
   ctx.fillStyle = '#6B7572';
   ctx.font = '400 12px Inter, sans-serif';
   ctx.fillText('Support: help@weave.com', width / 2, 1050);
@@ -295,9 +300,9 @@ function Hair() {
 function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'good' | 'accent' | 'warn' }) {
   const colors = {
     neutral: { bg: '#F1F0EB', fg: WEAVE.ink2 },
-    good:    { bg: WEAVE.goodSoft, fg: WEAVE.good },
-    accent:  { bg: WEAVE.accentSoft, fg: WEAVE.accent },
-    warn:    { bg: WEAVE.warnSoft, fg: WEAVE.warn },
+    good: { bg: WEAVE.goodSoft, fg: WEAVE.good },
+    accent: { bg: WEAVE.accentSoft, fg: WEAVE.accent },
+    warn: { bg: WEAVE.warnSoft, fg: WEAVE.warn },
   }[tone];
   return (
     <span style={{
@@ -324,8 +329,8 @@ function IconDot({ bg, children, size = 32 }: { bg: string; children: ReactNode;
 function WeaveMark({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M3 5 L8 19 L12 9 L16 19 L21 5" stroke={WEAVE.accent} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M5 9 L12 19 L19 9" stroke={WEAVE.ink} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.3"/>
+      <path d="M3 5 L8 19 L12 9 L16 19 L21 5" stroke={WEAVE.accent} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 9 L12 19 L19 9" stroke={WEAVE.ink} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.3" />
     </svg>
   );
 }
@@ -355,7 +360,7 @@ function WidgetHeader({
     }}>
       {showBack ? (
         <button onClick={onBack} style={backBtn}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -367,7 +372,7 @@ function WidgetHeader({
         Paying <span style={{ color: WEAVE.ink, fontWeight: 500 }}>{merchantName}</span>
       </div>
       <button onClick={onClose} style={closeBtn}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
       </button>
     </div>
   );
@@ -383,7 +388,7 @@ function WidgetFooter() {
       borderRadius: '0 0 16px 16px',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 6V12C3 17 6.5 21 12 22C17.5 21 21 17 21 12V6L12 2Z" stroke="currentColor" strokeWidth="1.8"/></svg>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 6V12C3 17 6.5 21 12 22C17.5 21 21 17 21 12V6L12 2Z" stroke="currentColor" strokeWidth="1.8" /></svg>
         Secured by Weave by Dewdrop Labs
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -428,7 +433,7 @@ const secondaryBtn: CSSProperties = {
 type PathPick = 'fiat' | 'crypto' | 'deposit';
 
 function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
-  onPick:   (p: PathPick) => void;
+  onPick: (p: PathPick) => void;
   merchant: Merchant;
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
@@ -449,8 +454,8 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
         }}>
           {(() => {
             const parts = merchant.name.trim().split(/\s+/).filter(Boolean);
-            return parts.length >= 2 
-              ? (parts[0][0] + parts[1][0]).toUpperCase() 
+            return parts.length >= 2
+              ? (parts[0][0] + parts[1][0]).toUpperCase()
               : parts[0]?.slice(0, 2).toUpperCase() ?? '?';
           })()}
         </div>
@@ -470,13 +475,13 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
 
         <button onClick={() => onPick('fiat')} style={methodCard}>
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>Bank transfer</div>
             <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Pay in {c?.name ?? merchant.currency} · Instant · No fees</div>
           </Stack>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
 
         <button onClick={() => onPick('deposit')} style={methodCard}>
@@ -487,7 +492,7 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
             <div style={{ fontSize: 14, fontWeight: 500 }}>Pay with crypto wallet</div>
             <div style={{ fontSize: 11.5, color: WEAVE.mute }}>MetaMask detected · Any chain, any token</div>
           </Stack>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
 
         {!showMoreCrypto ? (
@@ -511,10 +516,10 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
             </Row>
             <button onClick={() => onPick('deposit')} style={methodCardSm}>
               <div style={{ width: 20, height: 20, borderRadius: 5, background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2"/><rect x="14" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2"/><rect x="3" y="14" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2"/></svg>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="14" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="3" y="14" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /></svg>
               </div>
               <span style={{ fontSize: 12.5, fontWeight: 500 }}>Pay from mobile / hardware / exchange</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 'auto' }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 'auto' }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </Stack>
         )}
@@ -580,7 +585,7 @@ function ScreenBalances({
               {!enough && <Pill tone="warn">Too low</Pill>}
               {enough && isSelected && (
                 <div style={{ width: 20, height: 20, borderRadius: 10, background: WEAVE.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 </div>
               )}
             </button>
@@ -597,16 +602,16 @@ function ScreenBalances({
 
 export interface OfframpQuote {
   estimatedFiat: number;
-  netUsdc:       number;
-  fiatCurrency:  string;
+  netUsdc: number;
+  fiatCurrency: string;
   breakdown: {
-    inputAmount:  number;
-    inputToken:   string;
-    fastPath:     boolean;
+    inputAmount: number;
+    inputToken: string;
+    fastPath: boolean;
     bridgeFeeUsd: number;
     senderFeeUsd: number;
-    appFeeUsd:    number;
-    sellRate:     number;
+    appFeeUsd: number;
+    sellRate: number;
   };
 }
 
@@ -625,13 +630,13 @@ function ScreenQuote({
 }) {
   const c = currencies[merchant.currency] || CURRENCIES[merchant.currency];
   const fallbackNeeded = merchant.amount / (c?.rate || 1);
-  const needed       = quote ? quote.breakdown.inputAmount : fallbackNeeded;
+  const needed = quote ? quote.breakdown.inputAmount : fallbackNeeded;
   const cryptoAmount = needed / (balance.usd / balance.amount);
-  const bridgeFee    = quote ? quote.breakdown.bridgeFeeUsd : (balance.chain === 'Base' && balance.token === 'USDC' ? 0 : 1.80);
-  const weaveFee     = quote ? quote.breakdown.senderFeeUsd + quote.breakdown.appFeeUsd : needed * 0.0075;
-  const totalFees    = bridgeFee + weaveFee;
-  const sellRate     = quote ? quote.breakdown.sellRate : (c?.rate || 1515);
-  const fiatOut      = quote ? quote.estimatedFiat : merchant.amount;
+  const bridgeFee = quote ? quote.breakdown.bridgeFeeUsd : (balance.chain === 'Base' && balance.token === 'USDC' ? 0 : 1.80);
+  const weaveFee = quote ? quote.breakdown.senderFeeUsd + quote.breakdown.appFeeUsd : needed * 0.0075;
+  const totalFees = bridgeFee + weaveFee;
+  const sellRate = quote ? quote.breakdown.sellRate : (c?.rate || 1515);
+  const fiatOut = quote ? quote.estimatedFiat : merchant.amount;
 
   return (
     <Stack gap={14} style={{ padding: '16px 20px 6px' }}>
@@ -644,7 +649,11 @@ function ScreenQuote({
           <div style={{ fontSize: 16, color: WEAVE.ink2, fontWeight: 500 }}>{balance.token}</div>
         </Row>
         <Row gap={6} style={{ fontSize: 12, color: WEAVE.mute }}>
-          <IconDot bg={balance.chainTint} size={14}>{balance.icon}</IconDot>
+          <IconDot bg={balance.chainTint} size={14}>
+            {balance.logo ? (
+              <img src={balance.logo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : balance.icon}
+          </IconDot>
           on {balance.chain}
         </Row>
       </Stack>
@@ -658,7 +667,7 @@ function ScreenQuote({
           fontSize: 11, color: WEAVE.mute, letterSpacing: 0.4,
           display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12L12 19L19 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12L12 19L19 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
           converts to
         </div>
       </div>
@@ -700,7 +709,7 @@ function ScreenQuote({
         <button onClick={onConfirm} disabled={submitting} style={{ ...primaryBtn, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'not-allowed' : 'pointer' }}>
           {submitting ? 'Creating order…' : 'Confirm in wallet'}
           {!submitting && (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12H19M13 6L19 12L13 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12H19M13 6L19 12L13 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
           )}
         </button>
         <div style={{ fontSize: 11, color: WEAVE.mute, textAlign: 'center' }}>
@@ -715,10 +724,10 @@ function WeavingLoader() {
   return (
     <div style={{ position: 'relative', width: 56, height: 56 }}>
       <svg width="56" height="56" viewBox="0 0 56 56" style={{ position: 'absolute', inset: 0 }}>
-        <circle cx="28" cy="28" r="24" stroke={WEAVE.hair} strokeWidth="2.5" fill="none"/>
+        <circle cx="28" cy="28" r="24" stroke={WEAVE.hair} strokeWidth="2.5" fill="none" />
         <circle cx="28" cy="28" r="24" stroke={WEAVE.accent} strokeWidth="2.5" fill="none"
           strokeDasharray="40 150" strokeLinecap="round"
-          style={{ transformOrigin: 'center', animation: 'wspin 1.2s linear infinite' }}/>
+          style={{ transformOrigin: 'center', animation: 'wspin 1.2s linear infinite' }} />
       </svg>
       <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <WeaveMark size={22} />
@@ -727,7 +736,7 @@ function WeavingLoader() {
   );
 }
 
-const TERMINAL_OK  = new Set(['completed']);
+const TERMINAL_OK = new Set(['completed']);
 const TERMINAL_BAD = new Set(['failed', 'expired', 'refunded']);
 
 function ScreenProcessing({
@@ -754,18 +763,18 @@ function ScreenProcessing({
 
   const fiatDisplay = bankDetails?.amountToTransfer
     ? (() => {
-        const raw = bankDetails.amountToTransfer!;
-        const decimals = raw.includes('.') ? raw.split('.')[1].length : 0;
-        return fmtCur(Number(raw), merchant.currency, decimals);
-      })()
+      const raw = bankDetails.amountToTransfer!;
+      const decimals = raw.includes('.') ? raw.split('.')[1].length : 0;
+      return fmtCur(Number(raw), merchant.currency, decimals);
+    })()
     : fmtCur(merchant.amount, merchant.currency);
 
   const stages = mode === 'fiat' ? [
     { label: 'Confirming your transfer', sub: `Matching the ${fiatDisplay} from your bank`, dur: 1600 },
-    { label: 'Completing payment',       sub: `Sending to ${merchant.name}`,         dur: 2400 },
+    { label: 'Completing payment', sub: `Sending to ${merchant.name}`, dur: 2400 },
   ] : [
-    { label: 'Waiting for deposit',      sub: 'Detecting your transaction on-chain', dur: 1400 },
-    { label: 'Confirming your payment',  sub: `Settling ${c?.name || merchant.currency} to ${merchant.name}`, dur: 2600 },
+    { label: 'Deposit detected', sub: 'Processing your transaction on-chain', dur: 1400 },
+    { label: 'Confirming your payment', sub: `Settling ${c?.name || merchant.currency} to ${merchant.name}`, dur: 2600 },
   ];
 
   // Simulated animation when no orderId (demo) — fall back to original behavior
@@ -844,10 +853,10 @@ function ScreenProcessing({
               position: 'relative',
             }}>
               {i < stage && (
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>
               )}
               {i === stage && (
-                <div style={{ width: 8, height: 8, borderRadius: 4, background: WEAVE.accent, animation: 'wpulse 1.1s ease-in-out infinite' }}/>
+                <div style={{ width: 8, height: 8, borderRadius: 4, background: WEAVE.accent, animation: 'wpulse 1.1s ease-in-out infinite' }} />
               )}
             </div>
             <Stack gap={1}>
@@ -889,25 +898,27 @@ function ScreenSuccess({
     let cancelled = false;
     fetchOrder(apiKey, orderId)
       .then((o) => { if (!cancelled) setOrder(o); })
-      .catch(() => {});
+      .catch(() => { });
     return () => { cancelled = true; };
   }, [apiKey, orderId]);
 
-  // Source asset key looks like "crypto:BASE:USDC" or "fiat:NGN" — last segment
-  // is the token/currency code we want to render.
-  const sourceToken = typeof order?.sourceAssetKey === 'string'
+  // Resolve real asset meta from order if available
+  const orderMeta = order?.sourceAssetKey ? assetMeta(order.sourceAssetKey) : undefined;
+  const asset = orderMeta || balance;
+
+  const sourceToken = (asset as any).token || (typeof order?.sourceAssetKey === 'string'
     ? order.sourceAssetKey.split(':').pop()
-    : undefined;
+    : undefined);
 
   const paidWith = direction === 'offramp' && order
-    ? `${fmtCrypto(Number(order.sourceAmount), 4)} ${sourceToken ?? balance.token}`
-    : `${fmtCrypto(balance.amount * 0.3, 4)} ${balance.token}`;
+    ? `${fmtCrypto(Number(order.sourceAmount), 4)} ${sourceToken ?? (asset as any).token}`
+    : `${fmtCur(merchant.amount, merchant.currency)}`;
 
   const destBank = order?.destInstrument?.bankInstitution;
   const settledTo = direction === 'offramp'
     ? (destBank
-        ? institutionName(merchant.currency, destBank)
-        : (currencies[merchant.currency]?.bank || CURRENCIES[merchant.currency]?.bank))
+      ? institutionName(merchant.currency, destBank)
+      : (currencies[merchant.currency]?.bank || CURRENCIES[merchant.currency]?.bank))
     : merchant.name;
 
   const completedInSec = order?.createdAt && order?.updatedAt
@@ -919,6 +930,8 @@ function ScreenSuccess({
       ? `${completedInSec}s`
       : `${Math.round(completedInSec / 60)}m`;
 
+  const isResolving = !order;
+
   return (
     <Stack gap={18} style={{ padding: '28px 20px 12px', minHeight: 360 }}>
       <Stack gap={14} style={{ alignItems: 'center', paddingTop: 8 }}>
@@ -927,13 +940,16 @@ function ScreenSuccess({
           background: WEAVE.accent, display: 'flex', alignItems: 'center', justifyContent: 'center',
           animation: 'wpop 0.5s cubic-bezier(0.2, 1.2, 0.4, 1)',
         }}>
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="white" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="white" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </div>
         <Stack gap={4} style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.3 }}>
             Payment complete
           </div>
-          <div style={{ fontSize: 13, color: WEAVE.mute, textAlign: 'center', lineHeight: 1.5, maxWidth: 280 }}>
+          <div style={{
+            fontSize: 13, color: WEAVE.mute, textAlign: 'center', lineHeight: 1.5, maxWidth: 280,
+            animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined
+          }}>
             {direction === 'offramp' ? (
               <>{fmtCur(merchant.amount, merchant.currency)} is on its way to <span style={{ color: WEAVE.ink }}>{merchant.name}</span>.</>
             ) : (
@@ -947,8 +963,16 @@ function ScreenSuccess({
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
           <span style={{ color: WEAVE.mute }}>Paid with</span>
           {direction === 'offramp' ? (
-            <Row gap={6}>
-              <IconDot bg={balance.chainTint} size={16}>{balance.icon}</IconDot>
+            <Row gap={6} style={{ animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined }}>
+              <IconDot bg={(asset as any).chainTint || (asset as any).tint} size={16}>
+                {(asset as any).logo ? (
+                  <img src={(asset as any).logo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (asset as any).icon ? (
+                  (asset as any).icon
+                ) : (asset as any).flag ? (
+                  (asset as any).flag
+                ) : (asset as any).symbol}
+              </IconDot>
               <span style={{ fontWeight: 500 }}>{paidWith}</span>
             </Row>
           ) : (
@@ -958,16 +982,21 @@ function ScreenSuccess({
             </Row>
           )}
         </Row>
-        <Hair/>
+        <Hair />
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
           <span style={{ color: WEAVE.mute }}>{direction === 'offramp' ? 'Settled to' : 'Paid to'}</span>
-          <span style={{ fontWeight: 500 }}>{settledTo}</span>
+          <span style={{
+            fontWeight: 500,
+            animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined
+          }}>{settledTo}</span>
         </Row>
-        <Hair/>
+        <Hair />
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
           <span style={{ color: WEAVE.mute }}>Completed in</span>
           <Row gap={6}>
-            <Pill tone="good">{completedIn}</Pill>
+            <span style={{ animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined }}>
+              <Pill tone="good">{completedIn}</Pill>
+            </span>
           </Row>
         </Row>
       </Stack>
@@ -976,11 +1005,11 @@ function ScreenSuccess({
         <button onClick={() => onNext('connect')} style={primaryBtn}>
           Done
         </button>
-        <button 
+        <button
           onClick={() => downloadReceipt(merchant, order, settledTo, accentColor)}
           style={{ ...secondaryBtn, justifyContent: 'center', paddingLeft: 0 }}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3V15M12 15L7 10M12 15L17 10M3 19H21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3V15M12 15L7 10M12 15L17 10M3 19H21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
           Download receipt
         </button>
       </Stack>
@@ -993,7 +1022,7 @@ function ScreenError({ onNext, onBack }: { onNext: (s: string) => void; onBack: 
     <Stack gap={16} style={{ padding: '28px 20px 12px', minHeight: 360 }}>
       <Stack gap={14} style={{ alignItems: 'center', paddingTop: 8 }}>
         <div style={{ width: 64, height: 64, borderRadius: 32, background: '#FBEEE9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M12 8V13M12 17V17.01" stroke={WEAVE.err} strokeWidth="2.4" strokeLinecap="round"/><circle cx="12" cy="12" r="10" stroke={WEAVE.err} strokeWidth="2"/></svg>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M12 8V13M12 17V17.01" stroke={WEAVE.err} strokeWidth="2.4" strokeLinecap="round" /><circle cx="12" cy="12" r="10" stroke={WEAVE.err} strokeWidth="2" /></svg>
         </div>
         <Stack gap={4} style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 18, fontWeight: 600 }}>Transaction didn't go through</div>
@@ -1026,43 +1055,43 @@ const MEMO_REQUIRED_CHAINS = new Set(['XRP', 'TON', 'STELLAR', 'NEAR']);
 // Placeholder shown for the sender-wallet input per chain. Address shapes differ
 // enough that a single hint misleads users; these are the most common formats.
 const REFUND_ADDRESS_PLACEHOLDER: Record<string, string> = {
-  BASE:      '0x…',
-  ETHEREUM:  '0x…',
-  ARBITRUM:  '0x…',
-  OPTIMISM:  '0x…',
-  POLYGON:   '0x…',
-  BSC:       '0x…',
+  BASE: '0x…',
+  ETHEREUM: '0x…',
+  ARBITRUM: '0x…',
+  OPTIMISM: '0x…',
+  POLYGON: '0x…',
+  BSC: '0x…',
   AVALANCHE: '0x…',
-  GNOSIS:    '0x…',
-  SCROLL:    '0x…',
-  XLAYER:    '0x…',
-  MONAD:     '0x…',
-  BERA:      '0x…',
-  SOLANA:    'e.g. 5Gh8…base58',
-  TRON:      'T…',
-  NEAR:      'alice.near or 64-hex',
-  TON:       'UQ… / EQ…',
-  SUI:       '0x… (64 chars)',
-  APTOS:     '0x… (64 chars)',
-  STARKNET:  '0x…',
-  BITCOIN:   'bc1… or 1…',
-  XRP:       'r…',
-  STELLAR:   'G…',
-  CARDANO:   'addr1…',
-  DOGE:      'D…',
-  LITECOIN:  'ltc1… or L…',
-  BCH:       'bitcoincash:q… or q…',
-  ZEC:       't1… or zs1…',
-  DASH:      'X…',
+  GNOSIS: '0x…',
+  SCROLL: '0x…',
+  XLAYER: '0x…',
+  MONAD: '0x…',
+  BERA: '0x…',
+  SOLANA: 'e.g. 5Gh8…base58',
+  TRON: 'T…',
+  NEAR: 'alice.near or 64-hex',
+  TON: 'UQ… / EQ…',
+  SUI: '0x… (64 chars)',
+  APTOS: '0x… (64 chars)',
+  STARKNET: '0x…',
+  BITCOIN: 'bc1… or 1…',
+  XRP: 'r…',
+  STELLAR: 'G…',
+  CARDANO: 'addr1…',
+  DOGE: 'D…',
+  LITECOIN: 'ltc1… or L…',
+  BCH: 'bitcoincash:q… or q…',
+  ZEC: 't1… or zs1…',
+  DASH: 'X…',
 };
 
 // EIP-681 deep-link params for ERC-20 `transfer` on EVM chains. Only populated for
 // combinations we can build a strict URI for — unknown combos fall back to plain address.
 const ERC20_META: Record<string, { chainId: number; contract: string; decimals: number }> = {
-  'BASE:USDC':     { chainId: 8453,   contract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },
-  'OPTIMISM:USDC': { chainId: 10,     contract: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', decimals: 6 },
-  'ARBITRUM:USDC': { chainId: 42161,  contract: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 },
-  'POLYGON:USDC':  { chainId: 137,    contract: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 },
+  'BASE:USDC': { chainId: 8453, contract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },
+  'OPTIMISM:USDC': { chainId: 10, contract: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', decimals: 6 },
+  'ARBITRUM:USDC': { chainId: 42161, contract: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 },
+  'POLYGON:USDC': { chainId: 137, contract: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 },
 };
 
 const buildDepositQRPayload = (
@@ -1115,15 +1144,15 @@ function ScreenDeposit({
   const [memoCopied, setMemoCopied] = useState(false);
   const filteredChains = chainSearch.trim()
     ? depositChains.map((c, i) => ({ c, i }))
-        .filter(({ c }) => {
-          const q = chainSearch.trim().toLowerCase();
-          return (
-            c.name.toLowerCase().includes(q) ||
-            c.token.toLowerCase().includes(q) ||
-            c.network.toLowerCase().includes(q) ||
-            c.id.toLowerCase().includes(q)
-          );
-        })
+      .filter(({ c }) => {
+        const q = chainSearch.trim().toLowerCase();
+        return (
+          c.name.toLowerCase().includes(q) ||
+          c.token.toLowerCase().includes(q) ||
+          c.network.toLowerCase().includes(q) ||
+          c.id.toLowerCase().includes(q)
+        );
+      })
     : depositChains.map((c, i) => ({ c, i }));
   const chain = chainIdx != null ? depositChains[chainIdx] : null;
   const address = depositAddress ?? '';
@@ -1173,7 +1202,7 @@ function ScreenDeposit({
           else onNext('processing');
           return;
         }
-      } catch {}
+      } catch { }
       timer = setTimeout(tick, 5000);
     };
     tick();
@@ -1211,7 +1240,7 @@ function ScreenDeposit({
               display: 'flex', alignItems: 'center', gap: 6,
             }}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             Back
           </button>
           <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>
@@ -1227,8 +1256,8 @@ function ScreenDeposit({
             position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
             pointerEvents: 'none',
           }}>
-            <circle cx="11" cy="11" r="7" stroke={WEAVE.mute} strokeWidth="2"/>
-            <path d="M20 20L16 16" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round"/>
+            <circle cx="11" cy="11" r="7" stroke={WEAVE.mute} strokeWidth="2" />
+            <path d="M20 20L16 16" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" />
           </svg>
           <input
             autoFocus
@@ -1272,7 +1301,7 @@ function ScreenDeposit({
                   <div style={{ fontSize: 10.5, color: WEAVE.mute }}>{c.network}</div>
                 </div>
                 {i === chainIdx && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke={WEAVE.accent} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke={WEAVE.accent} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 )}
               </button>
             ))
@@ -1302,7 +1331,11 @@ function ScreenDeposit({
         }}>
           {chain ? (
             <>
-              <IconDot bg={chain.tint} size={26}>{chain.icon}</IconDot>
+              <IconDot bg={chain.tint} size={26}>
+                {chain.logo ? (
+                  <img src={chain.logo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : chain.icon}
+              </IconDot>
               <Stack gap={1} style={{ flex: 1 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 500 }}>{chain.token} on {chain.name}</div>
                 <div style={{ fontSize: 11, color: WEAVE.mute }}>{chain.network}</div>
@@ -1321,7 +1354,7 @@ function ScreenDeposit({
                 <div style={{ fontSize: 13.5, fontWeight: 500, color: WEAVE.ink }}>Choose a network</div>
                 <div style={{ fontSize: 11, color: WEAVE.mute }}>30+ chains supported · powered by NEAR Intents</div>
               </Stack>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9L12 15L18 9" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9L12 15L18 9" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </>
           )}
         </button>
@@ -1379,7 +1412,7 @@ function ScreenDeposit({
           }}>
             <div style={{ padding: 8, background: '#fff', borderRadius: 10, border: `1px solid ${WEAVE.hair}`, flexShrink: 0 }}>
               {qrPayload ? (
-                <QRCodeSVG value={qrPayload} size={120} level="M" includeMargin={false}/>
+                <QRCodeSVG value={qrPayload} size={120} level="M" includeMargin={false} />
               ) : (
                 <div style={{
                   width: 120, height: 120, borderRadius: 12,
@@ -1435,12 +1468,12 @@ function ScreenDeposit({
               }}>
                 {copied ? (
                   <>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                     Copied
                   </>
                 ) : (
                   <>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 8V5C16 4.45 15.55 4 15 4H5C4.45 4 4 4.45 4 5V15C4 15.55 4.45 16 5 16H8" stroke="currentColor" strokeWidth="2"/></svg>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M16 8V5C16 4.45 15.55 4 15 4H5C4.45 4 4 4.45 4 5V15C4 15.55 4.45 16 5 16H8" stroke="currentColor" strokeWidth="2" /></svg>
                     Copy
                   </>
                 )}
@@ -1492,12 +1525,12 @@ function ScreenDeposit({
                 }}>
                   {memoCopied ? (
                     <>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                       Copied
                     </>
                   ) : (
                     <>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 8V5C16 4.45 15.55 4 15 4H5C4.45 4 4 4.45 4 5V15C4 15.55 4.45 16 5 16H8" stroke="currentColor" strokeWidth="2"/></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M16 8V5C16 4.45 15.55 4 15 4H5C4.45 4 4 4.45 4 5V15C4 15.55 4.45 16 5 16H8" stroke="currentColor" strokeWidth="2" /></svg>
                       Copy
                     </>
                   )}
@@ -1514,7 +1547,7 @@ function ScreenDeposit({
             borderRadius: 10, padding: '10px 12px',
             display: 'flex', gap: 10, fontSize: 11.5, color: WEAVE.warn, lineHeight: 1.5,
           }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 2L2 20H22L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M12 10V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 2L2 20H22L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /><path d="M12 10V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
             <span>Only send <b>{chain.token}</b> on the <b>{chain.name}</b> network. Sending other assets or from a different network may result in loss.</span>
           </div>
 
@@ -1531,8 +1564,8 @@ function ScreenDeposit({
             ) : (
               <>
                 <div style={{ position: 'relative', width: 10, height: 10 }}>
-                  <div style={{ position: 'absolute', inset: 0, borderRadius: 5, background: WEAVE.accent }}/>
-                  <div style={{ position: 'absolute', inset: -3, borderRadius: 8, background: WEAVE.accent, opacity: 0.25, animation: 'wpulse 1.6s ease-in-out infinite' }}/>
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: 5, background: WEAVE.accent }} />
+                  <div style={{ position: 'absolute', inset: -3, borderRadius: 8, background: WEAVE.accent, opacity: 0.25, animation: 'wpulse 1.6s ease-in-out infinite' }} />
                 </div>
                 <div style={{ flex: 1, fontSize: 12, color: WEAVE.ink2 }}>
                   Watching for deposit on {chain.name}…
@@ -1549,33 +1582,12 @@ function ScreenDeposit({
 // ── Refund account ───────────────────────────────────────────────────────────
 
 interface RefundAccount {
-  institution:       string;
+  institution: string;
   accountIdentifier: string;
-  accountName:       string;
+  accountName: string;
 }
 
-interface Institution {
-  code: string;
-  name: string;
-}
-
-const INSTITUTIONS_BY_CUR: Record<string, Institution[]> = {
-  NGN: [
-    { code: 'GTBINGLA',   name: 'Guaranty Trust Bank' },
-    { code: 'FBNINGLA',   name: 'First Bank of Nigeria' },
-    { code: 'ZEIBNGLA',   name: 'Zenith Bank' },
-    { code: 'ABNGNGLA',   name: 'Access Bank' },
-    { code: 'UBNINGLA',   name: 'Union Bank' },
-    { code: 'STBKNGLA',   name: 'Stanbic IBTC Bank' },
-    { code: 'FCMBNGLA',   name: 'First City Monument Bank' },
-    { code: 'FIDTNGLA',   name: 'Fidelity Bank' },
-    { code: 'ECOBNGLA',   name: 'Ecobank Nigeria' },
-    { code: 'WEMANGLA',   name: 'Wema Bank' },
-    { code: 'KUDANGPC',   name: 'Kuda Bank' },
-    { code: 'OPAYNGPC',   name: 'OPay' },
-    { code: 'MONINGPC',   name: 'Moniepoint' },
-  ],
-};
+// ── Styles ──────────────────────────────────────────────────────────────────
 
 const inputStyle: CSSProperties = {
   width: '100%', padding: '11px 14px', borderRadius: 10,
@@ -1654,7 +1666,7 @@ function ScreenRefundAccount({
         borderRadius: 10, padding: '10px 12px',
         display: 'flex', gap: 10, fontSize: 11.5, color: WEAVE.ink2, lineHeight: 1.5,
       }}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1, color: WEAVE.mute }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.8"/><path d="M12 8V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1, color: WEAVE.mute }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.8" /><path d="M12 8V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
         <span>We only use this account if the payment fails. Refunds arrive within 1 business day.</span>
       </div>
 
@@ -1689,18 +1701,15 @@ const VA_BY_CUR: Record<string, VirtualAccount> = {
 };
 
 export interface BankDetails {
-  institution:       string;
+  institution: string;
   accountIdentifier: string;
-  accountName:       string;
+  accountName: string;
   amountToTransfer?: string;
-  currency?:         string;
-  validUntil?:       string;
+  currency?: string;
+  validUntil?: string;
 }
 
-function institutionName(currency: string, code: string): string {
-  const match = (INSTITUTIONS_BY_CUR[currency] ?? []).find((b) => b.code === code);
-  return match?.name ?? code;
-}
+// Payout destination logic
 
 function ScreenVirtualAccount({
   onNext, merchant, bankDetails, apiKey, orderId, currencies, fmtCur
@@ -1716,17 +1725,17 @@ function ScreenVirtualAccount({
   const c = CURRENCIES[merchant.currency];
   const va = bankDetails
     ? {
-        bank:          institutionName(merchant.currency, bankDetails.institution),
-        accountNumber: bankDetails.accountIdentifier,
-        accountName:   bankDetails.accountName,
-      }
+      bank: institutionName(merchant.currency, bankDetails.institution),
+      accountNumber: bankDetails.accountIdentifier,
+      accountName: bankDetails.accountName,
+    }
     : VA_BY_CUR[merchant.currency];
   const displayAmount = bankDetails?.amountToTransfer
     ? (() => {
-        const raw = bankDetails.amountToTransfer;
-        const decimals = raw.includes('.') ? raw.split('.')[1].length : 0;
-        return fmtCur(Number(raw), merchant.currency, decimals);
-      })()
+      const raw = bankDetails.amountToTransfer;
+      const decimals = raw.includes('.') ? raw.split('.')[1].length : 0;
+      return fmtCur(Number(raw), merchant.currency, decimals);
+    })()
     : fmtCur(merchant.amount, merchant.currency);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [mins, setMins] = useState(9);
@@ -1754,12 +1763,12 @@ function ScreenVirtualAccount({
         const status = String(order.status ?? '').toLowerCase();
         if (status && status !== 'awaiting_deposit') {
           stopped = true;
-          if (status === 'completed')       onNext('success');
+          if (status === 'completed') onNext('success');
           else if (['failed', 'refunded'].includes(status)) onNext('error');
-          else                              onNext('processing');
+          else onNext('processing');
           return;
         }
-      } catch {}
+      } catch { }
       timer = setTimeout(tick, 5000);
     };
     tick();
@@ -1793,7 +1802,7 @@ function ScreenVirtualAccount({
       }}>
         {copiedKey === k ? (
           <>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>
             Copied
           </>
         ) : 'Copy'}
@@ -1809,7 +1818,7 @@ function ScreenVirtualAccount({
             Send {displayAmount}
           </div>
           <Pill tone="warn">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/><path d="M12 7V12L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M12 7V12L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
             {mins}:{String(secs).padStart(2, '0')}
           </Pill>
         </Row>
@@ -1828,11 +1837,11 @@ function ScreenVirtualAccount({
             <div style={{ fontSize: 11, color: WEAVE.mute }}>Virtual account · one-time · {merchant.currency}</div>
           </Stack>
         </Row>
-        <Field label="Account number" value={va.accountNumber} k="acc"/>
-        <Hair/>
-        <Field label="Account name" value={va.accountName} k="name" mono={false}/>
-        <Hair/>
-        <Field label="Amount" value={displayAmount} k="amt" mono={false}/>
+        <Field label="Account number" value={va.accountNumber} k="acc" />
+        <Hair />
+        <Field label="Account name" value={va.accountName} k="name" mono={false} />
+        <Hair />
+        <Field label="Amount" value={displayAmount} k="amt" mono={false} />
       </div>
 
       <div style={{
@@ -1840,7 +1849,7 @@ function ScreenVirtualAccount({
         borderRadius: 10, padding: '10px 12px',
         display: 'flex', gap: 10, fontSize: 11.5, color: WEAVE.warn, lineHeight: 1.5,
       }}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 2L2 20H22L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M12 10V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 2L2 20H22L12 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /><path d="M12 10V13M12 16V16.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
         <span>Send the exact amount. Any difference may delay delivery.</span>
       </div>
 
@@ -1869,11 +1878,11 @@ const DEFAULT_MERCHANT: Merchant = {
 };
 
 const CHAIN_TO_API: Record<string, string> = {
-  Base:     'BASE',
+  Base: 'BASE',
   Optimism: 'OPTIMISM',
   Ethereum: 'ETHEREUM',
   Arbitrum: 'ARBITRUM',
-  Polygon:  'POLYGON',
+  Polygon: 'POLYGON',
 };
 
 export function WeaveCheckout({
@@ -1903,9 +1912,9 @@ export function WeaveCheckout({
   const [preSelectedChainIdx, setPreSelectedChainIdx] = useState<number | null>(null);
   const [closed, setClosed] = useState(false);
   const [refundAccount, setRefundAccount] = useState<RefundAccount>({
-    institution:       '',
+    institution: '',
     accountIdentifier: '',
-    accountName:       '',
+    accountName: '',
   });
   const [orderId, setOrderId] = useState<string | null>(null);
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
@@ -1921,14 +1930,14 @@ export function WeaveCheckout({
   const [submitting, setSubmitting] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [supportedAssets, setSupportedAssets] = useState<{ fiat: any[], crypto: any[] }>({
-    fiat:   SUPPORTED_FIAT,
+    fiat: SUPPORTED_FIAT,
     crypto: SUPPORTED_CRYPTO
   });
   const depositReq = useRef(0);
   const quoteReq = useRef(0);
 
   // ── Persistence & Resumption ──────────────────────────────────────────────
-  
+
   // 1. Resumption logic on mount
   useEffect(() => {
     const saved = localStorage.getItem(`weave-order-${apiKey}`);
@@ -1939,37 +1948,43 @@ export function WeaveCheckout({
         if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
           fetchOrder(apiKey, savedId).then(data => {
             const order = data;
+            const dir = directionOf(order.sourceAssetKey, order.destAssetKey);
+            setDirection(dir === 'onramp' ? 'onramp' : 'offramp');
+
             if (['awaiting_deposit', 'processing'].includes(order.status)) {
               setOrderId(order.id);
-              
-              // Find the active step (usually the first one that isn't DONE)
+
               const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
-              
-              if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
-                // This was a bank/fiat-based onramp
-                setDirection('onramp');
-                // The bank details were stored in the source instrument at creation
-                if (order.sourceInstrument?.kind === 'bank_account') {
-                   setBankDetails({
-                     accountName:       order.sourceInstrument.bankAccountName || '',
-                     accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
-                     institution:       order.sourceInstrument.bankInstitution || '',
-                     currency:          order.destAssetKey.split(':').pop() || 'NGN',
-                     amountToTransfer:  order.sourceAmount.toString()
-                   });
+
+              if (dir === 'onramp') {
+                if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
+                  if (order.sourceInstrument?.kind === 'bank_account') {
+                    setBankDetails({
+                      accountName: order.sourceInstrument.bankAccountName || '',
+                      accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
+                      institution: order.sourceInstrument.bankInstitution || '',
+                      currency: order.destAssetKey.split(':').pop() || 'NGN',
+                      amountToTransfer: order.sourceAmount.toString()
+                    });
+                  }
+                  setScreen('vaccount');
+                } else {
+                  setScreen('processing');
                 }
-                setScreen('vaccount');
-              } else if (activeStep?.provider === 'nearintents') {
-                // This was a crypto-based offramp
-                setDirection('offramp');
-                setDepositAddress(activeStep.depositAddress);
-                setDepositMemo(activeStep.depositMemo);
-                setDepositAmount(Number(activeStep.amountIn));
-                
-                const parts = activeStep.fromAsset.split(':');
-                setDepositToken(parts[2] || parts[1]);
-                setDepositChain(parts[1]);
-                setScreen('deposit');
+              } else {
+                // Offramp
+                if (activeStep?.provider === 'nearintents' && order.status === 'awaiting_deposit') {
+                  setDepositAddress(activeStep.depositAddress);
+                  setDepositMemo(activeStep.depositMemo);
+                  setDepositAmount(Number(activeStep.amountIn));
+
+                  const parts = activeStep.fromAsset.split(':');
+                  setDepositToken(parts[2] || parts[1]);
+                  setDepositChain(parts[1]);
+                  setScreen('deposit');
+                } else {
+                  setScreen('processing');
+                }
               }
             } else if (order.status === 'completed') {
               setOrderId(order.id);
@@ -1990,7 +2005,7 @@ export function WeaveCheckout({
     // Existing: Sync assets from API
     fetchAssets(apiKey).then(data => {
       if (data) setSupportedAssets(data);
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Existing: Pre-selection logic
     if (merchant.sourceAssetKey && merchant.amountIn === 'source') {
@@ -2020,16 +2035,16 @@ export function WeaveCheckout({
   // Derived Helpers
   const currencies: Record<string, Currency> = supportedAssets.fiat.reduce((acc, f) => {
     const code = f.key.split(':').pop()!;
-    acc[code] = { 
-      name: f.name, 
-      symbol: f.symbol, 
-      flag: f.flag, 
-      rate: f.rate, 
-      min: f.min, 
-      country: f.country, 
-      psp: 'GTBank', 
-      bank: 'GTBank ••7890', 
-      method: 'Bank transfer' 
+    acc[code] = {
+      name: f.name,
+      symbol: f.symbol,
+      flag: f.flag,
+      rate: f.rate,
+      min: f.min,
+      country: f.country,
+      psp: 'GTBank',
+      bank: 'GTBank ••7890',
+      method: 'Bank transfer'
     };
     return acc;
   }, {} as any);
@@ -2079,7 +2094,7 @@ export function WeaveCheckout({
     setDepositChain(null);
     try {
       const from = cryptoKey(apiChain, token);
-      const to   = fiatKey(merchant.currency);
+      const to = fiatKey(merchant.currency);
       const finalAmountIn = merchant.amountIn ?? 'dest';
 
       const q = await fetchQuote(apiKey, {
@@ -2097,6 +2112,12 @@ export function WeaveCheckout({
         amount: merchant.amount,
         amountIn: finalAmountIn,
         refundAddress: refundAddr,
+        dest: merchant.destInstrument ? {
+          inline: {
+            ...merchant.destInstrument,
+            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+          }
+        } : undefined,
       });
       if (depositReq.current !== myReq) return;
       setOrderId(res.order.id);
@@ -2122,9 +2143,9 @@ export function WeaveCheckout({
     setQuote(null);
     try {
       const q = await fetchQuote(apiKey, {
-        from:     cryptoKey(CHAIN_TO_API[bal.chain] ?? bal.chain, bal.token),
-        to:       fiatKey(merchant.currency),
-        amount:   merchant.amount,
+        from: cryptoKey(CHAIN_TO_API[bal.chain] ?? bal.chain, bal.token),
+        to: fiatKey(merchant.currency),
+        amount: merchant.amount,
         amountIn: 'dest',
       });
       if (quoteReq.current !== myReq) return;
@@ -2132,16 +2153,16 @@ export function WeaveCheckout({
       // so the UI stays untouched.
       setQuote({
         estimatedFiat: q.estimatedDest,
-        netUsdc:       q.breakdown.netUsd,
-        fiatCurrency:  merchant.currency,
+        netUsdc: q.breakdown.netUsd,
+        fiatCurrency: merchant.currency,
         breakdown: {
-          inputAmount:  q.breakdown.usdEquivalent,
-          inputToken:   bal.token,
-          fastPath:     q.route.steps.length === 1,
+          inputAmount: q.breakdown.usdEquivalent,
+          inputToken: bal.token,
+          fastPath: q.route.steps.length === 1,
           bridgeFeeUsd: q.breakdown.bridgeFeeUsd,
           senderFeeUsd: q.breakdown.senderFeeUsd,
-          appFeeUsd:    q.breakdown.appFeeUsd,
-          sellRate:     q.breakdown.sellRate ?? 0,
+          appFeeUsd: q.breakdown.appFeeUsd,
+          sellRate: q.breakdown.sellRate ?? 0,
         },
       });
     } catch {
@@ -2164,11 +2185,11 @@ export function WeaveCheckout({
     try {
       const source: { inline: InlineBankInstrument } = {
         inline: {
-          kind:                  'bank_account',
-          assetKey:              fiatKey(merchant.currency),
-          bankInstitution:       refundAccount.institution,
+          kind: 'bank_account',
+          assetKey: fiatKey(merchant.currency),
+          bankInstitution: refundAccount.institution,
           bankAccountIdentifier: refundAccount.accountIdentifier,
-          bankAccountName:       refundAccount.accountName,
+          bankAccountName: refundAccount.accountName,
         },
       };
       const res = await createOrder(apiKey, { source, amount: merchant.amount });
@@ -2189,14 +2210,24 @@ export function WeaveCheckout({
     setApiError(null);
     try {
       const from = cryptoKey(CHAIN_TO_API[bal.chain] ?? bal.chain, bal.token);
-      const to   = fiatKey(merchant.currency);
+      const to = fiatKey(merchant.currency);
       const q = await fetchQuote(apiKey, {
         from, to, amount: merchant.amount, amountIn: 'dest',
       });
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: userAddress },
       };
-      const res = await createOrder(apiKey, { source, amount: merchant.amount, amountIn: 'dest' });
+      const res = await createOrder(apiKey, {
+        source,
+        amount: merchant.amount,
+        amountIn: 'dest',
+        dest: merchant.destInstrument ? {
+          inline: {
+            ...merchant.destInstrument,
+            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+          }
+        } : undefined,
+      });
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
       setScreen('processing');
@@ -2238,20 +2269,20 @@ export function WeaveCheckout({
   };
 
   const body = (() => {
-    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur}/>;
+    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} />;
     if (isOnramp) {
-      if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError}/>;
-      if (screen === 'vaccount')   return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur}/>;
-      if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur}/>;
-      if (screen === 'success')    return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur}/>;
-      if (screen === 'error')      return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')}/>;
+      if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
+      if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} />;
     } else {
-      if (screen === 'deposit')    return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainIdx={preSelectedChainIdx} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur}/>;
-      if (screen === 'wallet')     return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance} currencies={currencies}/>;
-      if (screen === 'quote')      return <ScreenQuote merchant={merchant} balance={balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur}/>;
-      if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur}/>;
-      if (screen === 'success')    return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur}/>;
-      if (screen === 'error')      return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')}/>;
+      if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainIdx={preSelectedChainIdx} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'wallet') return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance} currencies={currencies} />;
+      if (screen === 'quote') return <ScreenQuote merchant={merchant} balance={balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')} />;
     }
     return null;
   })();
@@ -2260,12 +2291,12 @@ export function WeaveCheckout({
     (['wallet', 'quote', 'deposit'].includes(screen) && !isOnramp) ||
     (['refundAccount', 'vaccount'].includes(screen) && isOnramp);
   const backTarget =
-    screen === 'quote'    ? 'wallet' :
-    screen === 'vaccount' ? 'refundAccount' :
-                            'connect';
+    screen === 'quote' ? 'wallet' :
+      screen === 'vaccount' ? 'refundAccount' :
+        'connect';
 
   return (
-    <div 
+    <div
       className={`weave-checkout weave-theme-${theme}`}
       style={{
         '--weave-accent': ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C',
@@ -2288,7 +2319,7 @@ export function WeaveCheckout({
       <div key={screen} style={{ animation: 'wfade 0.25s ease' }}>
         {body}
       </div>
-      <WidgetFooter/>
+      <WidgetFooter />
     </div>
   );
 }
