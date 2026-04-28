@@ -108,8 +108,6 @@ export class ChainRailsService {
     this.webhookSecret = process.env.CHAINRAILS_WEBHOOK_SECRET || '';
     if (!this.apiKey) {
       console.warn('[ChainRails] CHAINRAILS_API_KEY is not set. All requests will fail with 401.');
-    } else {
-      console.log(`[ChainRails] API key loaded: ${this.apiKey.slice(0, 4)}...${this.apiKey.slice(-4)}`);
     }
   }
 
@@ -175,10 +173,8 @@ export class ChainRailsService {
       ...(params.refundAddress ? { refund_address: params.refundAddress } : {}),
       ...(params.metadata      ? { metadata:       params.metadata      } : {}),
     };
-    console.log('[ChainRails] creating intent:', JSON.stringify(payload, null, 2));
 
     const intent = await this.request<CRIntent>('POST', '/intents', payload);
-    console.log('[ChainRails] intent created:', JSON.stringify(intent, null, 2));
 
     return intent;
   }

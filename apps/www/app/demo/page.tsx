@@ -399,7 +399,7 @@ export default function DemoPage() {
         </div>
       </main>
 
-      <style jsx global>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         .shadow-leaf {
           box-shadow: 0 4px 12px rgba(11, 15, 14, 0.1);
         }
@@ -416,7 +416,7 @@ export default function DemoPage() {
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
           background: #6B7572;
         }
-      `}</style>
+      `}} />
     </div>
   );
 }

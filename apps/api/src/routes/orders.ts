@@ -265,6 +265,7 @@ router.post('/', requireAuth, async (req, res) => {
     const updated = await prisma.order.update({
       where: { id: order.id },
       data: {
+        sourceAmount: execResult.steps[0].amountIn, // Corrected amount including fees
         destAmount:   execResult.destAmount,
         senderFeeUsd: execResult.feeSummary.senderFeeUsd,
         appFeeUsd:    execResult.feeSummary.appFeeUsd,

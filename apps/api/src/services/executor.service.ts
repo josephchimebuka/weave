@@ -201,10 +201,12 @@ async function runChainRailsBridge(
     metadata:         { orderId: ref },
   });
 
+  const totalRequired = Number(intent.total_amount_in_asset_token) / (10 ** intent.asset_token_decimals);
+  
   return {
     externalId:     String(intent.id),
-    amountIn,
-    amountOut:      amountIn, // bridge fees accounted separately
+    amountIn:       totalRequired,
+    amountOut:      amountIn, // amount user actually wanted to bridge
     depositAddress: intent.intent_address,
     depositMemo:    null,
     expiresAt:      intent.expires_at,
