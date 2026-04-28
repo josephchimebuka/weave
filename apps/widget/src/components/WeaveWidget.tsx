@@ -2565,7 +2565,17 @@ function WeaveCheckoutInner({
           bankAccountName: refundAccount.accountName,
         },
       };
-      const res = await createOrder(apiKey, { source, amount: merchant.amount });
+      const res = await createOrder(apiKey, {
+        source,
+        amount: merchant.amount,
+        dest: merchant.destInstrument ? {
+          inline: {
+            ...merchant.destInstrument,
+            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+          }
+        } : undefined,
+        amountIn: merchant.destAssetKey?.startsWith('fiat:') ? 'dest' : undefined,
+      });
       setOrderId(res.order.id);
       setBankDetails(res.nextAction.bankDetails ?? null);
       setScreen('vaccount');

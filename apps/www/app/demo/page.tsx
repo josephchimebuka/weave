@@ -194,7 +194,7 @@ export default function DemoPage() {
           </h1>
           <p className="text-[#3A4240] leading-relaxed max-w-xl">
             This is a <strong className="text-[#0B0F0E]">real-life demo</strong>. You can run through the actual checkout experience.
-            Payments are live but capped at <span className="font-semibold text-[#0B0F0E]">₦1,000</span> for safety.
+            Payments are live but limited to <span className="font-semibold text-[#0B0F0E]">₦700 - ₦1,000</span> for safety.
           </p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl">Changes here update the widget on the right in real time. Press the <span className="font-bold text-[#0B0F0E]">Bank transfer</span> or <span className="font-bold text-[#0B0F0E]">Pay with crypto wallet</span> button in the widget to walk through the customer&apos;s checkout.</p>
         </div>
@@ -215,20 +215,24 @@ export default function DemoPage() {
                 />
               </Field>
 
-              <Field label="Amount to charge" hint="Capped at ₦1,000">
+              <Field label="Amount to charge" hint="₦700 - ₦1,000">
                 <div className="relative">
                   <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#6B7572] text-sm">₦</span>
                   <input
                     type="text"
-                    className="w-full h-11 pl-8 pr-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none transition-colors"
+                    className={`w-full h-11 pl-8 pr-3.5 bg-transparent border rounded-lg text-sm outline-none transition-colors ${merchant.amount < 700 ? 'border-red-500 focus:border-red-600' : 'border-black/40 focus:border-[#0F5D4C]'}`}
                     value={merchant.amount}
                     onChange={(e) => {
                       const cleaned = e.target.value.replace(/[^0-9]/g, '');
-                      const val = Math.min(Number(cleaned) || 0, 1000);
+                      let val = Number(cleaned) || 0;
+                      if (val > 1000) val = 1000;
                       setMerchant({ ...merchant, amount: val });
                     }}
                   />
                 </div>
+                {merchant.amount > 0 && merchant.amount < 700 && (
+                  <span className="text-[10px] text-red-500 font-bold uppercase tracking-tight mt-1">Minimum amount is ₦700</span>
+                )}
               </Field>
             </div>
 
@@ -346,14 +350,14 @@ export default function DemoPage() {
 
             <div className="relative w-full h-full flex items-center justify-center">
               {/* The Real Widget */}
-              <div className="relative z-10 scale-[60%] min-[375px]:scale-[75%] min-[420px]:scale-[85%] lg:scale-100 ">
+              <div className={`relative z-10 scale-[60%] min-[375px]:scale-[75%] min-[420px]:scale-[85%] lg:scale-100 transition-opacity duration-300 ${merchant.amount < 700 ? 'opacity-40 grayscale pointer-events-none' : 'opacity-100'}`}>
                 <WeaveCheckout
                   key={payoutMode === 'fiat'
                     ? (fiatBank !== 'SELECT AN INSTITUTION' && fiatAccount.length === 10 && fiatAccountName.length > 0
-                      ? `fiat-${fiatBank}-${fiatAccount}`
+                      ? `fiat-${fiatBank}-${fiatAccount}-${merchant.amount}`
                       : 'fiat-incomplete')
                     : (cryptoAddress.length >= 42
-                      ? `crypto-${cryptoAddress}`
+                      ? `crypto-${cryptoAddress}-${merchant.amount}`
                       : 'crypto-incomplete')
                   }
                   merchant={{
@@ -378,6 +382,17 @@ export default function DemoPage() {
                   apiKey={process.env.NEXT_PUBLIC_API_KEY || ''}
                   apiBase={apiUrl}
                 />
+                {merchant.amount < 700 && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="bg-white/90 backdrop-blur-sm border border-red-100 px-6 py-4 rounded-2xl shadow-xl flex flex-col items-center gap-2 text-center">
+                      <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5"><path d="M12 9v4m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 17c-.77 1.333.192 3 1.732 3z" /></svg>
+                      </div>
+                      <div className="text-sm font-bold text-ink uppercase tracking-wider">Invalid Amount</div>
+                      <div className="text-[12px] text-ink-muted leading-tight">Please enter an amount of ₦700 or more to enable the checkout.</div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

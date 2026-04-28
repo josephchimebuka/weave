@@ -129,6 +129,26 @@ router.post('/', requireAuth, async (req, res) => {
             sourceAmount = totalFiat.toNumber();
             usdEquivalent = totalFiat.div(br).toNumber();
             appFeeBps = APP_FEE_BPS;
+         } else if (srcP.kind === 'fiat' && dstP.kind === 'fiat') {
+            // Fiat to Fiat: User pays fiat (sourceAmount), Merchant gets target fiat (body.amount)
+            const targetFiat = new Decimal(body.amount);
+            const sr = new Decimal(sellRate);
+            const br = new Decimal(buyRate);
+            
+            // 1. USDC needed for offramp
+            const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+            const netUsdc = targetFiat.div(sr);
+            const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+            
+            // 2. Add bridge/slippage buffers if any (usually 0 for fiat-to-fiat via Paycrest)
+            const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
+            const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+            
+            // 3. Convert total USDC to source fiat
+            sourceAmount = totalUsdc.mul(br).toNumber();
+            usdEquivalent = totalUsdc.toNumber();
+            appFeeBps = APP_FEE_BPS;
+            destAmountFiat = body.amount;
          }
       } else {
          // Standard 'amountIn === source' logic
