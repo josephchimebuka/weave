@@ -2247,6 +2247,7 @@ export function WeaveCheckout({
         padding: '10px 16px', borderRadius: 999, fontSize: 13,
         display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
         boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+        minWidth: '185px',
       }} onClick={() => setClosed(false)}>
         <WeaveMark size={16} />
         Pay with Weave
