@@ -1869,6 +1869,7 @@ export interface WeaveCheckoutProps {
   onSuccess?: (txn: { orderId: string; status: string }) => void;
   onError?: (err: Error) => void;
   onClose?: () => void;
+  apiBase?: string;
 }
 
 const DEFAULT_MERCHANT: Merchant = {
@@ -1895,7 +1896,11 @@ export function WeaveCheckout({
   onSuccess,
   onError,
   onClose,
+  apiBase,
 }: WeaveCheckoutProps) {
+  if (apiBase && typeof window !== 'undefined') {
+    (window as any).__WEAVE_API_BASE__ = apiBase;
+  }
   const apiKey =
     propApiKey ??
     (typeof window !== 'undefined' ? (window as any).__WEAVE_API_KEY__ : undefined) ??

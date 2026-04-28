@@ -376,6 +376,7 @@ export default function DemoPage() {
                   theme="organic"
                   onSuccess={(txn) => console.log('Payment Success:', txn)}
                   apiKey={process.env.NEXT_PUBLIC_API_KEY || ''}
+                  apiBase={apiUrl}
                 />
               </div>
             </div>
