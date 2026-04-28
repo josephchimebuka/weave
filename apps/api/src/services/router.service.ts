@@ -52,26 +52,26 @@ type Edge = {
   flows?:         Flow[];
 };
 
-const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM'];
+const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM', 'BSC', 'AVALANCHE'];
 
 const EDGES: Edge[] = [
-  // Paycrest offramp: any supported EVM USDC → fiat. Terminal edge; flow-agnostic.
+  // Paycrest offramp: ONLY USDC on Base → fiat. Terminal edge; flow-agnostic.
   {
     provider:       'paycrest',
-    from:           (a) => a.kind === 'crypto' && a.token === 'USDC' && EVM_CHAINS.includes(a.chain),
+    from:           (a) => a.kind === 'crypto' && a.token === 'USDC' && a.chain === 'BASE',
     to:             (a) => a.kind === 'fiat',
     expectedFeeBps: 85,
     expectedSecs:   90,
-    note:           'paycrest USDC→fiat',
+    note:           'paycrest USDC(Base)→fiat',
   },
-  // Paycrest onramp: fiat → USDC on any supported EVM chain.
+  // Paycrest onramp: fiat → ONLY USDC on Base.
   {
     provider:       'paycrest',
     from:           (a) => a.kind === 'fiat',
-    to:             (a) => a.kind === 'crypto' && a.token === 'USDC' && EVM_CHAINS.includes(a.chain),
+    to:             (a) => a.kind === 'crypto' && a.token === 'USDC' && a.chain === 'BASE',
     expectedFeeBps: 85,
     expectedSecs:   180,
-    note:           'paycrest fiat→USDC',
+    note:           'paycrest fiat→USDC(Base)',
   },
   // NEAR Intents: anything NEAR supports → USDC on Base. External-wallet flow.
   // This is the primary cross-chain edge today. Coverage spans ~30 chains so
@@ -90,21 +90,12 @@ const EDGES: Edge[] = [
   // fully wired; it never fires today because no caller passes flow: 'self'.
   {
     provider:       'chainrails',
-    from:           (a) => a.kind === 'crypto' && a.token === 'USDC' && EVM_CHAINS.includes(a.chain),
+    from:           (a) => a.kind === 'crypto' && ['USDC', 'ETH', 'USDT', 'DAI', 'BNB'].includes(a.token) && EVM_CHAINS.includes(a.chain),
     to:             (a) => a.kind === 'crypto' && a.token === 'USDC' && a.chain === 'BASE',
     expectedFeeBps: 15,
     expectedSecs:   60,
-    note:           'chainrails USDC bridge → Base',
+    note:           'chainrails bridge → Base USDC',
     flows:          ['self'],
-  },
-  // Direct: same asset, no hop.
-  {
-    provider:       'direct',
-    from:           (a) => a.kind === 'crypto',
-    to:             (a) => a.kind === 'crypto',
-    expectedFeeBps: 0,
-    expectedSecs:   30,
-    note:           'direct crypto transfer',
   },
 ];
 
