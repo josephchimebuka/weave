@@ -56,7 +56,7 @@ function WovenBackground() {
 
 export default function Home() {
   return (
-    <div className='w-full h-full lg:h-screen' style={{
+    <div className='w-full h-full lg:min-h-screen 3xl:h-screen' style={{
       background: '#F5F4EF',
       position: 'relative', fontFamily: 'Inter, -apple-system, sans-serif',
       color: '#0B0F0E', overflow: 'hidden',
