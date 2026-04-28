@@ -2655,7 +2655,7 @@ function WeaveCheckoutInner({
         // Wait for on-chain confirmation before moving to processing screen.
         // We timeout after 60s to avoid hanging if the txn is stuck in mempool.
         try {
-          await waitForTransactionReceipt(wagmiConfig, { hash, timeout: 60000 });
+          await waitForTransactionReceipt(wagmiConfig as any, { hash, timeout: 60000 });
         } catch (err: any) {
           console.warn('[widget] transaction wait timed out or failed:', err.message);
           // We continue to processing screen anyway; the backend will eventually see it
