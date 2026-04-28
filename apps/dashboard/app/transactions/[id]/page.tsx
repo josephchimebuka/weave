@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { fetchOrder } from '../../lib/dashboard-api';
-import { assetLabel, parseAsset } from '../../types';
+import { assetLabel, parseAsset, institutionName } from '../../types';
 
 function money(value: number | null | undefined, dp = 2) {
   if (value == null) return '—';
@@ -114,7 +114,7 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
             label="Payout destination"
             value={
               order.destInstrument?.bankAccountIdentifier
-                ? `${order.destInstrument.bankInstitution || 'Bank'} · ${order.destInstrument.bankAccountIdentifier}`
+                ? `${institutionName(order.destAssetKey.split(':').pop() || 'NGN', order.destInstrument.bankInstitution || '')} · ${order.destInstrument.bankAccountIdentifier}`
                 : order.destInstrument?.walletAddress || '—'
             }
           />

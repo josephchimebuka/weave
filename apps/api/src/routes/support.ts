@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import { sendSupportEmail } from '../services/email.service';
+import { requireSession } from '../middleware/auth';
 
 const router = Router();
 
 /**
  * POST /api/v1/support/contact
- * Receives a support request from the dashboard.
+ * Receives a support request from the dashboard. Requires an active session.
  */
-router.post('/contact', async (req, res) => {
+router.post('/contact', requireSession, async (req, res) => {
   const { name, email, topic, message } = req.body;
 
   if (!name || !email || !topic || !message) {

@@ -25,7 +25,12 @@ export async function resolveInstrument(
 ) {
   if ('instrumentId' in ref) {
     const inst = await prisma.instrument.findUnique({ where: { id: ref.instrumentId } });
-    if (!inst) throw new Error(`instrument ${ref.instrumentId} not found`);
+    // Use a generic message for both missing and unauthorized to prevent enumeration
+    if (!inst) throw new Error('instrument not found');
+    // Merchant-owned instruments must belong to the requesting merchant
+    if (inst.merchantId && merchantId && inst.merchantId !== merchantId) {
+      throw new Error('instrument not found');
+    }
     return inst;
   }
 

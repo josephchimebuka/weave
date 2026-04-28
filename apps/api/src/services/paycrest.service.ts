@@ -85,14 +85,22 @@ export class PaycrestService {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (auth) headers['API-Key'] = this.apiKey;
 
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`Paycrest ${res.status}: ${text}`);
-    return (JSON.parse(text) as PCEnvelope<T>).data;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`Paycrest ${res.status}: ${text}`);
+      return (JSON.parse(text) as PCEnvelope<T>).data;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   /** GET /v2/rates/{network}/{token}/{amount}/{fiat} — no auth. */
@@ -160,6 +168,15 @@ export class PaycrestService {
   /** GET /v2/sender/orders/{id} */
   async getOrder(orderId: string): Promise<PCOrder> {
     return this.request<PCOrder>('GET', `/sender/orders/${orderId}`);
+  }
+  
+  /** POST /v2/verify-account */
+  async verifyAccount(params: {
+    institution: string;
+    accountIdentifier: string;
+    currency: string;
+  }): Promise<string> {
+    return this.request<string>('POST', '/verify-account', params);
   }
 
   /** HMAC-SHA256(secret, rawBody). Accepts optional `sha256=` prefix. */

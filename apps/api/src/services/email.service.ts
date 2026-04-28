@@ -2,9 +2,23 @@ import { prisma } from '../lib/prisma';
 import { resend } from '../lib/resend';
 import jwt from 'jsonwebtoken';
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'super-secret-admin-key';
 const API_URL = process.env.API_URL || 'http://localhost:4000/api/v1';
 const COMPANY_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@weave.com';
+
+function getAdminSecret(): string {
+  const s = process.env.ADMIN_SECRET;
+  if (!s) throw new Error('[security] ADMIN_SECRET is not set — cannot sign admin tokens');
+  return s;
+}
+
+function escHtml(s: string | null | undefined): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
 
 /**
  * Sends a welcome email to a newly signed-up merchant.
@@ -44,9 +58,9 @@ export async function sendWelcomeEmail(email: string, name: string) {
       `
     });
     if (error) {
-       console.error(`[email-welcome] Resend Error:`, error);
+      console.error(`[email-welcome] Resend Error:`, error);
     } else {
-       console.log(`[email-welcome] sent to ${email} (id: ${data?.id})`);
+      console.log(`[email-welcome] sent to ${email} (id: ${data?.id})`);
     }
   } catch (err: any) {
     console.error(`[email-welcome] fatal error:`, err.message);
@@ -68,43 +82,51 @@ export async function sendAdminKYBNotification(verificationId: string) {
 
     // Generate secure tokens for the buttons
     // These expire in 48 hours for security
-    const approveToken = jwt.sign({ sub: v.id, action: 'approve' }, ADMIN_SECRET, { expiresIn: '48h' });
-    const rejectToken  = jwt.sign({ sub: v.id, action: 'reject'  }, ADMIN_SECRET, { expiresIn: '48h' });
+    const secret = getAdminSecret();
+    const approveToken = jwt.sign({ sub: v.id, action: 'approve' }, secret, { expiresIn: '48h' });
+    const rejectToken = jwt.sign({ sub: v.id, action: 'reject' }, secret, { expiresIn: '48h' });
 
     const approveUrl = `${API_URL}/admin/verify?id=${v.id}&action=approve&token=${approveToken}`;
-    const rejectUrl  = `${API_URL}/admin/verify?id=${v.id}&action=reject&token=${rejectToken}`;
+    const rejectUrl = `${API_URL}/admin/verify?id=${v.id}&action=reject&token=${rejectToken}`;
 
     const { data, error } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || 'Weave System <system@weave.com>',
       to: [COMPANY_ADMIN_EMAIL],
-      subject: `🚨 New KYB Submission: ${v.legalName || v.merchant.name}`,
+      subject: `🚨 New KYB Submission: ${escHtml(v.legalName || v.merchant.name)}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; color: #0B0F0E;">
           <h2 style="color: #0F5D4C;">New Merchant KYB Submission</h2>
           <p>A merchant has submitted their business details for verification.</p>
-          
+
           <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
             <h3 style="margin-top: 0;">Business Meta</h3>
             <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
-              <tr><td style="color: #6B7572; padding: 6px 0;">Legal Name</td><td style="font-weight: 600; padding: 6px 0;">${v.legalName}</td></tr>
-              <tr><td style="color: #6B7572; padding: 6px 0;">Entity Type</td><td style="font-weight: 600; padding: 6px 0;">${v.entityType}</td></tr>
-              <tr><td style="color: #6B7572; padding: 6px 0;">Reg Number</td><td style="font-weight: 600; padding: 6px 0;">${v.regNumber}</td></tr>
-              <tr><td style="color: #6B7572; padding: 6px 0;">Address</td><td style="font-weight: 600; padding: 6px 0;">${v.businessAddress}, ${v.city}</td></tr>
-              <tr><td style="color: #6B7572; padding: 6px 0;">State/Postal</td><td style="font-weight: 600; padding: 6px 0;">${v.state} ${v.postalCode}</td></tr>
-              <tr><td style="color: #6B7572; padding: 6px 0;">Merchant Email</td><td style="font-weight: 600; padding: 6px 0;">${v.merchant.email}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Legal Name</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.legalName)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Entity Type</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.entityType)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Reg Number</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.regNumber)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Address</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.businessAddress)}, ${escHtml(v.city)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">State/Postal</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.state)} ${escHtml(v.postalCode)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Merchant Email</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.merchant.email)}</td></tr>
             </table>
 
             <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 20px 0;" />
-            
+
             <h3 style="margin-top: 0; font-size: 16px;">Documents</h3>
             <div style="margin-top: 10px;">
-              ${(v.documentUrls as any[])?.map(doc => `
+              ${(v.documentUrls as any[])?.map(doc => {
+                // Only render URLs that are safe Cloudinary origins
+                const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '';
+                const isSafeUrl = typeof doc.url === 'string' &&
+                  (doc.url.startsWith(`https://res.cloudinary.com/${cloudName}/`) ||
+                   doc.url.startsWith('https://res.cloudinary.com/'));
+                if (!isSafeUrl) return '';
+                return `
                 <div style="margin-bottom: 8px;">
-                  <a href="${doc.url}" target="_blank" style="color: #0F5D4C; font-weight: 600; text-decoration: none;">
-                    View ${doc.type.replace(/_/g, ' ')} →
+                  <a href="${escHtml(doc.url)}" target="_blank" rel="noopener noreferrer" style="color: #0F5D4C; font-weight: 600; text-decoration: none;">
+                    View ${escHtml(doc.type.replace(/_/g, ' '))} →
                   </a>
-                </div>
-              `).join('') || '<p style="color: #9B9FA1;">No documents attached</p>'}
+                </div>`;
+              }).join('') || '<p style="color: #9B9FA1;">No documents attached</p>'}
             </div>
           </div>
 
@@ -126,9 +148,9 @@ export async function sendAdminKYBNotification(verificationId: string) {
     });
 
     if (error) {
-       console.error(`[admin-notify] Resend Error:`, error);
+      console.error(`[admin-notify] Resend Error:`, error);
     } else {
-       console.log(`[admin-notify] KYB alert sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
+      console.log(`[admin-notify] KYB alert sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
     }
   } catch (err: any) {
     console.error(`[admin-notify] fatal error:`, err.message);
@@ -178,9 +200,9 @@ export async function sendMerchantKYBApprovalEmail(merchantId: string) {
     });
 
     if (error) {
-       console.error(`[email-kyb-ok] Resend Error:`, error);
+      console.error(`[email-kyb-ok] Resend Error:`, error);
     } else {
-       console.log(`[email-kyb-ok] approval sent to ${m.email} (id: ${data?.id})`);
+      console.log(`[email-kyb-ok] approval sent to ${m.email} (id: ${data?.id})`);
     }
   } catch (err: any) {
     console.error(`[email-kyb-ok] fatal error:`, err.message);
@@ -231,9 +253,9 @@ export async function sendMerchantKYBRejectionEmail(merchantId: string, reason: 
     });
 
     if (error) {
-       console.error(`[email-kyb-no] Resend Error:`, error);
+      console.error(`[email-kyb-no] Resend Error:`, error);
     } else {
-       console.log(`[email-kyb-no] rejection sent to ${m.email} (id: ${data?.id})`);
+      console.log(`[email-kyb-no] rejection sent to ${m.email} (id: ${data?.id})`);
     }
   } catch (err: any) {
     console.error(`[email-kyb-no] fatal error:`, err.message);
@@ -250,22 +272,22 @@ export async function sendSupportEmail(payload: { name: string; email: string; t
     const { data, error } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || 'Weave Support <support@weave.com>',
       to: [supportEmail],
-      subject: `[Support Request] ${payload.topic}: ${payload.name}`,
+      subject: `[Support Request] ${escHtml(payload.topic)}: ${escHtml(payload.name)}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; color: #0B0F0E;">
           <h2 style="color: #0F5D4C;">New Support Inbound</h2>
           <p>You have received a new message from the merchant dashboard.</p>
-          
+
           <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
-             <p><strong>Merchant:</strong> ${payload.name}</p>
-             <p><strong>Email:</strong> ${payload.email}</p>
-             <p><strong>Topic:</strong> ${payload.topic}</p>
+             <p><strong>Merchant:</strong> ${escHtml(payload.name)}</p>
+             <p><strong>Email:</strong> ${escHtml(payload.email)}</p>
+             <p><strong>Topic:</strong> ${escHtml(payload.topic)}</p>
              <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 16px 0;" />
-             <p style="white-space: pre-wrap; line-height: 1.6;">${payload.message}</p>
+             <p style="white-space: pre-wrap; line-height: 1.6;">${escHtml(payload.message)}</p>
           </div>
-          
+
           <p style="font-size: 12px; color: #9B9FA1;">
-            Reply directly to this email to contact <strong>${payload.email}</strong>.
+            Reply directly to this email to contact <strong>${escHtml(payload.email)}</strong>.
           </p>
         </div>
       `
@@ -288,10 +310,10 @@ export async function sendMerchantPaymentNotification(orderId: string) {
   try {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      include: { 
+      include: {
         merchant: true,
         sourceInstrument: true,
-        destInstrument: true 
+        destInstrument: true
       }
     });
 
@@ -386,9 +408,9 @@ export async function sendOtpEmail(email: string, code: string) {
       `
     });
     if (error) {
-       console.error(`[email-otp] Resend Error:`, error);
+      console.error(`[email-otp] Resend Error:`, error);
     } else {
-       console.log(`[email-otp] code sent to ${email} (id: ${data?.id})`);
+      console.log(`[email-otp] code sent to ${email} (id: ${data?.id})`);
     }
   } catch (err: any) {
     console.error(`[email-otp] fatal error:`, err.message);
@@ -401,7 +423,9 @@ export async function sendOtpEmail(email: string, code: string) {
 export async function sendPasswordResetEmail(email: string, otpCode: string, resetToken: string) {
   try {
     const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
-    const resetUrl = `${dashboardUrl}/auth/reset-password?resetToken=${resetToken}&otp=${otpCode}`;
+    // OTP is displayed separately in the email body — never included in the URL
+    // so that intercepting the link alone is not sufficient to reset the password.
+    const resetUrl = `${dashboardUrl}/auth/reset-password?resetToken=${resetToken}`;
 
     const { data, error } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || 'Weave Security <security@weave.com>',
@@ -431,9 +455,9 @@ export async function sendPasswordResetEmail(email: string, otpCode: string, res
       `
     });
     if (error) {
-       console.error(`[email-reset] Resend Error:`, error);
+      console.error(`[email-reset] Resend Error:`, error);
     } else {
-       console.log(`[email-reset] full reset package sent to ${email} (id: ${data?.id})`);
+      console.log(`[email-reset] full reset package sent to ${email} (id: ${data?.id})`);
     }
   } catch (err: any) {
     console.error(`[email-reset] fatal error:`, err.message);
@@ -477,9 +501,9 @@ export async function sendDeletionRequestEmail(merchantId: string, email: string
     });
 
     if (error) {
-       console.error(`[admin-notify] Resend Error for deletion request:`, error);
+      console.error(`[admin-notify] Resend Error for deletion request:`, error);
     } else {
-       console.log(`[admin-notify] Deletion request alert sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
+      console.log(`[admin-notify] Deletion request alert sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
     }
   } catch (err: any) {
     console.error(`[admin-notify] fatal error sending deletion request:`, err.message);

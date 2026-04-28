@@ -3,9 +3,12 @@ import {
   type AssetKey,
   parseAsset,
   assetLabel,
+  assetMeta,
   isFiat,
   isCrypto,
   directionOf,
+  institutionName,
+  INSTITUTIONS_BY_CUR,
   SUPPORTED_FIAT,
   SUPPORTED_CRYPTO,
   type CryptoMeta
@@ -131,6 +134,8 @@ export interface Merchant {
   description?: string;
   amountIn?: 'source' | 'dest';
   sourceAssetKey?: string;
+  destAssetKey?: string;
+  destInstrument?: InlineBankInstrument | InlineWalletInstrument;
 }
 
 const fmtMoney = (n: number, cur: string, fractionDigits?: number) => {
@@ -652,7 +657,11 @@ function ScreenQuote({
           <div style={{ fontSize: 16, color: WEAVE.ink2, fontWeight: 500 }}>{balance.token}</div>
         </Row>
         <Row gap={6} style={{ fontSize: 12, color: WEAVE.mute }}>
-          <IconDot bg={balance.chainTint} size={14}>{balance.icon}</IconDot>
+          <IconDot bg={balance.chainTint} size={14}>
+            {balance.logo ? (
+              <img src={balance.logo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : balance.icon}
+          </IconDot>
           on {balance.chain}
         </Row>
       </Stack>
@@ -845,7 +854,7 @@ function ScreenProcessing({
     { label: 'Confirming your transfer', sub: `Matching the ${fiatDisplay} from your bank`, dur: 1600 },
     { label: 'Completing payment', sub: `Sending to ${merchant.name}`, dur: 2400 },
   ] : [
-    { label: 'Waiting for deposit', sub: 'Detecting your transaction on-chain', dur: 1400 },
+    { label: 'Deposit detected', sub: 'Processing your transaction on-chain', dur: 1400 },
     { label: 'Confirming your payment', sub: `Settling ${c?.name || merchant.currency} to ${merchant.name}`, dur: 2600 },
   ];
 
@@ -974,15 +983,17 @@ function ScreenSuccess({
     return () => { cancelled = true; };
   }, [apiKey, orderId]);
 
-  // Source asset key looks like "crypto:BASE:USDC" or "fiat:NGN" — last segment
-  // is the token/currency code we want to render.
-  const sourceToken = typeof order?.sourceAssetKey === 'string'
+  // Resolve real asset meta from order if available
+  const orderMeta = order?.sourceAssetKey ? assetMeta(order.sourceAssetKey) : undefined;
+  const asset = orderMeta || balance;
+
+  const sourceToken = (asset as any).token || (typeof order?.sourceAssetKey === 'string'
     ? order.sourceAssetKey.split(':').pop()
-    : undefined;
+    : undefined);
 
   const paidWith = direction === 'offramp' && order
-    ? `${fmtCrypto(Number(order.sourceAmount), 4)} ${sourceToken ?? balance.token}`
-    : `${fmtCrypto(balance.amount * 0.3, 4)} ${balance.token}`;
+    ? `${fmtCrypto(Number(order.sourceAmount), 4)} ${sourceToken ?? (asset as any).token}`
+    : `${fmtCur(merchant.amount, merchant.currency)}`;
 
   const destBank = order?.destInstrument?.bankInstitution;
   const settledTo = direction === 'offramp'
@@ -1000,6 +1011,8 @@ function ScreenSuccess({
       ? `${completedInSec}s`
       : `${Math.round(completedInSec / 60)}m`;
 
+  const isResolving = !order;
+
   return (
     <Stack gap={18} style={{ padding: '28px 20px 12px', minHeight: 360 }}>
       <Stack gap={14} style={{ alignItems: 'center', paddingTop: 8 }}>
@@ -1014,7 +1027,10 @@ function ScreenSuccess({
           <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.3 }}>
             Payment complete
           </div>
-          <div style={{ fontSize: 13, color: WEAVE.mute, textAlign: 'center', lineHeight: 1.5, maxWidth: 280 }}>
+          <div style={{
+            fontSize: 13, color: WEAVE.mute, textAlign: 'center', lineHeight: 1.5, maxWidth: 280,
+            animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined
+          }}>
             {direction === 'offramp' ? (
               <>{fmtCur(merchant.amount, merchant.currency)} is on its way to <span style={{ color: WEAVE.ink }}>{merchant.name}</span>.</>
             ) : (
@@ -1028,8 +1044,16 @@ function ScreenSuccess({
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
           <span style={{ color: WEAVE.mute }}>Paid with</span>
           {direction === 'offramp' ? (
-            <Row gap={6}>
-              <IconDot bg={balance.chainTint} size={16}>{balance.icon}</IconDot>
+            <Row gap={6} style={{ animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined }}>
+              <IconDot bg={(asset as any).chainTint || (asset as any).tint} size={16}>
+                {(asset as any).logo ? (
+                  <img src={(asset as any).logo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (asset as any).icon ? (
+                  (asset as any).icon
+                ) : (asset as any).flag ? (
+                  (asset as any).flag
+                ) : (asset as any).symbol}
+              </IconDot>
               <span style={{ fontWeight: 500 }}>{paidWith}</span>
             </Row>
           ) : (
@@ -1042,13 +1066,18 @@ function ScreenSuccess({
         <Hair />
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
           <span style={{ color: WEAVE.mute }}>{direction === 'offramp' ? 'Settled to' : 'Paid to'}</span>
-          <span style={{ fontWeight: 500 }}>{settledTo}</span>
+          <span style={{
+            fontWeight: 500,
+            animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined
+          }}>{settledTo}</span>
         </Row>
         <Hair />
         <Row justify="space-between" style={{ padding: '12px 14px', fontSize: 12.5 }}>
           <span style={{ color: WEAVE.mute }}>Completed in</span>
           <Row gap={6}>
-            <Pill tone="good">{completedIn}</Pill>
+            <span style={{ animation: isResolving ? 'wpulse 1.5s ease-in-out infinite' : undefined }}>
+              <Pill tone="good">{completedIn}</Pill>
+            </span>
           </Row>
         </Row>
       </Stack>
@@ -1383,7 +1412,11 @@ function ScreenDeposit({
         }}>
           {chain ? (
             <>
-              <IconDot bg={chain.tint} size={26}>{chain.icon}</IconDot>
+              <IconDot bg={chain.tint} size={26}>
+                {chain.logo ? (
+                  <img src={chain.logo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : chain.icon}
+              </IconDot>
               <Stack gap={1} style={{ flex: 1 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 500 }}>{chain.token} on {chain.name}</div>
                 <div style={{ fontSize: 11, color: WEAVE.mute }}>{chain.network}</div>
@@ -1635,28 +1668,7 @@ interface RefundAccount {
   accountName: string;
 }
 
-interface Institution {
-  code: string;
-  name: string;
-}
-
-const INSTITUTIONS_BY_CUR: Record<string, Institution[]> = {
-  NGN: [
-    { code: 'GTBINGLA', name: 'Guaranty Trust Bank' },
-    { code: 'FBNINGLA', name: 'First Bank of Nigeria' },
-    { code: 'ZEIBNGLA', name: 'Zenith Bank' },
-    { code: 'ABNGNGLA', name: 'Access Bank' },
-    { code: 'UBNINGLA', name: 'Union Bank' },
-    { code: 'STBKNGLA', name: 'Stanbic IBTC Bank' },
-    { code: 'FCMBNGLA', name: 'First City Monument Bank' },
-    { code: 'FIDTNGLA', name: 'Fidelity Bank' },
-    { code: 'ECOBNGLA', name: 'Ecobank Nigeria' },
-    { code: 'WEMANGLA', name: 'Wema Bank' },
-    { code: 'KUDANGPC', name: 'Kuda Bank' },
-    { code: 'OPAYNGPC', name: 'OPay' },
-    { code: 'MONINGPC', name: 'Moniepoint' },
-  ],
-};
+// ── Styles ──────────────────────────────────────────────────────────────────
 
 const inputStyle: CSSProperties = {
   width: '100%', padding: '11px 14px', borderRadius: 10,
@@ -1778,10 +1790,7 @@ export interface BankDetails {
   validUntil?: string;
 }
 
-function institutionName(currency: string, code: string): string {
-  const match = (INSTITUTIONS_BY_CUR[currency] ?? []).find((b) => b.code === code);
-  return match?.name ?? code;
-}
+// Payout destination logic
 
 function ScreenVirtualAccount({
   onNext, merchant, bankDetails, apiKey, orderId, currencies, fmtCur
@@ -1941,6 +1950,7 @@ export interface WeaveCheckoutProps {
   onSuccess?: (txn: { orderId: string; status: string }) => void;
   onError?: (err: Error) => void;
   onClose?: () => void;
+  apiBase?: string;
 }
 
 const DEFAULT_MERCHANT: Merchant = {
@@ -1967,7 +1977,11 @@ export function WeaveCheckout({
   onSuccess,
   onError,
   onClose,
+  apiBase,
 }: WeaveCheckoutProps) {
+  if (apiBase && typeof window !== 'undefined') {
+    (window as any).__WEAVE_API_BASE__ = apiBase;
+  }
   const apiKey =
     propApiKey ??
     (typeof window !== 'undefined' ? (window as any).__WEAVE_API_KEY__ : undefined) ??
@@ -2021,37 +2035,44 @@ export function WeaveCheckout({
         if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
           fetchOrder(apiKey, savedId).then(data => {
             const order = data;
+            const dir = directionOf(order.sourceAssetKey, order.destAssetKey);
+            setDirection(dir === 'onramp' ? 'onramp' : 'offramp');
+
             if (['awaiting_deposit', 'processing'].includes(order.status)) {
               setOrderId(order.id);
 
               // Find the active step (usually the first one that isn't DONE)
               const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
 
-              if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
-                // This was a bank/fiat-based onramp
-                setDirection('onramp');
-                // The bank details were stored in the source instrument at creation
-                if (order.sourceInstrument?.kind === 'bank_account') {
-                  setBankDetails({
-                    accountName: order.sourceInstrument.bankAccountName || '',
-                    accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
-                    institution: order.sourceInstrument.bankInstitution || '',
-                    currency: order.destAssetKey.split(':').pop() || 'NGN',
-                    amountToTransfer: order.sourceAmount.toString()
-                  });
+              if (dir === 'onramp') {
+                if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
+                  if (order.sourceInstrument?.kind === 'bank_account') {
+                    setBankDetails({
+                      accountName: order.sourceInstrument.bankAccountName || '',
+                      accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
+                      institution: order.sourceInstrument.bankInstitution || '',
+                      currency: order.destAssetKey.split(':').pop() || 'NGN',
+                      amountToTransfer: order.sourceAmount.toString()
+                    });
+                  }
+                  setScreen('vaccount');
+                } else {
+                  setScreen('processing');
                 }
-                setScreen('vaccount');
-              } else if (activeStep?.provider === 'nearintents') {
-                // This was a crypto-based offramp
-                setDirection('offramp');
-                setDepositAddress(activeStep.depositAddress);
-                setDepositMemo(activeStep.depositMemo);
-                setDepositAmount(Number(activeStep.amountIn));
+              } else {
+                // Offramp
+                if (activeStep?.provider === 'nearintents' && order.status === 'awaiting_deposit') {
+                  setDepositAddress(activeStep.depositAddress);
+                  setDepositMemo(activeStep.depositMemo);
+                  setDepositAmount(Number(activeStep.amountIn));
 
-                const parts = activeStep.fromAsset.split(':');
-                setDepositToken(parts[2] || parts[1]);
-                setDepositChain(parts[1]);
-                setScreen('deposit');
+                  const parts = activeStep.fromAsset.split(':');
+                  setDepositToken(parts[2] || parts[1]);
+                  setDepositChain(parts[1]);
+                  setScreen('deposit');
+                } else {
+                  setScreen('processing');
+                }
               }
             } else if (order.status === 'completed') {
               setOrderId(order.id);
@@ -2183,6 +2204,12 @@ export function WeaveCheckout({
         amount: merchant.amount,
         amountIn: finalAmountIn,
         refundAddress: refundAddr,
+        dest: merchant.destInstrument ? {
+          inline: {
+            ...merchant.destInstrument,
+            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+          }
+        } : undefined,
       });
       if (depositReq.current !== myReq) return;
       setOrderId(res.order.id);
@@ -2254,12 +2281,22 @@ export function WeaveCheckout({
         inline: {
           kind: 'bank_account',
           assetKey: fiatKey(merchant.currency),
-          bankInstitution: info?.institution || 'NA',
-          bankAccountIdentifier: info?.accountIdentifier || 'NA',
-          bankAccountName: info?.accountName || 'NA',
+          bankInstitution: refundAccount.institution,
+          bankAccountIdentifier: refundAccount.accountIdentifier,
+          bankAccountName: refundAccount.accountName,
         },
       };
-      const res = await createOrder(apiKey, { source, amount: merchant.amount });
+      const res = await createOrder(apiKey, {
+        source,
+        amount: merchant.amount,
+        dest: merchant.destInstrument ? {
+          inline: {
+            ...merchant.destInstrument,
+            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+          }
+        } : undefined,
+        amountIn: merchant.destAssetKey?.startsWith('fiat:') ? 'dest' : undefined,
+      });
       setOrderId(res.order.id);
       setBankDetails(res.nextAction.bankDetails ?? null);
       setPaystackDetails(res.nextAction.paystackDetails ?? null);
@@ -2287,7 +2324,17 @@ export function WeaveCheckout({
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: userAddress },
       };
-      const res = await createOrder(apiKey, { source, amount: merchant.amount, amountIn: 'dest' });
+      const res = await createOrder(apiKey, {
+        source,
+        amount: merchant.amount,
+        amountIn: 'dest',
+        dest: merchant.destInstrument ? {
+          inline: {
+            ...merchant.destInstrument,
+            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+          }
+        } : undefined,
+      });
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
       setScreen('processing');
@@ -2307,6 +2354,7 @@ export function WeaveCheckout({
         padding: '10px 16px', borderRadius: 999, fontSize: 13,
         display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
         boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+        minWidth: '185px',
       }} onClick={() => setClosed(false)}>
         <WeaveMark size={16} />
         Pay with Weave

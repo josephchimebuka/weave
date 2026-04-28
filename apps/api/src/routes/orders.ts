@@ -86,7 +86,7 @@ router.post('/', requireAuth, async (req, res) => {
     const dstP = parseAsset(destInstrument.assetKey);
     let quoteRate: number | null = null;
     let usdEquivalent = body.amount;
-    let sourceAmount = body.amount;
+    let sourceAmount = body.amountIn === 'dest' ? 0 : body.amount;
     let destAmountFiat: number | undefined = undefined;
     let appFeeBps: number | undefined = undefined;
 
@@ -111,11 +111,13 @@ router.post('/', requireAuth, async (req, res) => {
           const netUsdc = targetFiat.div(sr);
           const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
 
-          const appFeePct = new Decimal(APP_FEE_BPS).plus(SLIPPAGE_BUFFER_BPS).div(10000);
-          const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+          const hasSwap = plan.steps.some(s => s.provider === 'nearintents');
+          const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
+          const slippagePct = hasSwap ? new Decimal(SLIPPAGE_BUFFER_BPS).div(10000) : new Decimal(0);
+          const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct).minus(slippagePct));
 
           usdEquivalent = totalUsdc.toNumber();
-          appFeeBps = APP_FEE_BPS + SLIPPAGE_BUFFER_BPS;
+          appFeeBps = APP_FEE_BPS + (hasSwap ? SLIPPAGE_BUFFER_BPS : 0);
         } else if (srcP.kind === 'fiat' && dstP.kind === 'crypto') {
           // Onramp: User pays fiat (sourceAmount), Merchant gets target crypto value (body.amount in fiat)
           const targetFiat = new Decimal(body.amount);
@@ -127,6 +129,26 @@ router.post('/', requireAuth, async (req, res) => {
           sourceAmount = totalFiat.toNumber();
           usdEquivalent = totalFiat.div(br).toNumber();
           appFeeBps = APP_FEE_BPS;
+        } else if (srcP.kind === 'fiat' && dstP.kind === 'fiat') {
+          // Fiat to Fiat: User pays fiat (sourceAmount), Merchant gets target fiat (body.amount)
+          const targetFiat = new Decimal(body.amount);
+          const sr = new Decimal(sellRate);
+          const br = new Decimal(buyRate);
+
+          // 1. USDC needed for offramp
+          const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+          const netUsdc = targetFiat.div(sr);
+          const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+
+          // 2. Add bridge/slippage buffers if any (usually 0 for fiat-to-fiat via Paycrest)
+          const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
+          const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+
+          // 3. Convert total USDC to source fiat
+          sourceAmount = totalUsdc.mul(br).toNumber();
+          usdEquivalent = totalUsdc.toNumber();
+          appFeeBps = APP_FEE_BPS;
+          destAmountFiat = body.amount;
         }
       } else {
         // Standard 'amountIn === source' logic
@@ -162,21 +184,38 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     if (!order) {
-      order = await prisma.order.create({
-        data: {
-          merchantId: merchant.id,
-          sourceInstrumentId: sourceInstrument.id,
-          destInstrumentId: destInstrument.id,
-          sourceAssetKey: sourceInstrument.assetKey,
-          destAssetKey: destInstrument.assetKey,
-          sourceAmount,
-          status: 'awaiting_deposit',
-          routePlan: plan as any,
-          quoteRate,
-          reference: body.reference,
-        },
-      });
-      console.log(`[orders] created new order: ${order.id}`);
+      try {
+        order = await prisma.order.create({
+          data: {
+            merchantId: merchant.id,
+            sourceInstrumentId: sourceInstrument.id,
+            destInstrumentId: destInstrument.id,
+            sourceAssetKey: sourceInstrument.assetKey,
+            destAssetKey: destInstrument.assetKey,
+            sourceAmount,
+            status: 'awaiting_deposit',
+            routePlan: plan as any,
+            quoteRate,
+            reference: body.reference,
+          },
+        });
+        console.log(`[orders] created new order: ${order.id}`);
+      } catch (createErr: any) {
+        // P2002 = unique constraint violation — concurrent request with the same reference
+        if (createErr?.code === 'P2002' && body.reference) {
+          const existing = await prisma.order.findFirst({
+            where: { merchantId: merchant.id, reference: body.reference },
+          });
+          if (existing) {
+            return res.status(409).json({
+              success: false,
+              error: 'An order with this reference already exists',
+              data: { orderId: existing.id },
+            });
+          }
+        }
+        throw createErr;
+      }
     } else {
       console.log(`[orders] reusing existing order for ref ${body.reference}: ${order.id}`);
     }

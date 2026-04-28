@@ -106,7 +106,7 @@ export default function SupportPage() {
 
       {/* Hero */}
       <section className="text-center py-12 md:py-20 fade-up" style={{ animationDelay: '80ms' }}>
-        <h1 className="font-display font-display-tight text-[48px] md:text-[64px] lg:text-[72px] font-semibold text-ink leading-[1.05] tracking-tight max-w-4xl mx-auto">
+        <h1 className="font-display font-display-tight text-[36px] sm:text-[48px] md:text-[64px] lg:text-[72px] font-semibold text-ink leading-[1.05] tracking-tight max-w-4xl mx-auto">
           How can we help?
         </h1>
         <p className="text-ink-muted text-[17px] mt-6 max-w-xl mx-auto leading-relaxed">

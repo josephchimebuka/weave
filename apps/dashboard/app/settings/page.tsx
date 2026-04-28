@@ -290,7 +290,7 @@ export default function CheckoutPage() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-5 fade-up">
         <div className="max-w-2xl">
-          <h1 className="font-display text-[42px] font-semibold text-ink tracking-tight leading-[1.05]">
+          <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-[1.05]">
             Settings
           </h1>
           <p className="text-ink-muted text-[15px] mt-3 leading-relaxed">
@@ -727,7 +727,7 @@ export default function CheckoutPage() {
               </div>
             </div>
 
-            <div className="flex-1 bg-gradient-to-br from-cream-deep/50 to-parchment/30 p-6 border-l border-hair-soft min-w-[340px] flex flex-col">
+            <div className="flex-1 bg-gradient-to-br from-cream-deep/50 to-parchment/30 p-6 border-l border-hair-soft sm:min-w-[340px] flex flex-col">
               <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-[0.13em] mb-3">Live Preview</p>
               
               <div className="flex-1 w-full flex justify-center shrink-0 scale-[0.80] origin-top">

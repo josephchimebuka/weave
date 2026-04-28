@@ -137,18 +137,22 @@ export default function KybPage() {
   };
 
   const uploadToCloudinary = async (file: File): Promise<string> => {
-    const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'weave-cloud';
-    const preset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'kyb_documents';
-    
+    const signRes = await fetch('/api/cloudinary-sign', { method: 'POST' });
+    if (!signRes.ok) throw new Error('Failed to get upload signature');
+    const { timestamp, signature, apiKey, cloudName, folder } = await signRes.json();
+
     const data = new FormData();
     data.append('file', file);
-    data.append('upload_preset', preset);
+    data.append('timestamp', String(timestamp));
+    data.append('signature', signature);
+    data.append('api_key', apiKey);
+    data.append('folder', folder);
 
     const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
       method: 'POST',
       body: data,
     });
-    
+
     if (!res.ok) throw new Error('Cloudinary upload failed');
     const json = await res.json();
     return json.secure_url;
@@ -211,7 +215,7 @@ export default function KybPage() {
           </div>
         </div>
         <div className="space-y-4">
-          <h1 className="font-display text-[48px] lg:text-[56px] font-semibold text-ink tracking-tight leading-none">Application Under Review</h1>
+          <h1 className="font-display text-[32px] sm:text-[48px] lg:text-[56px] font-semibold text-ink tracking-tight leading-none">Application Under Review</h1>
           <p className="text-ink-muted text-[17px] max-w-lg mx-auto leading-relaxed">
             Your business verification is being processed by our compliance team. We've received your documents safely.
           </p>
@@ -254,7 +258,7 @@ export default function KybPage() {
           <Check size={48} strokeWidth={3} />
         </div>
         <div className="space-y-4">
-          <h2 className="font-display text-[48px] font-semibold text-ink tracking-tight leading-tight">Merchant Verified</h2>
+          <h2 className="font-display text-[32px] sm:text-[48px] font-semibold text-ink tracking-tight leading-tight">Merchant Verified</h2>
           <p className="text-ink-muted text-[17px] max-w-lg mx-auto leading-relaxed">
             Your business has been fully verified. Your account is active and you can now accept live payments with higher limits.
           </p>
@@ -291,7 +295,7 @@ export default function KybPage() {
           <Search size={36} />
         </div>
         <div className="space-y-4">
-          <h2 className="font-display text-[42px] font-semibold text-ink tracking-tight leading-tight">Review in Progress</h2>
+          <h2 className="font-display text-[30px] sm:text-[42px] font-semibold text-ink tracking-tight leading-tight">Review in Progress</h2>
           <p className="text-ink-muted text-[17px] max-w-lg mx-auto leading-relaxed">
             We are currently reviewing your business details. This typically takes <strong>1-3 business days</strong>. We will notify you via email as soon as the review is complete.
           </p>
@@ -322,7 +326,7 @@ export default function KybPage() {
     <div className="max-w-5xl mx-auto space-y-8 pb-10">
       {/* Header */}
       <div className="fade-up">
-        <h1 className="font-display text-[42px] font-semibold text-ink tracking-tight leading-none">
+        <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-none">
           Business Verification
         </h1>
         <p className="text-ink-muted text-[15px] mt-3">
@@ -331,8 +335,8 @@ export default function KybPage() {
       </div>
 
       {/* Stepper */}
-      <div className="relative rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf px-8 py-7 fade-up" style={{ animationDelay: '80ms' }}>
-        <ol className="grid grid-cols-4 gap-0 relative">
+      <div className="relative rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf px-4 sm:px-8 py-7 fade-up" style={{ animationDelay: '80ms' }}>
+        <ol className="flex sm:grid sm:grid-cols-4 gap-4 sm:gap-0 relative overflow-x-auto sm:overflow-visible no-scrollbar">
           {STEPS.map((step, idx) => {
             const done = idx < currentIdx;
             const active = idx === currentIdx;
@@ -340,14 +344,14 @@ export default function KybPage() {
             const connectorDone = idx < currentIdx;
 
             return (
-              <li key={step.label} className="relative flex flex-col items-center">
+              <li key={step.label} className="relative flex flex-col items-center min-w-[80px] sm:min-w-0 flex-1">
                 {!isLast && (
-                  <span className={`absolute top-[18px] left-1/2 h-[3px] w-full rounded-full ${connectorDone ? 'bg-forest' : idx === currentIdx ? 'bg-gradient-to-r from-forest to-hair' : 'bg-hair'}`} />
+                  <span className={`hidden sm:block absolute top-[18px] left-1/2 h-[3px] w-full rounded-full ${connectorDone ? 'bg-forest' : idx === currentIdx ? 'bg-gradient-to-r from-forest to-hair' : 'bg-hair'}`} />
                 )}
-                <div className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center font-semibold text-[13px] transition-all ${done || active ? 'bg-forest text-cream-soft shadow-leaf' : 'bg-cream-deep text-ink-muted border border-hair'}`}>
+                <div className={`relative z-10 w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-semibold text-[12px] sm:text-[13px] transition-all ${done || active ? 'bg-forest text-cream-soft shadow-leaf' : 'bg-cream-deep text-ink-muted border border-hair'}`}>
                   {done ? <Check size={16} strokeWidth={2.5} /> : idx + 1}
                 </div>
-                <p className={`mt-3 text-[13px] ${active ? 'text-ink font-semibold' : done ? 'text-forest-deep font-medium' : 'text-ink-muted'}`}>
+                <p className={`mt-3 text-[11px] sm:text-[13px] text-center whitespace-nowrap ${active ? 'text-ink font-semibold' : done ? 'text-forest-deep font-medium' : 'text-ink-muted'}`}>
                   {step.label}
                 </p>
               </li>
@@ -357,7 +361,7 @@ export default function KybPage() {
       </div>
 
       {/* Step Content */}
-      <div className="relative rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf px-8 py-8 fade-up" style={{ animationDelay: '120ms' }}>
+      <div className="relative rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf px-5 sm:px-8 py-8 fade-up" style={{ animationDelay: '120ms' }}>
         {currentIdx === 0 && (
           <div className="space-y-8">
             <div>

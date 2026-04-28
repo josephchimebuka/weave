@@ -101,7 +101,7 @@ export default function LinksPage() {
     <div className="space-y-8">
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-5 fade-up">
         <div className="max-w-2xl">
-          <h1 className="font-display text-[42px] font-semibold text-ink tracking-tight leading-[1.05]">
+          <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-[1.05]">
             Payment Links
           </h1>
           <p className="text-ink-muted text-[15px] mt-3 leading-relaxed">
@@ -238,8 +238,8 @@ export default function LinksPage() {
               <thead>
                 <tr className="border-b border-hair-soft">
                   <th className="pb-4 px-4 text-[11px] font-semibold text-ink-soft uppercase tracking-widest whitespace-nowrap">Title</th>
-                  <th className="pb-4 px-4 text-[11px] font-semibold text-ink-soft uppercase tracking-widest whitespace-nowrap">Amount</th>
-                  <th className="pb-4 px-4 text-[11px] font-semibold text-ink-soft uppercase tracking-widest whitespace-nowrap">Link Status</th>
+                  <th className="hidden sm:table-cell pb-4 px-4 text-[11px] font-semibold text-ink-soft uppercase tracking-widest whitespace-nowrap">Amount</th>
+                  <th className="pb-4 px-4 text-[11px] font-semibold text-ink-soft uppercase tracking-widest whitespace-nowrap">Status</th>
                   <th className="pb-4 px-4 text-[11px] font-semibold text-ink-soft uppercase tracking-widest whitespace-nowrap text-right">Actions</th>
                 </tr>
               </thead>
@@ -248,9 +248,14 @@ export default function LinksPage() {
                   <tr key={link.id} className="border-b border-hair-soft/50 last:border-0 hover:bg-cream-deep/20 transition-colors group">
                     <td className="py-4 px-4">
                       <p className="font-medium text-[14px] text-ink">{link.title}</p>
-                      {link.description && <p className="text-[12px] text-ink-muted truncate max-w-[200px] mt-0.5">{link.description}</p>}
+                      <div className="flex flex-col sm:hidden mt-0.5">
+                        <p className="text-[12px] text-ink-muted font-medium tabular-nums">
+                          {link.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })} {link.asset.split(':').pop()}
+                        </p>
+                      </div>
+                      {link.description && <p className="hidden sm:block text-[12px] text-ink-muted truncate max-w-[200px] mt-0.5">{link.description}</p>}
                     </td>
-                    <td className="py-4 px-4">
+                    <td className="hidden sm:table-cell py-4 px-4">
                       <p className="text-[14px] text-ink font-medium tabular-nums">
                         {link.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })} {link.asset.split(':').pop()}
                       </p>
@@ -269,7 +274,7 @@ export default function LinksPage() {
                       </button>
                     </td>
                     <td className="py-4 px-4 text-right">
-                      <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center justify-end gap-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <button 
                           onClick={() => window.open(`/pay/${link.id}`, '_blank')}
                           className="w-8 h-8 rounded-full border border-hair-soft flex items-center justify-center text-ink-muted hover:text-ink hover:bg-cream-deep transition-colors"

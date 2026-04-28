@@ -245,7 +245,7 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
 });
 
 // ── POST /api/v1/auth/reset-password ─────────────────────────────────────────
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', authLimiter, async (req, res) => {
   const resetToken  = String(req.body?.resetToken  ?? '');
   const otpCode     = String(req.body?.otp         ?? '');
   const newPassword = String(req.body?.newPassword ?? '');

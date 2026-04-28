@@ -168,3 +168,34 @@ export function directionOf(sourceKey: string, destKey: string): OrderDirection 
     return 'transfer';
   }
 }
+
+/**
+ * Mapping of institution codes to human-friendly names.
+ */
+export const INSTITUTIONS_BY_CUR: Record<string, Array<{ code: string; name: string }>> = {
+  NGN: [
+    { code: 'GTBINGLA', name: 'Guaranty Trust Bank' },
+    { code: 'FBNINGLA', name: 'First Bank of Nigeria' },
+    { code: 'ZEIBNGLA', name: 'Zenith Bank' },
+    { code: 'ABNGNGLA', name: 'Access Bank' },
+    { code: 'UBNINGLA', name: 'Union Bank' },
+    { code: 'STBKNGLA', name: 'Stanbic IBTC Bank' },
+    { code: 'FCMBNGLA', name: 'First City Monument Bank' },
+    { code: 'FIDTNGLA', name: 'Fidelity Bank' },
+    { code: 'ECOBNGLA', name: 'Ecobank Nigeria' },
+    { code: 'WEMANGLA', name: 'Wema Bank' },
+    { code: 'KUDANGPC', name: 'Kuda Bank' },
+    { code: 'OPAYNGPC', name: 'OPay' },
+    { code: 'MONINGPC', name: 'Moniepoint' },
+    { code: 'PALMNGPC', name: 'PalmPay' },
+  ],
+};
+
+/**
+ * Resolves an institution code to its human-friendly name.
+ */
+export function institutionName(currency: string, code: string): string {
+  const list = INSTITUTIONS_BY_CUR[currency.toUpperCase()] || [];
+  const found = list.find(i => i.code.toUpperCase() === code.toUpperCase());
+  return found ? found.name : code;
+}

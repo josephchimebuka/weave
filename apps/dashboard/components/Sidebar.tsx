@@ -11,6 +11,7 @@ import {
   LifeBuoy,
   LogOut,
   Link as LinkIcon,
+  X,
 } from 'lucide-react';
 
 type NavItem = {
@@ -63,8 +64,12 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 
 export default function Sidebar({
   merchantName = '',
+  isOpen = false,
+  onClose = () => {},
 }: {
   merchantName?: string;
+  isOpen?: boolean;
+  onClose?: () => void;
 }) {
   const pathname = usePathname();
 
@@ -76,7 +81,29 @@ export default function Sidebar({
   const displayName = merchantName || 'My Business';
 
   return (
-    <aside className="hidden md:flex flex-col h-screen w-[264px] shrink-0 sticky top-0 border-r border-hair bg-cream px-5 pt-7 pb-6">
+    <>
+      {/* Mobile Backdrop */}
+      <div
+        className={`fixed inset-0 bg-ink/20 backdrop-blur-sm z-40 md:hidden transition-opacity duration-300 ${
+          isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+        onClick={onClose}
+      />
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-[280px] bg-cream border-r border-hair px-5 pt-7 pb-6 transition-transform duration-300 ease-in-out shadow-leaf-lg md:shadow-none
+        ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+        md:translate-x-0 md:static md:flex md:flex-col md:h-screen md:w-[264px] md:sticky md:top-0
+      `}
+      >
+        {/* Mobile Close Button */}
+        <button
+          onClick={onClose}
+          className="absolute top-6 right-4 p-2 text-ink-muted hover:text-ink md:hidden transition-colors"
+          aria-label="Close menu"
+        >
+          <X size={20} strokeWidth={2} />
+        </button>
       {/* Brand — clicking name/avatar goes to profile */}
       <Link href="/settings?tab=profile" className="mb-10 flex items-center gap-3 px-1 group">
         <div className="relative w-11 h-11 rounded-full bg-forest text-cream-soft flex items-center justify-center font-display font-semibold text-sm shadow-leaf shrink-0">
@@ -134,5 +161,6 @@ export default function Sidebar({
         </div>
       </div>
     </aside>
+    </>
   );
 }

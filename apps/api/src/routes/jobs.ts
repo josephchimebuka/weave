@@ -13,16 +13,20 @@ const router = Router();
  * Only enforced in production.
  */
 const verifyQStash = async (req: Request, res: Response, next: Function) => {
-  if (process.env.NODE_ENV === 'development') return next();
+  // Only bypass verification when explicitly opted in via env flag.
+  // Never key off NODE_ENV — that would leave staging/misconfigured prod unprotected.
+  if (process.env.SKIP_QSTASH_VERIFICATION === 'true') return next();
 
   const signature = req.headers['upstash-signature'] as string;
   const rawBody = (req as any).rawBody;
-  // If we have a rawBody, use it. Otherwise, if the request is empty, use "". 
-  // Fall back to stringified json only if we actually have data but missed rawBody.
   const body = rawBody !== undefined ? rawBody : (Object.keys(req.body || {}).length === 0 ? '' : JSON.stringify(req.body));
-  
-  // Use the public URL as QStash signed it against the public domain
-  const url = `https://api.paywithweave.com/api/v1/jobs${req.path}`;
+
+  const apiBase = process.env.API_BASE;
+  if (!apiBase) {
+    console.error('[jobs] API_BASE is not set — cannot verify QStash signature');
+    return res.status(500).json({ error: 'Server misconfiguration' });
+  }
+  const url = `${apiBase}/jobs${req.path}`;
 
   const isValid = await qstashReceiver.verify({
     signature,

@@ -197,7 +197,7 @@ export default function TransactionsPage() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
           <div className="fade-up">
-            <h1 className="font-display text-[42px] font-semibold text-ink tracking-tight leading-none">
+            <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-none">
               Transactions
             </h1>
             <p className="text-ink-muted text-[15px] mt-2">
@@ -285,12 +285,12 @@ export default function TransactionsPage() {
 
         {/* Transaction list */}
         <div className="relative rounded-3xl bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden flex-1 flex flex-col fade-up" style={{ animationDelay: '240ms' }}>
-          <div className="grid grid-cols-[60px_minmax(0,1.4fr)_minmax(0,1fr)_auto_auto] gap-4 px-6 py-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted border-b border-hair-soft">
+          <div className="grid grid-cols-[48px_1fr_auto] sm:grid-cols-[60px_minmax(0,1.4fr)_minmax(0,1fr)_auto_auto] gap-4 px-4 sm:px-6 py-4 text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted border-b border-hair-soft">
             <div>Icon</div>
             <div>Customer</div>
             <div className="hidden sm:block">Date &amp; Time</div>
-            <div className="text-center min-w-25">Status</div>
-            <div className="text-right min-w-22.5">Settlement</div>
+            <div className="text-center min-w-20 sm:min-w-25">Status</div>
+            <div className="hidden sm:block text-right min-w-22.5">Settlement</div>
           </div>
 
           {filteredOrders.length === 0 ? (
@@ -304,7 +304,7 @@ export default function TransactionsPage() {
                   <button
                     key={o.id}
                     onClick={() => setSelected(isSel ? null : o)}
-                    className={`w-full grid grid-cols-[60px_minmax(0,1.4fr)_minmax(0,1.4fr)_auto_auto] gap-4 items-center px-6 py-4 border-l-[3px] border-b border-hair-soft/60 last:border-b-0 transition-all cursor-pointer text-left ${isSel
+                    className={`w-full grid grid-cols-[48px_1fr_auto] sm:grid-cols-[60px_minmax(0,1.4fr)_minmax(0,1.4fr)_auto_auto] gap-4 items-center px-4 sm:px-6 py-4 border-l-[3px] border-b border-hair-soft/60 last:border-b-0 transition-all cursor-pointer text-left ${isSel
                       ? 'border-l-forest bg-forest-mist/60'
                       : 'border-l-transparent hover:bg-cream-deep/40'
                       }`}
@@ -314,12 +314,17 @@ export default function TransactionsPage() {
                       <ShoppingBag size={16} strokeWidth={1.8} />
                     </div>
                     <div className="min-w-0">
-                      <p className="font-semibold text-ink text-[14px] truncate">{counterpartyName(o)}</p>
-                      <p className="text-[12px] text-ink-muted truncate">
+                      <div className="flex flex-col sm:block">
+                        <p className="font-semibold text-ink text-[14px] truncate">{counterpartyName(o)}</p>
+                        <p className="sm:hidden font-bold text-ink text-[13px] mt-0.5">
+                          {fmtAmount(netSettlement(o), o.destAssetKey)}
+                        </p>
+                      </div>
+                      <p className="text-[11px] sm:text-[12px] text-ink-muted truncate">
                         Order {orderRef(o)}
                       </p>
                     </div>
-                    <div className="text-start w-[calc(40%-theme(space.4))] hidden sm:block text-[13px] text-ink-soft">
+                    <div className="hidden sm:block text-start text-[13px] text-ink-soft">
                       {fmtWhen(o.createdAt)}
                       <p className="text-[11px] text-ink-faint">Direction: {DIRECTION_LABELS[directionOf(o)] || directionOf(o)}</p>
                     </div>
@@ -329,7 +334,7 @@ export default function TransactionsPage() {
                         {status.label}
                       </span>
                     </div>
-                    <div className="text-right font-semibold text-ink tabular-nums whitespace-nowrap text-[14px]">
+                    <div className="hidden sm:block text-right font-semibold text-ink tabular-nums whitespace-nowrap text-[14px]">
                       {fmtAmount(netSettlement(o), o.destAssetKey)}
                     </div>
                   </button>
@@ -342,12 +347,19 @@ export default function TransactionsPage() {
 
       {/* Quick-view side panel */}
       {selected && (
-        <aside className="hidden xl:flex flex-col w-105 h-screen bg-cream-soft border-l border-hair-soft overflow-y-auto slide-in-right">
-          <QuickView
-            order={selected}
-            onClose={() => setSelected(null)}
+        <>
+          {/* Mobile backdrop */}
+          <div
+            className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-40 xl:hidden transition-opacity duration-300"
+            onClick={() => setSelected(null)}
           />
-        </aside>
+          <aside className="fixed inset-y-0 right-0 z-50 w-full sm:w-[440px] bg-cream-soft border-l border-hair-soft overflow-y-auto slide-in-right xl:static xl:z-auto xl:flex xl:flex-col xl:w-105 xl:h-screen">
+            <QuickView
+              order={selected}
+              onClose={() => setSelected(null)}
+            />
+          </aside>
+        </>
       )}
     </div>
   );
