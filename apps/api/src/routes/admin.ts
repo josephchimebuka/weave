@@ -9,6 +9,15 @@ if (!ADMIN_SECRET) {
   console.warn('[security] CRITICAL: ADMIN_SECRET is not set. Admin verification routes are disabled.');
 }
 
+function escHtml(s: string | null | undefined): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 /**
  * GET /api/v1/admin/verify
  * The "Magic Link" action endpoint.
@@ -40,7 +49,17 @@ router.get('/verify', async (req, res) => {
       return res.status(404).send('Verification record not found.');
     }
 
-    // 3. Process the action
+    // 3. Idempotency: reject if already actioned
+    if (verification.status !== 'none' && verification.status !== 'pending') {
+      return res.status(200).send(`
+        <div style="font-family: sans-serif; text-align: center; padding: 50px;">
+          <h2>Already processed</h2>
+          <p>This verification was already ${escHtml(verification.status)}. No action taken.</p>
+        </div>
+      `);
+    }
+
+    // 4. Process the action
     if (action === 'approve') {
       await prisma.$transaction([
         prisma.businessVerification.update({
@@ -60,8 +79,8 @@ router.get('/verify', async (req, res) => {
       
       return res.send(`
         <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-          <h1 style="color: #0F5D4C;">✅ Merchant Approved!</h1>
-          <p>${verification.merchant.name} (${verification.legalName}) is now live.</p>
+          <h1 style="color: #0F5D4C;">&#x2705; Merchant Approved!</h1>
+          <p>${escHtml(verification.merchant.name)} (${escHtml(verification.legalName)}) is now live.</p>
         </div>
       `);
     }
@@ -70,11 +89,11 @@ router.get('/verify', async (req, res) => {
       return res.send(`
         <div style="font-family: sans-serif; max-width: 500px; margin: 40px auto; padding: 32px; border: 1px solid #E8EAE6; border-radius: 24px; text-align: center;">
           <h1 style="color: #d94e4e; font-size: 24px;">Reject KYB Application</h1>
-          <p style="color: #6B7572; margin-bottom: 24px;">Please provide a reason. This will be sent to <strong>${verification.merchant.email}</strong>.</p>
+          <p style="color: #6B7572; margin-bottom: 24px;">Please provide a reason. This will be sent to <strong>${escHtml(verification.merchant.email)}</strong>.</p>
           <form action="/api/v1/admin/verify" method="POST">
-            <input type="hidden" name="id" value="${id}" />
+            <input type="hidden" name="id" value="${escHtml(id)}" />
             <input type="hidden" name="action" value="reject" />
-            <input type="hidden" name="token" value="${token}" />
+            <input type="hidden" name="token" value="${escHtml(token)}" />
             <textarea 
               name="reason" 
               placeholder="e.g. Identity document is expired or blurry." 
@@ -106,6 +125,13 @@ router.post('/verify', async (req, res) => {
 
   if (action !== 'reject') return res.status(400).send('Invalid action.');
 
+  if (!reason || reason.trim().length === 0) {
+    return res.status(400).send('Rejection reason is required.');
+  }
+  if (reason.length > 1000) {
+    return res.status(400).send('Rejection reason is too long (max 1000 characters).');
+  }
+
   try {
     const decoded = jwt.verify(token, ADMIN_SECRET) as { sub: string; action: string };
     if (decoded.sub !== id || decoded.action !== action) {
@@ -114,6 +140,15 @@ router.post('/verify', async (req, res) => {
 
     const v = await prisma.businessVerification.findUnique({ where: { id } });
     if (!v) return res.status(404).send('Not found.');
+
+    if (v.status !== 'none' && v.status !== 'pending') {
+      return res.status(200).send(`
+        <div style="font-family: sans-serif; text-align: center; padding: 50px;">
+          <h2>Already processed</h2>
+          <p>This verification was already ${escHtml(v.status)}. No action taken.</p>
+        </div>
+      `);
+    }
 
     await prisma.$transaction([
       prisma.businessVerification.update({
@@ -132,8 +167,8 @@ router.post('/verify', async (req, res) => {
 
     res.send(`
       <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-        <h1 style="color: #A8321E;">❌ Merchant Rejected Successfully</h1>
-        <p>Mail sent to merchant explaining: <em>"${reason}"</em></p>
+        <h1 style="color: #A8321E;">Merchant Rejected</h1>
+        <p>Rejection email sent to merchant.</p>
       </div>
     `);
   } catch (err: any) {

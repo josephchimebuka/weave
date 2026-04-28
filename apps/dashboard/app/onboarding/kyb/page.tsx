@@ -137,18 +137,22 @@ export default function KybPage() {
   };
 
   const uploadToCloudinary = async (file: File): Promise<string> => {
-    const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'weave-cloud';
-    const preset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'kyb_documents';
-    
+    const signRes = await fetch('/api/cloudinary-sign', { method: 'POST' });
+    if (!signRes.ok) throw new Error('Failed to get upload signature');
+    const { timestamp, signature, apiKey, cloudName, folder } = await signRes.json();
+
     const data = new FormData();
     data.append('file', file);
-    data.append('upload_preset', preset);
+    data.append('timestamp', String(timestamp));
+    data.append('signature', signature);
+    data.append('api_key', apiKey);
+    data.append('folder', folder);
 
     const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
       method: 'POST',
       body: data,
     });
-    
+
     if (!res.ok) throw new Error('Cloudinary upload failed');
     const json = await res.json();
     return json.secure_url;

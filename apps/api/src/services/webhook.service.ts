@@ -1,5 +1,27 @@
 import crypto from 'crypto';
+import { URL } from 'url';
 import { prisma } from '../lib/prisma';
+
+function isSafeWebhookUrl(urlStr: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const h = parsed.hostname.toLowerCase();
+  // Block loopback, RFC 1918, link-local, AWS IMDS, and common internal hostnames
+  if (h === 'localhost') return false;
+  if (/^127\./.test(h)) return false;
+  if (/^10\./.test(h)) return false;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+  if (/^192\.168\./.test(h)) return false;
+  if (/^169\.254\./.test(h)) return false;
+  if (h === '::1' || h === '[::1]') return false;
+  if (/^fc00:/i.test(h) || /^fe80:/i.test(h)) return false;
+  return true;
+}
 
 export interface WebhookEvent {
   id:        string;
@@ -32,6 +54,11 @@ class WebhookService {
 
     if (!merchant?.webhookUrl || !merchant?.webhookSecret) {
       return; // Merchant hasn't configured webhooks
+    }
+
+    if (!isSafeWebhookUrl(merchant.webhookUrl)) {
+      console.error(`[webhook] blocked unsafe webhookUrl for merchant ${merchantId}: ${merchant.webhookUrl}`);
+      throw new Error('Merchant webhook URL is not a safe public HTTPS address');
     }
 
     const payload = JSON.stringify(event);

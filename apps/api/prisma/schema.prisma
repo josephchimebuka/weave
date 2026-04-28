@@ -184,6 +184,9 @@ model Order {
 
   @@index([merchantId])
   @@index([status])
+  // Prevents duplicate orders for the same merchant+reference under concurrent requests.
+  // NULL reference values are exempt (PostgreSQL treats NULL != NULL for unique constraints).
+  @@unique([merchantId, reference])
 }
 
 model RouteStep {

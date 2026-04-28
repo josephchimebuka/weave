@@ -164,21 +164,38 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     if (!order) {
-      order = await prisma.order.create({
-        data: {
-          merchantId:         merchant.id,
-          sourceInstrumentId: sourceInstrument.id,
-          destInstrumentId:   destInstrument.id,
-          sourceAssetKey:     sourceInstrument.assetKey,
-          destAssetKey:       destInstrument.assetKey,
-          sourceAmount,
-          status:             'awaiting_deposit',
-          routePlan:          plan as any,
-          quoteRate,
-          reference:          body.reference,
-        },
-      });
-      console.log(`[orders] created new order: ${order.id}`);
+      try {
+        order = await prisma.order.create({
+          data: {
+            merchantId:         merchant.id,
+            sourceInstrumentId: sourceInstrument.id,
+            destInstrumentId:   destInstrument.id,
+            sourceAssetKey:     sourceInstrument.assetKey,
+            destAssetKey:       destInstrument.assetKey,
+            sourceAmount,
+            status:             'awaiting_deposit',
+            routePlan:          plan as any,
+            quoteRate,
+            reference:          body.reference,
+          },
+        });
+        console.log(`[orders] created new order: ${order.id}`);
+      } catch (createErr: any) {
+        // P2002 = unique constraint violation — concurrent request with the same reference
+        if (createErr?.code === 'P2002' && body.reference) {
+          const existing = await prisma.order.findFirst({
+            where: { merchantId: merchant.id, reference: body.reference },
+          });
+          if (existing) {
+            return res.status(409).json({
+              success: false,
+              error: 'An order with this reference already exists',
+              data: { orderId: existing.id },
+            });
+          }
+        }
+        throw createErr;
+      }
     } else {
       console.log(`[orders] reusing existing order for ref ${body.reference}: ${order.id}`);
     }
