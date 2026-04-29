@@ -470,12 +470,13 @@ const secondaryBtn: CSSProperties = {
 
 type PathPick = 'fiat' | 'crypto' | 'deposit' | 'externalDeposit';
 
-function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting }: {
+function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disabledMethods }: {
   onPick: (p: PathPick) => void;
   merchant: Merchant;
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
   submitting?: boolean;
+  disabledMethods?: Record<string, string>;
 }) {
   const c = currencies[merchant.currency] || CURRENCIES[merchant.currency];
   const [showMoreCrypto, setShowMoreCrypto] = useState(false);
@@ -520,9 +521,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting }: {
         </div>
 
         <button
-          onClick={() => pick('fiat')}
-          disabled={!!(submitting || picked)}
-          style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
+          onClick={() => !disabledMethods?.fiat && pick('fiat')}
+          disabled={!!(submitting || picked || disabledMethods?.fiat)}
+          title={disabledMethods?.fiat}
+          style={{ 
+            ...methodCard, 
+            opacity: (submitting || picked || disabledMethods?.fiat) ? 0.7 : 1, 
+            cursor: (submitting || picked) ? 'not-allowed' : (disabledMethods?.fiat ? 'help' : 'pointer'),
+            filter: disabledMethods?.fiat ? 'grayscale(1)' : 'none'
+          }}
         >
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             {picked === 'fiat' ? (
@@ -535,9 +542,9 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting }: {
             <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>
               {picked === 'fiat' ? 'Setting up payment…' : 'Bank transfer'}
             </div>
-            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Pay in {c?.name ?? merchant.currency} · Instant · No fees</div>
+            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{disabledMethods?.fiat || `Pay in ${c?.name ?? merchant.currency} · Instant · No fees`}</div>
           </Stack>
-          {picked !== 'fiat' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+          {picked !== 'fiat' && !disabledMethods?.fiat && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button>
 
         <button
@@ -2287,6 +2294,7 @@ export interface WeaveCheckoutProps {
   onError?: (err: Error) => void;
   onClose?: () => void;
   apiBase?: string;
+  disabledMethods?: Record<string, string>;
 }
 
 const DEFAULT_MERCHANT: Merchant = {
@@ -2316,6 +2324,7 @@ function WeaveCheckoutInner({
   onError,
   onClose,
   apiBase,
+  disabledMethods,
 }: WeaveCheckoutProps) {
   if (apiBase && typeof window !== 'undefined') {
     (window as any).__WEAVE_API_BASE__ = apiBase;
@@ -2866,7 +2875,7 @@ function WeaveCheckoutInner({
   };
 
   const body = (() => {
-    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} />;
+    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} disabledMethods={disabledMethods} />;
     if (isOnramp) {
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;

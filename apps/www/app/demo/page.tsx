@@ -377,6 +377,9 @@ export default function DemoPage() {
                       walletAddress: cryptoAddress,
                     }
                   }}
+                  disabledMethods={payoutMode === 'fiat' ? {
+                    fiat: 'Naira-to-Naira bridge is disabled in demo.Please pay with crypto to test settlement.'
+                  } : undefined}
                   theme="organic"
                   onSuccess={(txn) => console.log('Payment Success:', txn)}
                   apiKey={process.env.NEXT_PUBLIC_API_KEY || ''}
