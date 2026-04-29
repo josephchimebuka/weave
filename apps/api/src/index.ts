@@ -53,11 +53,32 @@ app.use(helmet());
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors({
-  // In production the startup guard above ensures allowedOrigins is non-empty.
-  // In development we fall back to open CORS for local iteration only.
-  origin: allowedOrigins.length ? allowedOrigins : true,
-  credentials: true,
+
+app.use(cors((req: any, callback) => {
+  const origin = req.header('Origin');
+  const isPublicRoute = 
+    req.path.startsWith('/api/v1/quotes') || 
+    req.path.startsWith('/api/v1/orders') || 
+    req.path.startsWith('/api/v1/assets') || 
+    req.path.startsWith('/api/v1/links/public');
+
+  // 1. If it's a public/widget route, allow the origin (browser won't send credentials unless origin is reflected)
+  if (isPublicRoute) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  // 2. For sensitive routes (Auth/Dashboard), strictly check the whitelist
+  if (!origin || allowedOrigins.includes(origin)) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  // 3. Fallback for development (allow local iteration)
+  if (process.env.NODE_ENV !== 'production') {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  // Reject the origin
+  callback(new Error('Not allowed by CORS'));
 }));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
