@@ -69,8 +69,11 @@ export default function PayoutsPage() {
   );
 
   const pendingBalance = pendingOrders.reduce((sum, o) => {
-    // We only sum Naira settlements for this view
-    if (o.destAssetKey === 'fiat:NGN') {
+    // Only sum successful NGN to NGN transfers handled by Paystack
+    const isNgnToNgn = o.sourceAssetKey === 'fiat:NGN' && o.destAssetKey === 'fiat:NGN';
+    const usesPaystack = o.steps.some(s => s.provider === 'paystack');
+
+    if (isNgnToNgn && usesPaystack) {
       return sum + (o.destAmount || 0);
     }
     return sum;
