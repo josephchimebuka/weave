@@ -71,7 +71,7 @@ export function ClientLayout({ children, merchantName }: { children: React.React
           </button>
         </header>
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1">
           <div className="px-6 md:px-10 lg:px-14 py-8 md:py-10 max-w-[1400px] mx-auto">
             {children}
           </div>

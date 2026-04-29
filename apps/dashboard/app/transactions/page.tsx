@@ -351,7 +351,7 @@ export default function TransactionsPage() {
             className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-40 xl:hidden transition-opacity duration-300"
             onClick={() => setSelected(null)}
           />
-          <aside className="fixed inset-y-0 right-0 z-50 w-full sm:w-[440px] bg-cream-soft border-l border-hair-soft overflow-y-auto slide-in-right xl:static xl:z-auto xl:flex xl:flex-col xl:w-105 xl:h-screen">
+          <aside className="fixed inset-y-0 right-0 z-50 w-full sm:w-[440px] bg-cream-soft border-l border-hair-soft overflow-y-auto slide-in-right xl:sticky xl:top-0 xl:z-auto xl:flex xl:flex-col xl:w-105 xl:h-screen">
             <QuickView
               order={selected}
               onClose={() => setSelected(null)}
