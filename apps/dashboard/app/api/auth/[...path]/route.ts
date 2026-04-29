@@ -17,7 +17,10 @@ export async function POST(
 
     const res = await fetch(`${API_BASE}/auth/${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-session-token': request.headers.get('x-session-token') || '',
+      },
       body: JSON.stringify(body),
     });
 

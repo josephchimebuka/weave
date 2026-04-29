@@ -427,7 +427,7 @@ function WidgetFooter() {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 6V12C3 17 6.5 21 12 22C17.5 21 21 17 21 12V6L12 2Z" stroke="currentColor" strokeWidth="1.8" /></svg>
-        Secured by Weave by Dewdrop Labs
+        Secured by Dewdrop Labs
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <span>v1.0.0</span>
@@ -524,9 +524,9 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
           onClick={() => !disabledMethods?.fiat && pick('fiat')}
           disabled={!!(submitting || picked || disabledMethods?.fiat)}
           title={disabledMethods?.fiat}
-          style={{ 
-            ...methodCard, 
-            opacity: (submitting || picked || disabledMethods?.fiat) ? 0.7 : 1, 
+          style={{
+            ...methodCard,
+            opacity: (submitting || picked || disabledMethods?.fiat) ? 0.7 : 1,
             cursor: (submitting || picked) ? 'not-allowed' : (disabledMethods?.fiat ? 'help' : 'pointer'),
             filter: disabledMethods?.fiat ? 'grayscale(1)' : 'none'
           }}
@@ -836,7 +836,7 @@ function ScreenPaystackPopup({
       const popup = new Pop();
       popup.resumeTransaction(accessCode, {
         onSuccess: () => onNext('processing'),
-        onCancel:  () => { launched.current = false; },
+        onCancel: () => { launched.current = false; },
       });
     };
 
@@ -2730,7 +2730,7 @@ function WeaveCheckoutInner({
       setPaystackPopupDetails(res.nextAction.paystackPopupDetails ?? null);
       const nextScreen =
         res.nextAction.screen === 'paystack_popup' ? 'paystack_popup' :
-        'vaccount';
+          'vaccount';
       setScreen(nextScreen);
     } catch (e: any) {
       setApiError(e.message ?? 'Failed to create order');
@@ -2784,7 +2784,7 @@ function WeaveCheckoutInner({
         activeOrderId = res.order.id;
         activeDepositAddr = res.nextAction.depositAddress ?? null;
         activeSourceAmt = res.order.sourceAmount;
-        
+
         setOrderId(activeOrderId);
         setDepositAddress(activeDepositAddr);
         setDepositAmount(activeSourceAmt);

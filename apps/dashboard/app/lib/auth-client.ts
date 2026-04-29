@@ -5,12 +5,15 @@ const API_BASE = '/api/auth';
 
 type ApiResult<T> = { success: true; data: T } | { success: false; error: string };
 
-async function postJson<T>(path: string, body: Record<string, unknown>): Promise<ApiResult<T>> {
+async function postJson<T>(path: string, body: Record<string, unknown>, extraHeaders?: Record<string, string>): Promise<ApiResult<T>> {
   try {
     // Note: path already starts with / e.g. /login
     const res = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 
+        'content-type': 'application/json',
+        ...extraHeaders
+      },
       body: JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({ success: false, error: 'Unexpected response from server' }));
@@ -95,5 +98,5 @@ export function resetPassword(resetToken: string, otp: string, newPassword: stri
 }
 
 export function logout(sessionToken: string) {
-  return postJson<{ loggedOut: boolean }>('/logout', { sessionToken });
+  return postJson<{ loggedOut: boolean }>('/logout', { sessionToken }, { 'x-session-token': sessionToken });
 }
