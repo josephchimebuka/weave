@@ -79,13 +79,11 @@ function fmtUsd(n: number | null | undefined): string {
 }
 
 function netSettlement(order: Order): number | null {
+  // order.destAmount is already the net settlement amount calculated by the API.
   if (order.destAmount == null) return null;
   const isDestFiat = parseAsset(order.destAssetKey).kind === 'fiat';
-  if (!isDestFiat) return order.destAmount;
-  
-  const feeInDest = (order.senderFeeUsd || 0) * (order.quoteRate || 0);
-  const net = Math.max(0, order.destAmount - feeInDest);
-  return Math.round(net);
+  // Round fiat amounts to whole numbers for cleaner display
+  return isDestFiat ? Math.round(order.destAmount) : order.destAmount;
 }
 
 function fmtWhen(iso: string): string {

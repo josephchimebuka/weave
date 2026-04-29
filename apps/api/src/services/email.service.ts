@@ -337,7 +337,7 @@ export async function sendMerchantPaymentNotification(orderId: string) {
           <p>Great news! You just received a new payment via Weave.</p>
           
           <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
-            <div style="font-size: 14px; color: #6B7572; margin-bottom: 4px;">Settlement Amount</div>
+            <div style="font-size: 14px; color: #6B7572; margin-bottom: 4px;">Net Settlement Amount</div>
             <div style="font-size: 32px; font-weight: 700;">${amountStr}</div>
             
             <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 20px 0;" />

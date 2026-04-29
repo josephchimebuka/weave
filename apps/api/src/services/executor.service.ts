@@ -127,14 +127,16 @@ async function runPaycrestOfframp(
   });
 
   const prov = pc.providerAccount as { receiveAddress: string; validUntil: string };
-  const senderFeeUsd = amountIn * (SENDER_FEE_BPS / 10000);
-  // pc.amount is the net crypto figure (post-senderFee); pc.rate is fiat/crypto.
-  // Their product is the fiat amount the merchant receives.
-  const fiatSettled = Number(pc.amount) * Number(pc.rate);
+  const senderFeeUsd = Number(pc.senderFee) || (amountIn * (SENDER_FEE_BPS / 10000));
+  // Paycrest 'amount' is usually the gross amount in. We subtract the sender fee 
+  // to get the net crypto being converted, then multiply by rate to get net fiat.
+  const netCrypto = Number(pc.amount) - (Number(pc.senderFee) || 0);
+  const fiatSettled = netCrypto * Number(pc.rate);
+
   return {
     externalId: pc.id,
     amountIn,
-    amountOut: Number.isFinite(fiatSettled) && fiatSettled > 0 ? fiatSettled : amountIn,
+    amountOut: Number.isFinite(fiatSettled) && fiatSettled > 0 ? fiatSettled : (amountIn * Number(pc.rate)),
     depositAddress: prov.receiveAddress,
     depositMemo: null,
     expiresAt: prov.validUntil,

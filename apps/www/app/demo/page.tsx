@@ -103,6 +103,8 @@ export default function DemoPage() {
 
   // Crypto fields
   const [cryptoAddress, setCryptoAddress] = useState('');
+  const [usdcAmount, setUsdcAmount] = useState<number | null>(null);
+  const [loadingQuote, setLoadingQuote] = useState(false);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 
@@ -159,6 +161,35 @@ export default function DemoPage() {
         .finally(() => setResolvingName(false));
     }
   }, [fiatAccount, fiatBank]);
+
+  // Fetch real quote for USDC equivalent
+  useEffect(() => {
+    if (merchant.amount >= 700) {
+      const timer = setTimeout(() => {
+        setLoadingQuote(true);
+        const pk = process.env.NEXT_PUBLIC_API_KEY || 'pk_live_demo';
+        const qs = new URLSearchParams({
+          from: `fiat:NGN`,
+          to: `crypto:BASE:USDC`,
+          amount: String(merchant.amount),
+          amountIn: 'source'
+        });
+
+        fetch(`${apiUrl}/quotes?${qs}`, {
+          headers: { 'x-api-key': pk }
+        })
+          .then(r => r.json())
+          .then(resp => {
+            if (resp.success && resp.data) {
+              setUsdcAmount(resp.data.estimatedDest);
+            }
+          })
+          .catch(err => console.error('Quote fetch failed:', err))
+          .finally(() => setLoadingQuote(false));
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [merchant.amount]);
 
   return (
     <div className="min-h-screen h-full bg-[#F5F4EF] flex flex-col font-sans text-[#0B0F0E] overflow-hidden w-full relative ">
@@ -362,6 +393,9 @@ export default function DemoPage() {
                   }
                   merchant={{
                     ...merchant,
+                    // If payout is crypto, we use the real quoted USDC amount fetched from the API.
+                    // If the quote hasn't loaded yet, we show a fallback (though it usually loads fast).
+                    amount: payoutMode === 'fiat' ? merchant.amount : (usdcAmount ?? Number((merchant.amount / 1500).toFixed(2))),
                     destAssetKey: payoutMode === 'fiat'
                       ? `fiat:${merchant.currency}`
                       : `crypto:BASE:USDC`,
