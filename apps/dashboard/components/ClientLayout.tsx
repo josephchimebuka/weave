@@ -15,12 +15,32 @@ export function ClientLayout({ children, merchantName }: { children: React.React
     setSidebarOpen(false);
   }, [pathname]);
 
-  const isAuth = pathname.startsWith('/auth') || pathname.startsWith('/pay');
+  const isAuth   = pathname.startsWith('/auth') || pathname.startsWith('/pay');
+  const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy');
 
   if (isAuth) {
     return (
       <div className="min-h-screen bg-cream flex items-center justify-center px-4 py-8">
         {children}
+      </div>
+    );
+  }
+
+  if (isPublic) {
+    return (
+      <div className="min-h-screen bg-cream text-ink">
+        <header className="sticky top-0 z-30 border-b border-hair-soft bg-cream/90 backdrop-blur-md">
+          <div className="max-w-5xl mx-auto px-6 md:px-10 py-4 flex items-center justify-between">
+            <Link href="/" className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-full bg-forest text-cream flex items-center justify-center font-display font-bold text-xs shadow-leaf">W</div>
+              <span className="font-display font-bold text-forest-deep tracking-tight text-[18px]">Weave.</span>
+            </Link>
+            <Link href="/auth/login" className="text-[13px] text-ink-muted hover:text-forest transition-colors">Sign in →</Link>
+          </div>
+        </header>
+        <main className="max-w-5xl mx-auto px-6 md:px-10 py-10">
+          {children}
+        </main>
       </div>
     );
   }

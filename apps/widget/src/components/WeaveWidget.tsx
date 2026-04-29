@@ -470,14 +470,22 @@ const secondaryBtn: CSSProperties = {
 
 type PathPick = 'fiat' | 'crypto' | 'deposit' | 'externalDeposit';
 
-function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
+function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting }: {
   onPick: (p: PathPick) => void;
   merchant: Merchant;
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
+  submitting?: boolean;
 }) {
   const c = currencies[merchant.currency] || CURRENCIES[merchant.currency];
   const [showMoreCrypto, setShowMoreCrypto] = useState(false);
+  const [picked, setPicked] = useState<PathPick | null>(null);
+
+  const pick = (method: PathPick) => {
+    if (submitting || picked) return;
+    setPicked(method);
+    onPick(method);
+  };
 
   return (
     <Stack gap={16} style={{ padding: '22px 20px 6px' }}>
@@ -511,18 +519,32 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
           How would you like to pay?
         </div>
 
-        <button onClick={() => onPick('fiat')} style={methodCard}>
+        <button
+          onClick={() => pick('fiat')}
+          disabled={!!(submitting || picked)}
+          style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
+        >
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            {picked === 'fiat' ? (
+              <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent, animation: 'wspin 0.8s linear infinite' }} />
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            )}
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>Bank transfer</div>
+            <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>
+              {picked === 'fiat' ? 'Setting up payment…' : 'Bank transfer'}
+            </div>
             <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Pay in {c?.name ?? merchant.currency} · Instant · No fees</div>
           </Stack>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          {picked !== 'fiat' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button>
 
-        <button onClick={() => onPick('deposit')} style={methodCard}>
+        <button
+          onClick={() => pick('deposit')}
+          disabled={!!(submitting || picked)}
+          style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
+        >
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <IconDot bg="#F6851B" size={24}>🦊</IconDot>
           </div>
@@ -534,15 +556,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
         </button>
 
         {!showMoreCrypto ? (
-          <button onClick={() => setShowMoreCrypto(true)} style={{
-            background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-            fontSize: 12, color: WEAVE.mute, padding: '4px 0', textAlign: 'center',
+          <button onClick={() => !picked && setShowMoreCrypto(true)} style={{
+            background: 'transparent', border: 'none', cursor: picked ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+            fontSize: 12, color: WEAVE.mute, padding: '4px 0', textAlign: 'center', opacity: picked ? 0.5 : 1,
           }}>
             Use a different wallet ↓
           </button>
         ) : (
           <Stack gap={6} style={{ padding: '2px 0' }}>
-            <button onClick={() => onPick('externalDeposit')} style={methodCardSm}>
+            <button onClick={() => pick('externalDeposit')} disabled={!!(submitting || picked)} style={{ ...methodCardSm, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}>
               <div style={{ width: 20, height: 20, borderRadius: 5, background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="14" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="3" y="14" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /></svg>
               </div>
@@ -2844,7 +2866,7 @@ function WeaveCheckoutInner({
   };
 
   const body = (() => {
-    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} />;
+    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} />;
     if (isOnramp) {
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;

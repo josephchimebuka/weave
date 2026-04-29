@@ -34,11 +34,21 @@ export async function syncPaystackSubaccount(merchantId: string): Promise<void> 
     const bankCode = await paystack.resolveBankCode(instrument.bankInstitution || '');
 
     if (merchant.paystackSubaccountCode) {
-      await paystack.updateSubaccount(merchant.paystackSubaccountCode, {
-        bankCode,
-        accountNumber,
-      });
-      subaccountCode = merchant.paystackSubaccountCode;
+      try {
+        await paystack.updateSubaccount(merchant.paystackSubaccountCode, { bankCode, accountNumber });
+        subaccountCode = merchant.paystackSubaccountCode;
+      } catch (updateErr: any) {
+        // Stale code (e.g. test vs live key switch) — create a fresh one
+        if (/not found/i.test(updateErr.message)) {
+          subaccountCode = await paystack.createSubaccount({
+            businessName: merchant.name,
+            bankCode,
+            accountNumber,
+          });
+        } else {
+          throw updateErr;
+        }
+      }
     } else {
       subaccountCode = await paystack.createSubaccount({
         businessName:  merchant.name,

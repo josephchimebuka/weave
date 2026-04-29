@@ -59,26 +59,26 @@ export class PaystackService {
    * Returns an authorization_url for the checkout widget.
    */
   async initializeTransaction(params: {
-    email:         string;
-    amountNgn:     number;
-    reference:     string;
-    subaccount?:   string;
-    split?:        any;
-    callbackUrl?:  string;
-    metadata?:     any;
+    email:              string;
+    amountNgn:          number;
+    reference:          string;
+    subaccount?:        string;
+    transactionCharge?: number; // flat kobo amount routed to Weave's main account
+    callbackUrl?:       string;
+    metadata?:          any;
   }): Promise<{ authorization_url: string; access_code: string; reference: string }> {
     const res = await fetch(`${BASE}/transaction/initialize`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
-        email:         params.email,
-        amount:        Math.round(params.amountNgn * 100), // Paystack uses kobo
-        reference:     params.reference,
-        subaccount:    params.subaccount,
-        split:         params.split,
-        callback_url:  params.callbackUrl,
-        metadata:      params.metadata,
-        bearer:        'subaccount',
+        email:               params.email,
+        amount:              Math.round(params.amountNgn * 100), // Paystack uses kobo
+        reference:           params.reference,
+        subaccount:          params.subaccount,
+        transaction_charge:  params.transactionCharge,
+        callback_url:        params.callbackUrl,
+        metadata:            params.metadata,
+        bearer:              'subaccount',
       }),
     });
 

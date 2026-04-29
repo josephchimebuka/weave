@@ -27,7 +27,7 @@ const FAQ: FAQCategory[] = [
     items: [
       {
         q: 'How long do payouts take?',
-        a: 'Settlement times depend on your destination. We provide near-instant settlement across most corridors. Fiat bank transfers typically arrive within 30 seconds to 2 minutes, while crypto-native settlements (USDC/USDT) are virtually instant.',
+        a: 'Settlement times depend on your payout type. For NGN bank accounts, customers paying in Naira via bank transfer (Paystack) are settled on a T+1 business day schedule — funds arrive the next business day. For crypto-sourced NGN payments (e.g. a customer paying in ETH or USDC), settlement is near-instant via Paycrest, typically within 30 seconds to 2 minutes. Crypto-native settlements (USDC/USDT to a wallet) are virtually instant.',
       },
       {
         q: 'Where are my funds settled?',

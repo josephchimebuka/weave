@@ -600,7 +600,7 @@ export default function CheckoutPage() {
                       activePayout.paystackSubaccountStatus === 'SYNCED' ? 'bg-forest' :
                       activePayout.paystackSubaccountStatus === 'FAILED' ? 'bg-red-500' : 'bg-amber-500'
                     }`} />
-                    {activePayout.paystackSubaccountStatus === 'SYNCED' && 'Paystack settlement active — NGN payments route directly to your bank'}
+                    {activePayout.paystackSubaccountStatus === 'SYNCED' && 'Paystack settlement active — NGN payments route directly to your bank (T+1 business day)'}
                     {activePayout.paystackSubaccountStatus === 'PENDING' && 'Paystack sync pending — save your payout details to activate NGN settlements'}
                     {activePayout.paystackSubaccountStatus === 'FAILED' && 'Paystack sync failed — re-save your payout details to retry'}
                   </div>
