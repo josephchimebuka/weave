@@ -73,7 +73,7 @@ export default function Home() {
           }} className="hidden sm:inline no-underline hover:underline hover:text-forest transition-colors cursor-pointer">
             Try Demo
           </a>
-          <a href="#" style={{
+          <a href="https://app.paywithweave.com/docs" rel="noreferrer" target="_blank" style={{
             color: '#0B0F0E', fontSize: 14, fontWeight: 500,
             display: 'flex', alignItems: 'center', gap: 6,
           }} className="no-underline hover:underline hover:text-forest transition-colors cursor-pointer">

@@ -12,12 +12,12 @@ import { Decimal } from 'decimal.js';
 const router = Router();
 
 interface CreateOrderBody {
-  source:     InstrumentRef;   
-  dest?:      InstrumentRef;   
-  amount:     number;          
-  amountIn?:  'source' | 'dest';
-  reference?: string;          
-  flow?:      Flow;            
+  source: InstrumentRef;
+  dest?: InstrumentRef;
+  amount: number;
+  amountIn?: 'source' | 'dest';
+  reference?: string;
+  flow?: Flow;
   // Explicit refund destination on the origin chain. In the external flow we
   // don't know who'll actually pay the deposit address, so the widget collects
   // a refund wallet from the user and sends it here. Takes precedence over the
@@ -34,6 +34,9 @@ router.post('/', requireAuth, async (req, res) => {
   if (!Number.isFinite(body.amount) || body.amount <= 0) {
     return res.status(400).json({ success: false, error: 'Invalid amount' });
   }
+  if (body.reference && body.reference.length > 100) {
+    return res.status(400).json({ success: false, error: 'Reference too long' });
+  }
 
   try {
     // Validate inline source shape early so we return a clean 400
@@ -42,9 +45,9 @@ router.post('/', requireAuth, async (req, res) => {
       if (!d?.kind || !d?.assetKey) {
         return res.status(400).json({ success: false, error: 'source.inline requires kind and assetKey' });
       }
-      if (d.kind === 'bank_account' && (!d.bankInstitution || !d.bankAccountIdentifier || !d.bankAccountName)) {
-        return res.status(400).json({ success: false, error: 'source.inline bank_account requires bankInstitution, bankAccountIdentifier, bankAccountName' });
-      }
+      // Bank details are optional at this layer — Paystack DVA flows don't need
+      // them (payer just transfers to the DVA). The executor enforces them when
+      // the route requires a Paycrest refund account.
     }
 
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
@@ -68,9 +71,9 @@ router.post('/', requireAuth, async (req, res) => {
     //    'self' to bias toward ChainRails (wired-in-wallet flow) once ready.
     const plan = planRoute({
       sourceAsset: sourceInstrument.assetKey,
-      destAsset:   destInstrument.assetKey,
-      amount:      body.amount,
-      flow:        body.flow ?? 'external',
+      destAsset: destInstrument.assetKey,
+      amount: body.amount,
+      flow: body.flow ?? 'external',
     });
 
     // 3. Snapshot a Paycrest rate when the route touches fiat (for the quote
@@ -79,7 +82,7 @@ router.post('/', requireAuth, async (req, res) => {
     //    both: sourceAmount drives the first-hop deposit, usdEquivalent drives
     //    the USDC-on-Base intermediate legs.
     const SENDER_FEE_BPS = Number(process.env.SENDER_FEE_BPS ?? 75);
-    const APP_FEE_BPS    = Number(process.env.APP_FEE_BPS    ?? 10);
+    const APP_FEE_BPS = Number(process.env.APP_FEE_BPS ?? 10);
     const SLIPPAGE_BUFFER_BPS = Number(process.env.SLIPPAGE_BUFFER_BPS ?? 200);
 
     const srcP = parseAsset(sourceInstrument.assetKey);
@@ -89,78 +92,78 @@ router.post('/', requireAuth, async (req, res) => {
     let sourceAmount = body.amountIn === 'dest' ? 0 : body.amount;
     let destAmountFiat: number | undefined = undefined;
     let appFeeBps: number | undefined = undefined;
-    
+
     try {
       const fiat = srcP.kind === 'fiat' ? srcP.currency : dstP.kind === 'fiat' ? dstP.currency : null;
       let sellRate = 1; let buyRate = 1;
       if (fiat) {
         const r = await paycrest.getRate('base', 'USDC', 1, fiat);
         sellRate = Number(r.sell.rate) || 1;
-        buyRate  = Number(r.buy.rate)  || 1;
+        buyRate = Number(r.buy.rate) || 1;
         quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
       }
 
       if (body.amountIn === 'dest') {
-         if (srcP.kind === 'crypto' && dstP.kind === 'fiat') {
-            // Offramp: User pays crypto (sourceAmount), Merchant gets target fiat (body.amount)
-            destAmountFiat = body.amount;
-            const targetFiat = new Decimal(body.amount);
-            const sr = new Decimal(sellRate);
-            const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
-            
-            const netUsdc = targetFiat.div(sr);
-            const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
-            
-            const hasSwap = plan.steps.some(s => s.provider === 'nearintents');
-            const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
-            const slippagePct = hasSwap ? new Decimal(SLIPPAGE_BUFFER_BPS).div(10000) : new Decimal(0);
-            const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct).minus(slippagePct));
-            
-            usdEquivalent = totalUsdc.toNumber();
-            appFeeBps = APP_FEE_BPS + (hasSwap ? SLIPPAGE_BUFFER_BPS : 0);
-         } else if (srcP.kind === 'fiat' && dstP.kind === 'crypto') {
-            // Onramp: User pays fiat (sourceAmount), Merchant gets target crypto value (body.amount in fiat)
-            const targetFiat = new Decimal(body.amount);
-            const br = new Decimal(buyRate);
-            const feePct = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS).div(10000);
-            
-            // Total fiat needed = Target / (1 - fee%)
-            const totalFiat = targetFiat.div(new Decimal(1).minus(feePct));
-            sourceAmount = totalFiat.toNumber();
-            usdEquivalent = totalFiat.div(br).toNumber();
-            appFeeBps = APP_FEE_BPS;
-         } else if (srcP.kind === 'fiat' && dstP.kind === 'fiat') {
-            // Fiat to Fiat: User pays fiat (sourceAmount), Merchant gets target fiat (body.amount)
-            const targetFiat = new Decimal(body.amount);
-            const sr = new Decimal(sellRate);
-            const br = new Decimal(buyRate);
-            
-            // 1. USDC needed for offramp
-            const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
-            const netUsdc = targetFiat.div(sr);
-            const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
-            
-            // 2. Add bridge/slippage buffers if any (usually 0 for fiat-to-fiat via Paycrest)
-            const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
-            const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
-            
-            // 3. Convert total USDC to source fiat
-            sourceAmount = totalUsdc.mul(br).toNumber();
-            usdEquivalent = totalUsdc.toNumber();
-            appFeeBps = APP_FEE_BPS;
-            destAmountFiat = body.amount;
-         }
+        if (srcP.kind === 'crypto' && dstP.kind === 'fiat') {
+          // Offramp: User pays crypto (sourceAmount), Merchant gets target fiat (body.amount)
+          destAmountFiat = body.amount;
+          const targetFiat = new Decimal(body.amount);
+          const sr = new Decimal(sellRate);
+          const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+
+          const netUsdc = targetFiat.div(sr);
+          const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+
+          const hasSwap = plan.steps.some(s => s.provider === 'nearintents');
+          const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
+          const slippagePct = hasSwap ? new Decimal(SLIPPAGE_BUFFER_BPS).div(10000) : new Decimal(0);
+          const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct).minus(slippagePct));
+
+          usdEquivalent = totalUsdc.toNumber();
+          appFeeBps = APP_FEE_BPS + (hasSwap ? SLIPPAGE_BUFFER_BPS : 0);
+        } else if (srcP.kind === 'fiat' && dstP.kind === 'crypto') {
+          // Onramp: User pays fiat (sourceAmount), Merchant gets target crypto value (body.amount in fiat)
+          const targetFiat = new Decimal(body.amount);
+          const br = new Decimal(buyRate);
+          const feePct = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS).div(10000);
+
+          // Total fiat needed = Target / (1 - fee%)
+          const totalFiat = targetFiat.div(new Decimal(1).minus(feePct));
+          sourceAmount = totalFiat.toNumber();
+          usdEquivalent = totalFiat.div(br).toNumber();
+          appFeeBps = APP_FEE_BPS;
+        } else if (srcP.kind === 'fiat' && dstP.kind === 'fiat') {
+          // Fiat to Fiat: User pays fiat (sourceAmount), Merchant gets target fiat (body.amount)
+          const targetFiat = new Decimal(body.amount);
+          const sr = new Decimal(sellRate);
+          const br = new Decimal(buyRate);
+
+          // 1. USDC needed for offramp
+          const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+          const netUsdc = targetFiat.div(sr);
+          const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+
+          // 2. Add bridge/slippage buffers if any (usually 0 for fiat-to-fiat via Paycrest)
+          const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
+          const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+
+          // 3. Convert total USDC to source fiat
+          sourceAmount = totalUsdc.mul(br).toNumber();
+          usdEquivalent = totalUsdc.toNumber();
+          appFeeBps = APP_FEE_BPS;
+          destAmountFiat = body.amount;
+        }
       } else {
-         // Standard 'amountIn === source' logic
-         if (srcP.kind === 'crypto') {
-           const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
-           if (token.price > 0) usdEquivalent = body.amount * token.price;
-         } else if (srcP.kind === 'fiat') {
-           sourceAmount = body.amount;
-           usdEquivalent = body.amount / buyRate;
-         }
+        // Standard 'amountIn === source' logic
+        if (srcP.kind === 'crypto') {
+          const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
+          if (token.price > 0) usdEquivalent = body.amount * token.price;
+        } else if (srcP.kind === 'fiat') {
+          sourceAmount = body.amount;
+          usdEquivalent = body.amount / buyRate;
+        }
       }
-      
+
       if (srcP.kind === 'crypto' && body.amountIn === 'dest' && (!sourceAmount || sourceAmount === 0)) {
         try {
           const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
@@ -187,7 +190,7 @@ router.post('/', requireAuth, async (req, res) => {
       order = await prisma.order.findFirst({
         where: {
           merchantId: merchant.id,
-          reference:  body.reference,
+          reference: body.reference,
           // Only reuse if it's the same amount and asset to avoid collisions
           sourceAmount,
           sourceAssetKey: sourceInstrument.assetKey,
@@ -200,16 +203,16 @@ router.post('/', requireAuth, async (req, res) => {
       try {
         order = await prisma.order.create({
           data: {
-            merchantId:         merchant.id,
+            merchantId: merchant.id,
             sourceInstrumentId: sourceInstrument.id,
-            destInstrumentId:   destInstrument.id,
-            sourceAssetKey:     sourceInstrument.assetKey,
-            destAssetKey:       destInstrument.assetKey,
+            destInstrumentId: destInstrument.id,
+            sourceAssetKey: sourceInstrument.assetKey,
+            destAssetKey: destInstrument.assetKey,
             sourceAmount,
-            status:             'awaiting_deposit',
-            routePlan:          plan as any,
+            status: 'awaiting_deposit',
+            routePlan: plan as any,
             quoteRate,
-            reference:          body.reference,
+            reference: body.reference,
           },
         });
         console.log(`[orders] created new order: ${order.id}`);
@@ -242,19 +245,20 @@ router.post('/', requireAuth, async (req, res) => {
     const refundAddress = srcP.kind === 'crypto'
       ? (body.refundAddress || sourceInstrument.walletAddress || '')
       : undefined;
-    const refundAccount = srcP.kind === 'fiat'   ? (bankFromInstrument(sourceInstrument) ?? undefined) : undefined;
-    const destBank      = dstP.kind === 'fiat'   ? (bankFromInstrument(destInstrument)   ?? undefined) : undefined;
-    const destWallet    = dstP.kind === 'crypto' ? (destInstrument.walletAddress ?? '') : undefined;
+    const refundAccount = srcP.kind === 'fiat' ? (bankFromInstrument(sourceInstrument) ?? undefined) : undefined;
+    const destBank = dstP.kind === 'fiat' ? (bankFromInstrument(destInstrument) ?? undefined) : undefined;
+    const destWallet = dstP.kind === 'crypto' ? (destInstrument.walletAddress ?? '') : undefined;
 
     const execResult = await executeOrder({
-      orderId:       order.id,
+      orderId: order.id,
+      merchantId: order.merchantId,
       plan,
       sourceAmount,
       usdEquivalent,
       destAmountFiat,
       appFeeBps,
-      reference:     order.id,
-      merchantMemo:  `Weave ${order.id}`,
+      reference: order.id,
+      merchantMemo: `Weave ${order.id}`,
       refundAddress,
       refundAccount,
       destBank,
@@ -266,9 +270,9 @@ router.post('/', requireAuth, async (req, res) => {
       where: { id: order.id },
       data: {
         sourceAmount: execResult.steps[0].amountIn, // Corrected amount including fees
-        destAmount:   execResult.destAmount,
+        destAmount: execResult.destAmount,
         senderFeeUsd: execResult.feeSummary.senderFeeUsd,
-        appFeeUsd:    execResult.feeSummary.appFeeUsd,
+        appFeeUsd: execResult.feeSummary.appFeeUsd,
         bridgeFeeUsd: execResult.feeSummary.bridgeFeeUsd,
       },
       include: { steps: { orderBy: { sequence: 'asc' } } },
@@ -277,9 +281,9 @@ router.post('/', requireAuth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        order:       updated,
-        nextAction:  execResult.nextAction,
-        firstStep:   execResult.firstStep,
+        order: updated,
+        nextAction: execResult.nextAction,
+        firstStep: execResult.firstStep,
       },
     });
   } catch (err: any) {
@@ -291,23 +295,23 @@ router.post('/', requireAuth, async (req, res) => {
 // Paycrest raw status mapping. `pending` is overloaded — for onramp it means
 // "awaiting user fiat deposit"; for offramp it means "crypto received, settling".
 const PAYCREST_STATUS_OFFRAMP: Record<string, string> = {
-  initiated:  'awaiting_deposit',
-  deposited:  'processing',
-  pending:    'processing',
+  initiated: 'awaiting_deposit',
+  deposited: 'processing',
+  pending: 'processing',
   fulfilling: 'processing',
-  fulfilled:  'processing',
-  validated:  'processing',
-  settling:   'processing',
-  settled:    'completed',
-  cancelled:  'failed',
-  expired:    'failed',
-  refunding:  'refunded',
-  refunded:   'refunded',
+  fulfilled: 'processing',
+  validated: 'processing',
+  settling: 'processing',
+  settled: 'completed',
+  cancelled: 'failed',
+  expired: 'failed',
+  refunding: 'refunded',
+  refunded: 'refunded',
 };
 const PAYCREST_STATUS_ONRAMP: Record<string, string> = {
   ...PAYCREST_STATUS_OFFRAMP,
   initiated: 'awaiting_deposit',
-  pending:   'awaiting_deposit',
+  pending: 'awaiting_deposit',
 };
 const TERMINAL = new Set(['completed', 'failed', 'refunded', 'expired']);
 
@@ -315,19 +319,19 @@ const TERMINAL = new Set(['completed', 'failed', 'refunded', 'expired']);
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     let order = await prisma.order.findFirst({
-      where:   { id: req.params.id, merchantId: req.merchantId },
+      where: { id: req.params.id, merchantId: req.merchantId },
       include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
     });
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
 
     let paycrestStatus: string | null = null;
-    let nearStatus:     string | null = null;
+    let nearStatus: string | null = null;
     if (!TERMINAL.has(order.status)) {
       try {
         await syncOrder(order.id);
         // Refetch to get the latest state after sync
         const fresh = await prisma.order.findUnique({
-          where:   { id: req.params.id },
+          where: { id: req.params.id },
           include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
         });
         if (fresh) order = fresh;
@@ -346,9 +350,9 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.get('/', requireAuth, async (req, res) => {
   try {
     const orders = await prisma.order.findMany({
-      where:   { merchantId: req.merchantId },
+      where: { merchantId: req.merchantId },
       orderBy: { createdAt: 'desc' },
-      take:    50,
+      take: 50,
       include: { steps: { orderBy: { sequence: 'asc' } } },
     });
     res.json({ success: true, data: orders });

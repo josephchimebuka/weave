@@ -10,59 +10,66 @@ import { prisma } from '../lib/prisma';
 import { paycrest } from './paycrest.service';
 import { chainRails } from './chainrails.service';
 import { nearIntents } from './nearintents.service';
+import { paystack } from './paystack.service';
 import { sendMerchantPaymentNotification } from './email.service';
 import { parseAsset } from '../lib/assets';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 
 export interface ExecutorInput {
-  orderId:          string;
-  plan:             RoutePlan;
-  sourceAmount:     number;
+  orderId: string;
+  merchantId: string;
+  plan: RoutePlan;
+  sourceAmount: number;
   // USD-equivalent of sourceAmount. Used as the amountIn for every step past
   // the first, since all intermediate legs are USDC on Base (≈ USD). Without
   // it, a SOL→USDC→NGN route would hand Paycrest the SOL figure (0.006)
   // instead of the USDC figure (~0.52) and Paycrest's rate validation fails.
-  usdEquivalent:    number;
-  destAmountFiat?:  number;
-  appFeeBps?:       number;
-  reference:        string;
-  merchantMemo:     string;
+  usdEquivalent: number;
+  destAmountFiat?: number;
+  appFeeBps?: number;
+  reference: string;
+  merchantMemo: string;
   // Source-side context, set per source-asset kind:
-  refundAddress?:   string;  // crypto source
-  refundAccount?:   { institution: string; accountIdentifier: string; accountName: string }; // fiat source
+  refundAddress?: string;  // crypto source
+  refundAccount?: { institution: string; accountIdentifier: string; accountName: string }; // fiat source
   // Destination-side context, set per dest-asset kind:
-  destBank?:        { institution: string; accountIdentifier: string; accountName: string }; // fiat dest
-  destWallet?:      string;  // crypto dest
+  destBank?: { institution: string; accountIdentifier: string; accountName: string }; // fiat dest
+  destWallet?: string;  // crypto dest
 }
 
-// Minimum unit for a user-facing step that needs UI.
 export interface FirstStepAction {
-  screen:         'collect_crypto' | 'collect_fiat';
+  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup';
   depositAddress?: string;                // crypto
-  depositMemo?:    string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
-  amount?:         number;                // crypto
-  token?:          string;                // crypto
-  chain?:          string;                // crypto
+  depositMemo?: string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
+  amount?: number;                // crypto
+  token?: string;                // crypto
+  chain?: string;                // crypto
   bankDetails?: {                          // fiat
-    institution:       string;
+    institution: string;
     accountIdentifier: string;
-    accountName:       string;
-    amountToTransfer:  string;
-    currency:          string;
+    accountName: string;
+    amountToTransfer: string;
+    currency: string;
   };
-  expiresAt?:      string;
+  paystackPopupDetails?: {
+    accessCode: string;
+    publicKey: string;
+    amount: number;       // gross NGN — shown to payer
+    reference: string;
+  };
+  expiresAt?: string;
 }
 
 export interface ExecuteResult {
-  firstStep:   { sequence: number; provider: string; fromAsset: string; toAsset: string };
-  nextAction:  FirstStepAction;
-  destAmount:  number;
-  steps:       Array<{ sequence: number; externalId: string | null; amountIn: number; amountOut: number }>;
-  feeSummary:  { senderFeeUsd: number; appFeeUsd: number; bridgeFeeUsd: number };
+  firstStep: { sequence: number; provider: string; fromAsset: string; toAsset: string };
+  nextAction: FirstStepAction;
+  destAmount: number;
+  steps: Array<{ sequence: number; externalId: string | null; amountIn: number; amountOut: number }>;
+  feeSummary: { senderFeeUsd: number; appFeeUsd: number; bridgeFeeUsd: number };
 }
 
-const SENDER_FEE_BPS      = Number(process.env.SENDER_FEE_BPS      ?? 75);
-const APP_FEE_BPS         = Number(process.env.APP_FEE_BPS         ?? 10);
+const SENDER_FEE_BPS = Number(process.env.SENDER_FEE_BPS ?? 75);
+const APP_FEE_BPS = Number(process.env.APP_FEE_BPS ?? 10);
 // Matches the same env the quote endpoint uses for its gross-up. NEAR will
 // abort the swap if it can't deliver amountOut within this tolerance of the
 // quoted figure, so the buffer the quote baked in must equal (or exceed) what
@@ -80,40 +87,40 @@ const WEAVE_EVM_REFUND_ADDRESS = process.env.WEAVE_EVM_REFUND_ADDRESS ?? '';
 // ── Provider dispatchers ────────────────────────────────────────────────────
 
 interface StepExecution {
-  externalId:     string | null;
-  amountIn:       number;
-  amountOut:      number;
+  externalId: string | null;
+  amountIn: number;
+  amountOut: number;
   depositAddress: string | null;
-  depositMemo:    string | null;
-  expiresAt:      string | null;
-  feeUsd:         number;
-  bankDetails?:   FirstStepAction['bankDetails'];
-  note?:          string;
+  depositMemo: string | null;
+  expiresAt: string | null;
+  feeUsd: number;
+  bankDetails?: FirstStepAction['bankDetails'];
+  note?: string;
 }
 
 async function runPaycrestOfframp(
-  step:         RoutePlanStep,
-  amountIn:     number,
-  ref:          string,
-  memo:         string,
+  step: RoutePlanStep,
+  amountIn: number,
+  ref: string,
+  memo: string,
   refundAddress: string,
-  destBank:     NonNullable<ExecutorInput['destBank']>,
+  destBank: NonNullable<ExecutorInput['destBank']>,
 ): Promise<StepExecution> {
   const from = parseAsset(step.fromAsset);
-  const to   = parseAsset(step.toAsset);
+  const to = parseAsset(step.toAsset);
   if (from.kind !== 'crypto' || to.kind !== 'fiat') throw new Error('paycrest offramp: asset mismatch');
 
   const pc = await paycrest.createOfframpOrder({
-    amount:        String(amountIn),
-    amountIn:      'crypto',
-    token:         from.token,
-    network:       from.chain.toLowerCase(),
+    amount: String(amountIn),
+    amountIn: 'crypto',
+    token: from.token,
+    network: from.chain.toLowerCase(),
     refundAddress,
-    fiatCurrency:  to.currency,
+    fiatCurrency: to.currency,
     recipient: {
-      institution:       destBank.institution,
+      institution: destBank.institution,
       accountIdentifier: destBank.accountIdentifier,
-      accountName:       destBank.accountName,
+      accountName: destBank.accountName,
       memo,
     },
     reference: ref,
@@ -125,35 +132,35 @@ async function runPaycrestOfframp(
   // Their product is the fiat amount the merchant receives.
   const fiatSettled = Number(pc.amount) * Number(pc.rate);
   return {
-    externalId:     pc.id,
+    externalId: pc.id,
     amountIn,
-    amountOut:      Number.isFinite(fiatSettled) && fiatSettled > 0 ? fiatSettled : amountIn,
+    amountOut: Number.isFinite(fiatSettled) && fiatSettled > 0 ? fiatSettled : amountIn,
     depositAddress: prov.receiveAddress,
-    depositMemo:    null,
-    expiresAt:      prov.validUntil,
-    feeUsd:         senderFeeUsd,
+    depositMemo: null,
+    expiresAt: prov.validUntil,
+    feeUsd: senderFeeUsd,
   };
 }
 
 async function runPaycrestOnramp(
-  step:          RoutePlanStep,
-  amountIn:      number,
-  ref:           string,
+  step: RoutePlanStep,
+  amountIn: number,
+  ref: string,
   refundAccount: NonNullable<ExecutorInput['refundAccount']>,
-  destWallet:    string,
+  destWallet: string,
 ): Promise<StepExecution> {
   const from = parseAsset(step.fromAsset);
-  const to   = parseAsset(step.toAsset);
+  const to = parseAsset(step.toAsset);
   if (from.kind !== 'fiat' || to.kind !== 'crypto') throw new Error('paycrest onramp: asset mismatch');
 
   const pc = await paycrest.createOnrampOrder({
-    amount:          String(amountIn),
-    fiatCurrency:    from.currency,
+    amount: String(amountIn),
+    fiatCurrency: from.currency,
     refundAccount,
-    cryptoCurrency:  to.token,
-    cryptoNetwork:   to.chain.toLowerCase(),
+    cryptoCurrency: to.token,
+    cryptoNetwork: to.chain.toLowerCase(),
     cryptoRecipient: destWallet,
-    reference:       ref,
+    reference: ref,
   });
 
   const prov = pc.providerAccount as {
@@ -162,43 +169,43 @@ async function runPaycrestOnramp(
   };
   const senderFeeUsd = amountIn * (SENDER_FEE_BPS / 10000);
   return {
-    externalId:     pc.id,
+    externalId: pc.id,
     amountIn,
-    amountOut:      Number(prov.amountToTransfer) || amountIn,
+    amountOut: Number(prov.amountToTransfer) || amountIn,
     depositAddress: null,
-    depositMemo:    null,
-    expiresAt:      prov.validUntil,
-    feeUsd:         senderFeeUsd,
+    depositMemo: null,
+    expiresAt: prov.validUntil,
+    feeUsd: senderFeeUsd,
     bankDetails: {
-      institution:       prov.institution,
+      institution: prov.institution,
       accountIdentifier: prov.accountIdentifier,
-      accountName:       prov.accountName,
-      amountToTransfer:  prov.amountToTransfer,
-      currency:          prov.currency,
+      accountName: prov.accountName,
+      amountToTransfer: prov.amountToTransfer,
+      currency: prov.currency,
     },
   };
 }
 
 async function runChainRailsBridge(
-  step:                RoutePlanStep,
-  amountIn:            number,
+  step: RoutePlanStep,
+  amountIn: number,
   downstreamRecipient: string,
-  refundAddress:       string,
-  ref:                 string,
+  refundAddress: string,
+  ref: string,
 ): Promise<StepExecution> {
   const from = parseAsset(step.fromAsset);
-  const to   = parseAsset(step.toAsset);
+  const to = parseAsset(step.toAsset);
   if (from.kind !== 'crypto' || to.kind !== 'crypto') throw new Error('chainrails: asset mismatch');
 
   const intent = await chainRails.createIntent({
-    sourceChain:      from.chain,
-    sourceToken:      from.token,
-    amount:           amountIn,
+    sourceChain: from.chain,
+    sourceToken: from.token,
+    amount: amountIn,
     destinationChain: to.chain,
     destinationToken: to.token,
-    recipient:        downstreamRecipient,
+    recipient: downstreamRecipient,
     refundAddress,
-    metadata:         { orderId: ref },
+    metadata: { orderId: ref },
   });
 
   const totalRequired = Number(intent.total_amount_in_asset_token) / (10 ** intent.asset_token_decimals);
@@ -206,11 +213,11 @@ async function runChainRailsBridge(
   return {
     externalId:     String(intent.id),
     amountIn:       totalRequired,
-    amountOut:      amountIn, // amount user actually wanted to bridge
+    amountOut:      amountIn,
     depositAddress: intent.intent_address,
-    depositMemo:    null,
-    expiresAt:      intent.expires_at,
-    feeUsd:         Number(intent.fees_in_usd) || 0,
+    depositMemo: null,
+    expiresAt: intent.expires_at,
+    feeUsd: Number(intent.fees_in_usd) || 0,
   };
 }
 
@@ -220,45 +227,45 @@ async function runChainRailsBridge(
 // provided `recipient` (the next hop — Paycrest's receive address, or the
 // merchant wallet for crypto payouts).
 async function runNearIntentsSwap(
-  step:                RoutePlanStep,
-  amountIn:            number,
+  step: RoutePlanStep,
+  amountIn: number,
   downstreamRecipient: string,
-  refundAddress:       string,
-  ref:                 string,
-  exactOutputTarget?:  number,
-  appFeeBps?:          number,
+  refundAddress: string,
+  ref: string,
+  exactOutputTarget?: number,
+  appFeeBps?: number,
 ): Promise<StepExecution> {
   const from = parseAsset(step.fromAsset);
-  const to   = parseAsset(step.toAsset);
+  const to = parseAsset(step.toAsset);
   if (from.kind !== 'crypto' || to.kind !== 'crypto') throw new Error('nearintents: asset mismatch');
   if (!downstreamRecipient) throw new Error('nearintents: missing downstream recipient');
-  if (!refundAddress)       throw new Error('nearintents: missing refundTo');
+  if (!refundAddress) throw new Error('nearintents: missing refundTo');
 
   const WEAVE_EVM_REFUND_ADDRESS = process.env.WEAVE_EVM_REFUND_ADDRESS || refundAddress;
 
   try {
     const resp = await nearIntents.createQuote({
       sourceAssetKey: step.fromAsset,
-      destAssetKey:   step.toAsset,
-      amount:         exactOutputTarget ?? amountIn, // Target output amount or fallback to input amount
-      swapType:       exactOutputTarget ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
-      refundTo:       refundAddress,
-      recipient:      downstreamRecipient,
-      slippageBps:    exactOutputTarget ? undefined : SLIPPAGE_BUFFER_BPS, // EXACT_OUTPUT leaves slippage risk to solver
-      appFee:         appFeeBps && exactOutputTarget ? { recipient: WEAVE_EVM_REFUND_ADDRESS, fee: appFeeBps } : undefined,
-      referral:       `weave-${ref}`.toLowerCase().slice(0, 32),
+      destAssetKey: step.toAsset,
+      amount: exactOutputTarget ?? amountIn, // Target output amount or fallback to input amount
+      swapType: exactOutputTarget ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
+      refundTo: refundAddress,
+      recipient: downstreamRecipient,
+      slippageBps: exactOutputTarget ? undefined : SLIPPAGE_BUFFER_BPS, // EXACT_OUTPUT leaves slippage risk to solver
+      appFee: appFeeBps && exactOutputTarget ? { recipient: WEAVE_EVM_REFUND_ADDRESS, fee: appFeeBps } : undefined,
+      referral: `weave-${ref}`.toLowerCase().slice(0, 32),
     });
 
     const amountOut = Number(resp.quote.amountOutFormatted) || amountIn;
 
     return {
-      externalId:     resp.quote.depositAddress,
-      amountIn:       exactOutputTarget ? Number(resp.quote.amountInFormatted) || amountIn : amountIn,
+      externalId: resp.quote.depositAddress,
+      amountIn: exactOutputTarget ? Number(resp.quote.amountInFormatted) || amountIn : amountIn,
       amountOut,
       depositAddress: resp.quote.depositAddress,
-      depositMemo:    resp.quote.depositMemo ?? null,
-      expiresAt:      resp.quote.deadline,
-      feeUsd:         Math.max(0, Number(resp.quote.amountInUsd) - Number(resp.quote.amountOutUsd)) || 0,
+      depositMemo: resp.quote.depositMemo ?? null,
+      expiresAt: resp.quote.deadline,
+      feeUsd: Math.max(0, Number(resp.quote.amountInUsd) - Number(resp.quote.amountOutUsd)) || 0,
     };
   } catch (err: any) {
     if (err.message.includes('400') && err.message.toLowerCase().includes('failed to get quote')) {
@@ -363,30 +370,72 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   console.log(`[executor] executing order ${orderId}: sourceAmount=${input.sourceAmount}, usdEquivalent=${input.usdEquivalent}`);
 
   for (let i = last; i >= 0; i--) {
-    const step     = plan.steps[i];
+    const step = plan.steps[i];
     const amountIn = i === 0 ? input.sourceAmount : input.usdEquivalent;
-    const stepRef  = `${input.reference}-${i}`;
+    const stepRef = `${input.reference}-${i}`;
     let exec: StepExecution;
 
     console.log(`[executor] step ${i}: provider=${step.provider}, amountIn=${amountIn}`);
 
-    if (step.provider === 'paycrest') {
+    if (step.provider === 'paystack') {
+      // Guard: merchant must have a SYNCED subaccount so funds route to their bank
+      const merchant = await prisma.merchant.findUniqueOrThrow({
+        where: { id: input.merchantId },
+      });
+      if (merchant.paystackSubaccountStatus !== 'SYNCED') {
+        throw new Error(
+          `Merchant ${input.merchantId} Paystack subaccount not synced. Status: ${merchant.paystackSubaccountStatus}`
+        );
+      }
+
+      // Gross-up: payer pays net + Paystack fee so the merchant receives exactly amountIn
+      const rate = input.destAmountFiat ? (input.destAmountFiat / input.usdEquivalent) : 1500;
+      const { chargeAmountNgn, feeUsd, weaveFeeNgn } = paystack.grossUp(amountIn, rate);
+
+      const paystackRef = `${input.orderId}-${i}`;
+
+      // transaction_charge routes Weave's flat fee (in kobo) to the main Paystack account.
+      // The remainder goes to the merchant subaccount. bearer:'subaccount' means Paystack's
+      // processing fee is deducted from the merchant's share, not added on top for the payer.
+      const txn = await paystack.initializeTransaction({
+        email:             'admin@dewdroplabs.com',
+        amountNgn:         chargeAmountNgn,
+        reference:         paystackRef,
+        subaccount:        merchant.paystackSubaccountCode!,
+        transactionCharge: Math.round(weaveFeeNgn * 100), // kobo
+      });
+
+      exec = {
+        externalId: paystackRef,
+        amountIn,
+        amountOut: amountIn,
+        depositAddress: null,
+        depositMemo: null,
+        expiresAt: null,
+        feeUsd,
+      };
+
+      (exec as any).paystackPopupDetails = {
+        accessCode: txn.access_code,
+        publicKey: process.env.PAYSTACK_PUBLIC_KEY || '',
+        amount: chargeAmountNgn,
+        reference: paystackRef,
+      };
+    } else if (step.provider === 'paycrest') {
       const from = parseAsset(step.fromAsset);
       if (from.kind === 'crypto') {
         if (!input.destBank) throw new Error('paycrest offramp requires destBank');
         if (!WEAVE_EVM_REFUND_ADDRESS) throw new Error('paycrest offramp requires WEAVE_EVM_REFUND_ADDRESS');
-        
         let paycrestAmountIn = amountIn;
         if (input.destAmountFiat && input.appFeeBps) {
           paycrestAmountIn = input.usdEquivalent * (1 - input.appFeeBps / 10000);
           exactTargetUsdc = paycrestAmountIn;
         }
-        
         exec = await runPaycrestOfframp(step, paycrestAmountIn, stepRef, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
       } else {
         if (!input.refundAccount) throw new Error('paycrest onramp requires refundAccount');
         const recipient = downstreamRecipient || input.destWallet;
-        if (!recipient)           throw new Error('paycrest onramp requires destWallet or downstreamRecipient');
+        if (!recipient) throw new Error('paycrest onramp requires destWallet or downstreamRecipient');
         exec = await runPaycrestOnramp(step, amountIn, stepRef, input.refundAccount, recipient);
       }
     } else if (step.provider === 'chainrails') {
@@ -396,16 +445,16 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       const from = parseAsset(step.fromAsset);
       const sourceIsEvm = from.kind === 'crypto' && ['BASE', 'ETHEREUM', 'ARBITRUM', 'OPTIMISM', 'POLYGON', 'BSC', 'AVALANCHE'].includes(from.chain.toUpperCase());
       const refundTo = input.refundAddress || (sourceIsEvm ? (input.destWallet || downstreamRecipient) : '');
-      
+
       if (!refundTo) {
         throw new Error(`Refund address is required for ${from.kind === 'crypto' ? from.chain : from.currency} payments.`);
       }
 
       exec = await runNearIntentsSwap(
-        step, 
-        amountIn, 
-        downstreamRecipient ?? input.destWallet ?? '', 
-        refundTo, 
+        step,
+        amountIn,
+        downstreamRecipient ?? input.destWallet ?? '',
+        refundTo,
         stepRef,
         exactTargetUsdc ?? undefined,
         input.appFeeBps
@@ -413,15 +462,15 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');
-      if (!input.destWallet)      throw new Error('direct requires destWallet');
+      if (!input.destWallet) throw new Error('direct requires destWallet');
       exec = {
-        externalId:     null,
+        externalId: null,
         amountIn,
-        amountOut:      amountIn,
+        amountOut: amountIn,
         depositAddress: input.destWallet,
-        depositMemo:    null,
-        expiresAt:      new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-        feeUsd:         0,
+        depositMemo: null,
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        feeUsd: 0,
       };
     } else {
       throw new Error(`executor: unsupported provider ${step.provider}`);
@@ -431,9 +480,9 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     if (exec.depositAddress) downstreamRecipient = exec.depositAddress;
   }
 
-  // 4. Persistence Update: Populate the pre-created steps with results
-  const updatedSteps = await Promise.all(executions.map(async (e, i) => {
-    return prisma.routeStep.update({
+  // 4. Populate the pre-created steps with execution results.
+  await Promise.all(executions.map((e, i) =>
+    prisma.routeStep.update({
       where: { orderId_sequence: { orderId, sequence: i } },
       data: {
         externalId:     e.externalId,
@@ -443,11 +492,57 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         depositMemo:    e.depositMemo,
         status:         i === 0 ? 'awaiting_deposit' : 'pending',
         feeUsd:         e.feeUsd,
-      }
-    });
-  }));
+        startedAt:      new Date(),
+      },
+    })
+  ));
 
-  return reconstructResultFromSteps(input, updatedSteps);
+  // Build the nextAction from step 0 (the user-facing step).
+  const firstExec = executions[0];
+  const firstStep = plan.steps[0];
+  const firstFrom = parseAsset(firstStep.fromAsset);
+  const nextAction: FirstStepAction =
+    firstFrom.kind === 'crypto'
+      ? {
+          screen:         'collect_crypto',
+          depositAddress: firstExec.depositAddress ?? undefined,
+          depositMemo:    firstExec.depositMemo ?? undefined,
+          amount:         firstExec.amountIn,
+          token:          firstFrom.token,
+          chain:          firstFrom.chain,
+          expiresAt:      firstExec.expiresAt ?? undefined,
+        }
+      : firstStep.provider === 'paystack'
+        ? {
+            screen:               'paystack_popup',
+            paystackPopupDetails: (firstExec as any).paystackPopupDetails,
+            expiresAt:            firstExec.expiresAt ?? undefined,
+          }
+        : {
+            screen:      'collect_fiat',
+            bankDetails: firstExec.bankDetails,
+            expiresAt:   firstExec.expiresAt ?? undefined,
+          };
+
+  const totalBridgeFee = executions.reduce((s, e, i) => {
+    const p = plan.steps[i].provider;
+    return s + ((p === 'chainrails' || p === 'nearintents') ? e.feeUsd : 0);
+  }, 0);
+  const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
+  const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS    / 10000);
+
+  return {
+    firstStep:  { sequence: 0, provider: firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
+    nextAction,
+    destAmount: executions[last].amountOut,
+    steps: executions.map((e, i) => ({
+      sequence:   i,
+      externalId: e.externalId,
+      amountIn:   e.amountIn,
+      amountOut:  e.amountOut,
+    })),
+    feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd: totalBridgeFee },
+  };
 }
 
 // ── Webhook-driven step advance ─────────────────────────────────────────────
@@ -456,7 +551,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 // RouteStep done and rolls the Order up when every step is complete.
 
 export async function markStepDone(params: {
-  provider:   string;
+  provider: string;
   externalId: string;
   amountOut?: number;
 }) {
@@ -469,7 +564,7 @@ export async function markStepDone(params: {
   await prisma.routeStep.update({
     where: { id: step.id },
     data: {
-      status:      'done',
+      status: 'done',
       completedAt: new Date(),
       ...(params.amountOut != null ? { amountOut: params.amountOut } : {}),
     },
@@ -480,7 +575,7 @@ export async function markStepDone(params: {
   const allDone = fresh.every((s: any) => s.id === step.id ? true : s.status === 'done');
   const anyFailed = fresh.some((s: any) => s.status === 'failed');
   const nextOrderStatus = anyFailed ? 'failed' : allDone ? 'completed' : 'processing';
-  
+
   await prisma.order.update({ where: { id: step.orderId }, data: { status: nextOrderStatus } });
 
   // ── Notify Merchant ───────────────────────────────────────────────────────
@@ -491,7 +586,7 @@ export async function markStepDone(params: {
       sendMerchantPaymentNotification(step.orderId),
       webhookService.triggerPaymentSucceeded(step.orderId)
     ]).catch(err => {
-        console.error(`[executor] failed to trigger merchant notifications:`, err.message);
+      console.error(`[executor] failed to trigger merchant notifications:`, err.message);
     });
   }
 
@@ -527,11 +622,11 @@ export async function markStepFailed(params: { provider: string; externalId: str
   await prisma.$transaction([
     prisma.routeStep.update({
       where: { id: step.id },
-      data:  { status: 'failed', completedAt: new Date() },
+      data: { status: 'failed', completedAt: new Date() },
     }),
     prisma.order.update({
       where: { id: step.orderId },
-      data:  { status: params.isRefund ? 'refunded' : 'failed' },
+      data: { status: params.isRefund ? 'refunded' : 'failed' },
     }),
   ]);
 
@@ -572,16 +667,16 @@ export async function syncOrder(orderId: string) {
         console.log(`[sync] checking paycrest step ${step.id} for order ${step.externalId}`);
         const pc = await paycrest.getOrder(step.externalId) as any;
         console.log(`[sync] paycrest status for ${step.id}: ${pc.status} (dir: ${pc.direction})`);
-        
+
         const direction = pc.direction || '';
         const status = pc.status.toLowerCase();
 
         // Documentation Poll rules:
         // validated -> offramp complete
         // settled -> onramp or fully complete
-        const isDone = (direction === 'offramp' && status === 'validated') || 
-                       (['settled', 'completed', 'paid', 'successful'].includes(status));
-        
+        const isDone = (direction === 'offramp' && status === 'validated') ||
+          (['settled', 'completed', 'paid', 'successful'].includes(status));
+
         const isFailed = ['expired', 'failed', 'cancelled'].includes(status);
         const isRefund = ['refunded', 'refunding'].includes(status);
 
@@ -590,11 +685,21 @@ export async function syncOrder(orderId: string) {
         } else if (isFailed || isRefund) {
           await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund });
         }
+      } else if (step.provider === 'paystack' && step.externalId) {
+        console.log(`[sync] checking paystack step ${step.id} for ref ${step.externalId}`);
+        const ps = await paystack.verifyTransaction(step.externalId);
+        console.log(`[sync] paystack status for ${step.id}: ${ps.status}`);
+
+        if (ps.status === 'success') {
+          await markStepDone({ provider: 'paystack', externalId: step.externalId, amountOut: ps.amount / 100 });
+        } else if (['failed', 'abandoned'].includes(ps.status)) {
+          await markStepFailed({ provider: 'paystack', externalId: step.externalId });
+        }
       } else if (step.provider === 'chainrails' && step.externalId) {
         console.log(`[sync] checking chainrails step ${step.id} for intent ${step.externalId}`);
         const intent = await chainRails.getIntent(step.externalId);
         console.log(`[sync] chainrails status for ${step.id}: ${intent.intent_status}`);
-        
+
         if (intent.intent_status === 'COMPLETED') {
           await markStepDone({ provider: 'chainrails', externalId: step.externalId });
         } else if (intent.intent_status === 'FAILED') {

@@ -31,7 +31,9 @@ model Merchant {
   
   createdAt                 DateTime     @default(now())
   updatedAt                 DateTime     @updatedAt
-
+  paystackSubaccountCode     String?
+  paystackSubaccountStatus   SubaccountSyncStatus @default(PENDING)
+  paystackSubaccountSyncedAt DateTime?
   sessions           Session[]
   instruments        Instrument[]
   orders             Order[]
@@ -109,7 +111,7 @@ model KeyPair {
   merchantId      String
   merchant        Merchant @relation(fields: [merchantId], references: [id])
   isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
+  createdAt        DateTime  @default(now())
   updatedAt       DateTime @updatedAt
 
   @@index([merchantId])
@@ -206,6 +208,7 @@ model RouteStep {
   depositMemo    String?   // required on XRP, TON, XLM, NEAR
   startedAt      DateTime?
   completedAt    DateTime?
+
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -270,4 +273,10 @@ model PaymentLink {
   updatedAt   DateTime @updatedAt
 
   @@index([merchantId])
+}
+
+enum SubaccountSyncStatus {
+  PENDING   // Bank details saved locally, not yet mirrored to Paystack
+  SYNCED    // Successfully created/updated on Paystack
+  FAILED    // Last sync attempt failed
 }

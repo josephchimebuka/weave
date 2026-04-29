@@ -14,6 +14,10 @@ export interface RouteStep {
   depositMemo:    string | null;
   startedAt:      string | null;
   completedAt:    string | null;
+  paystackDvaBank: string | null;
+  paystackDvaAcct: string | null;
+  paystackDvaRef:  string | null;
+  dvaExpiresAt:    string | null;
   createdAt:      string;
   updatedAt:      string;
 }

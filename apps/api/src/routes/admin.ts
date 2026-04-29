@@ -32,7 +32,7 @@ router.get('/verify', async (req, res) => {
 
   try {
     // 1. Verify the JWT token
-    const decoded = jwt.verify(token, ADMIN_SECRET) as { sub: string; action: string };
+    const decoded = jwt.verify(token, ADMIN_SECRET, { maxAge: '24h' }) as { sub: string; action: string };
     
     // Security check: IDs and Action must match what was in the token
     if (decoded.sub !== id || decoded.action !== action) {
@@ -133,7 +133,7 @@ router.post('/verify', async (req, res) => {
   }
 
   try {
-    const decoded = jwt.verify(token, ADMIN_SECRET) as { sub: string; action: string };
+    const decoded = jwt.verify(token, ADMIN_SECRET, { maxAge: '24h' }) as { sub: string; action: string };
     if (decoded.sub !== id || decoded.action !== action) {
       return res.status(403).send('Security violation: token mismatch.');
     }

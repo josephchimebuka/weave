@@ -56,6 +56,7 @@ import {
   fiatKey,
   type InlineBankInstrument,
   type InlineWalletInstrument,
+  type NextAction,
   fetchAssets
 } from '../api/client';
 
@@ -97,6 +98,14 @@ interface Currency {
   psp: string;
   bank: string;
   method: string;
+}
+
+
+interface PaystackPopupDetails {
+  accessCode: string;
+  publicKey: string;
+  amount: number;
+  reference: string;
 }
 
 const CURRENCIES: Record<string, Currency> = SUPPORTED_FIAT.reduce((acc, f) => {
@@ -461,14 +470,22 @@ const secondaryBtn: CSSProperties = {
 
 type PathPick = 'fiat' | 'crypto' | 'deposit' | 'externalDeposit';
 
-function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
+function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting }: {
   onPick: (p: PathPick) => void;
   merchant: Merchant;
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
+  submitting?: boolean;
 }) {
   const c = currencies[merchant.currency] || CURRENCIES[merchant.currency];
   const [showMoreCrypto, setShowMoreCrypto] = useState(false);
+  const [picked, setPicked] = useState<PathPick | null>(null);
+
+  const pick = (method: PathPick) => {
+    if (submitting || picked) return;
+    setPicked(method);
+    onPick(method);
+  };
 
   return (
     <Stack gap={16} style={{ padding: '22px 20px 6px' }}>
@@ -502,18 +519,32 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
           How would you like to pay?
         </div>
 
-        <button onClick={() => onPick('fiat')} style={methodCard}>
+        <button
+          onClick={() => pick('fiat')}
+          disabled={!!(submitting || picked)}
+          style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
+        >
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            {picked === 'fiat' ? (
+              <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent, animation: 'wspin 0.8s linear infinite' }} />
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            )}
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>Bank transfer</div>
+            <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>
+              {picked === 'fiat' ? 'Setting up payment…' : 'Bank transfer'}
+            </div>
             <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Pay in {c?.name ?? merchant.currency} · Instant · No fees</div>
           </Stack>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          {picked !== 'fiat' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button>
 
-        <button onClick={() => onPick('deposit')} style={methodCard}>
+        <button
+          onClick={() => pick('deposit')}
+          disabled={!!(submitting || picked)}
+          style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
+        >
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <IconDot bg="#F6851B" size={24}>🦊</IconDot>
           </div>
@@ -525,15 +556,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
         </button>
 
         {!showMoreCrypto ? (
-          <button onClick={() => setShowMoreCrypto(true)} style={{
-            background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-            fontSize: 12, color: WEAVE.mute, padding: '4px 0', textAlign: 'center',
+          <button onClick={() => !picked && setShowMoreCrypto(true)} style={{
+            background: 'transparent', border: 'none', cursor: picked ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+            fontSize: 12, color: WEAVE.mute, padding: '4px 0', textAlign: 'center', opacity: picked ? 0.5 : 1,
           }}>
             Use a different wallet ↓
           </button>
         ) : (
           <Stack gap={6} style={{ padding: '2px 0' }}>
-            <button onClick={() => onPick('externalDeposit')} style={methodCardSm}>
+            <button onClick={() => pick('externalDeposit')} disabled={!!(submitting || picked)} style={{ ...methodCardSm, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}>
               <div style={{ width: 20, height: 20, borderRadius: 5, background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="14" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="3" y="14" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /></svg>
               </div>
@@ -766,6 +797,94 @@ function WeavingLoader() {
         <WeaveMark size={22} />
       </div>
     </div>
+  );
+}
+
+
+function ScreenPaystackPopup({
+  onNext,
+  details,
+}: {
+  onNext: (s: string) => void;
+  details: PaystackPopupDetails | null;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const launched = useRef(false);
+
+  const launch = () => {
+    if (!details) { setError('Payment details unavailable. Please retry.'); setLoading(false); return; }
+    const { accessCode } = details;
+
+    const open = () => {
+      if (launched.current) return;
+      launched.current = true;
+      setLoading(false);
+      const Pop = (window as any).PaystackPop;
+      if (!Pop) {
+        setError('Paystack failed to load. Please check your connection and retry.');
+        launched.current = false;
+        return;
+      }
+      const popup = new Pop();
+      popup.resumeTransaction(accessCode, {
+        onSuccess: () => onNext('processing'),
+        onCancel:  () => { launched.current = false; },
+      });
+    };
+
+    if ((window as any).PaystackPop) { open(); return; }
+
+    const script = document.createElement('script');
+    script.src = 'https://js.paystack.co/v2/inline.js';
+    script.onload = open;
+    script.onerror = () => {
+      setLoading(false);
+      setError('Could not load Paystack. Check your network and try again.');
+    };
+    document.head.appendChild(script);
+  };
+
+  useEffect(() => { launch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loading) {
+    return (
+      <Stack gap={24} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            border: `3px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent,
+            animation: 'wspin 0.8s linear infinite', margin: '0 auto',
+          }} />
+          <div style={{ marginTop: 14, fontSize: 14, color: WEAVE.mute }}>Opening payment popup…</div>
+        </div>
+      </Stack>
+    );
+  }
+
+  if (error) {
+    return (
+      <Stack gap={16} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.err, padding: '8px 0' }}>{error}</div>
+        <button onClick={() => { launched.current = false; setError(null); setLoading(true); launch(); }} style={primaryBtn}>
+          Retry
+        </button>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack gap={16} style={{ padding: '28px 20px' }}>
+      <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.mute, padding: '12px 0' }}>
+        A Paystack payment popup has opened. Complete payment there to continue.
+      </div>
+      <button
+        onClick={() => { launched.current = false; launch(); }}
+        style={{ ...primaryBtn, background: WEAVE.page, color: WEAVE.ink }}
+      >
+        Re-open popup
+      </button>
+    </Stack>
   );
 }
 
@@ -2233,6 +2352,7 @@ function WeaveCheckoutInner({
   });
   const [orderId, setOrderId] = useState<string | null>(null);
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
+  const [paystackPopupDetails, setPaystackPopupDetails] = useState<PaystackPopupDetails | null>(null);
   const [depositAddress, setDepositAddress] = useState<string | null>(null);
   const [depositMemo, setDepositMemo] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState<number | null>(null);
@@ -2273,6 +2393,7 @@ function WeaveCheckoutInner({
             if (['awaiting_deposit', 'processing'].includes(order.status)) {
               setOrderId(order.id);
 
+              // Find the active step (usually the first one that isn't DONE)
               const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
 
               if (dir === 'onramp') {
@@ -2416,7 +2537,11 @@ function WeaveCheckoutInner({
     setWalletBalanceEntry(null);
     if (method === 'fiat') {
       setDirection('onramp');
-      setScreen('refundAccount');
+      if (merchant.currency === 'NGN') {
+        createFiatOrder();
+      } else {
+        setScreen('refundAccount');
+      }
     } else if (method === 'crypto') {
       setDirection('offramp');
       setScreen('wallet');
@@ -2471,6 +2596,7 @@ function WeaveCheckoutInner({
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
       setDepositMemo(res.nextAction.depositMemo ?? null);
+      setBankDetails(res.nextAction.bankDetails ?? null);
       setDepositAmount(typeof res.nextAction.amount === 'number' ? res.nextAction.amount : null);
       setDepositToken(res.nextAction.token ?? token);
       setDepositChain(res.nextAction.chain ?? apiChain);
@@ -2566,7 +2692,7 @@ function WeaveCheckoutInner({
     setScreen(next);
   };
 
-  const submitRefundAccount = async () => {
+  const createFiatOrder = async (info?: RefundAccount) => {
     setSubmitting(true);
     setApiError(null);
     try {
@@ -2592,7 +2718,11 @@ function WeaveCheckoutInner({
       });
       setOrderId(res.order.id);
       setBankDetails(res.nextAction.bankDetails ?? null);
-      setScreen('vaccount');
+      setPaystackPopupDetails(res.nextAction.paystackPopupDetails ?? null);
+      const nextScreen =
+        res.nextAction.screen === 'paystack_popup' ? 'paystack_popup' :
+        'vaccount';
+      setScreen(nextScreen);
     } catch (e: any) {
       setApiError(e.message ?? 'Failed to create order');
       onError?.(e);
@@ -2600,6 +2730,8 @@ function WeaveCheckoutInner({
       setSubmitting(false);
     }
   };
+
+  const submitRefundAccount = () => createFiatOrder(refundAccount);
 
   const confirmOfframp = async () => {
     if (submitting) return;
@@ -2724,6 +2856,7 @@ function WeaveCheckoutInner({
     setOrderId(null);
     setApiError(null);
     setBankDetails(null);
+    setPaystackPopupDetails(null);
     setDepositAddress(null);
     setDepositMemo(null);
     setDepositError(null);
@@ -2733,10 +2866,11 @@ function WeaveCheckoutInner({
   };
 
   const body = (() => {
-    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} />;
+    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} />;
     if (isOnramp) {
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'paystack_popup') return <ScreenPaystackPopup onNext={advance} details={paystackPopupDetails} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} />;

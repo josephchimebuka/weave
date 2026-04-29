@@ -15,31 +15,49 @@ interface RateLimitOptions {
 export function rateLimit(options: RateLimitOptions) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const { windowMs, max, message, keyPrefix = 'rl' } = options;
-    
+
     // Judge the "Role" of the request to give it a dedicated bucket
     let role = 'anon';
-    if (req.headers['x-api-key'])     role = 'widget';
+    if (req.headers['x-api-key']) role = 'widget';
     if (req.headers['x-session-token']) role = 'dashboard';
-    if (req.headers['x-secret-key'])   role = 'server';
+    if (req.headers['x-secret-key']) role = 'server';
 
     // Smarter IP detection for proxied environments (Vercel/Heroku/Cloudflare)
     const forwarded = req.headers['x-forwarded-for'];
     const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : (req.ip || req.socket.remoteAddress || 'unknown');
-    
+
     const key = `${keyPrefix}:${role}:${ip}`;
 
     // ── Bypass & Special Handling ───────────────────────────────────────────
-    
+
     // 1. Critical polling bypass (session, orders, quotes)
-    const isOrderPoll = req.method === 'GET' && /\/orders\/[0-9a-fA-F-]+$/.test(req.path);
     const isQuotePoll = req.method === 'GET' && req.path.includes('/v1/quotes');
-    if (req.path.endsWith('/auth/session') || isOrderPoll || isQuotePoll) {
+    if (req.path.endsWith('/auth/session') || isQuotePoll) {
       return next();
     }
 
     // 2. Dashboards are state-heavy. Authenticated GET requests from the
     // dashboard are exempted from the global limit to prevent auto-refresh lockout.
     if (role === 'dashboard' && req.method === 'GET') {
+      return next();
+    }
+
+    // 3. /orders — status polling (GET /orders/:id) is frequent, but creation (POST /orders) is sensitive.
+    if (req.path.startsWith('/v1/orders')) {
+      if (req.method === 'GET') {
+        // Polling limit: 300 per 1 min (very generous for widget)
+        const pollKey = `${keyPrefix}:poll:${ip}`;
+        const count = (await redis.get<number>(pollKey)) || 0;
+        if (count >= 300) return res.status(429).json({ success: false, error: 'Too many polling requests' });
+        await redis.incr(pollKey);
+        if (count === 0) await redis.pexpire(pollKey, 60 * 1000);
+        return next();
+      }
+      // POST /orders falls through to the main limiter
+    }
+
+    // 4. /assets — static supported-asset list, safe to call freely.
+    if (req.path.startsWith('/v1/assets')) {
       return next();
     }
 
@@ -61,11 +79,11 @@ export function rateLimit(options: RateLimitOptions) {
         pipeline.pexpire(key, windowMs);
       }
       await pipeline.exec();
-      
+
       // Add rate limit headers
       res.setHeader('X-RateLimit-Limit', max);
       res.setHeader('X-RateLimit-Remaining', Math.max(0, max - count - 1));
-      
+
       next();
     } catch (err: any) {
       console.error('[rate-limit] error:', err.message);
