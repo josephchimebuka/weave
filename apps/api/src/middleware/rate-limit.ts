@@ -15,23 +15,24 @@ interface RateLimitOptions {
 export function rateLimit(options: RateLimitOptions) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const { windowMs, max, message, keyPrefix = 'rl' } = options;
-    
+
     // Judge the "Role" of the request to give it a dedicated bucket
     let role = 'anon';
-    if (req.headers['x-api-key'])     role = 'widget';
+    if (req.headers['x-api-key']) role = 'widget';
     if (req.headers['x-session-token']) role = 'dashboard';
-    if (req.headers['x-secret-key'])   role = 'server';
+    if (req.headers['x-secret-key']) role = 'server';
 
     // Smarter IP detection for proxied environments (Vercel/Heroku/Cloudflare)
     const forwarded = req.headers['x-forwarded-for'];
     const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : (req.ip || req.socket.remoteAddress || 'unknown');
-    
+
     const key = `${keyPrefix}:${role}:${ip}`;
 
     // ── Bypass & Special Handling ───────────────────────────────────────────
 
-    // 1. Critical session polling bypass
-    if (req.path.endsWith('/auth/session')) {
+    // 1. Critical polling bypass (session, orders, quotes)
+    const isQuotePoll = req.method === 'GET' && req.path.includes('/v1/quotes');
+    if (req.path.endsWith('/auth/session') || isQuotePoll) {
       return next();
     }
 
@@ -71,11 +72,11 @@ export function rateLimit(options: RateLimitOptions) {
         pipeline.pexpire(key, windowMs);
       }
       await pipeline.exec();
-      
+
       // Add rate limit headers
       res.setHeader('X-RateLimit-Limit', max);
       res.setHeader('X-RateLimit-Remaining', Math.max(0, max - count - 1));
-      
+
       next();
     } catch (err: any) {
       console.error('[rate-limit] error:', err.message);
@@ -96,7 +97,7 @@ export const authLimiter = rateLimit({
 
 export const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 360,
+  max: 360, // 360 requests per minute
   keyPrefix: 'api-limit',
 });
 

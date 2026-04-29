@@ -208,10 +208,12 @@ async function runChainRailsBridge(
     metadata: { orderId: ref },
   });
 
+  const totalRequired = Number(intent.total_amount_in_asset_token) / (10 ** intent.asset_token_decimals);
+  
   return {
-    externalId: String(intent.id),
-    amountIn,
-    amountOut: amountIn, // bridge fees accounted separately
+    externalId:     String(intent.id),
+    amountIn:       totalRequired,
+    amountOut:      amountIn,
     depositAddress: intent.intent_address,
     depositMemo: null,
     expiresAt: intent.expires_at,
@@ -273,22 +275,71 @@ async function runNearIntentsSwap(
   }
 }
 
+function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): ExecuteResult {
+  const first = steps[0];
+  const last = steps[steps.length - 1];
+
+  const from = parseAsset(first.fromAsset);
+  const nextAction: FirstStepAction = from.kind === 'crypto'
+    ? {
+        screen:         'collect_crypto',
+        depositAddress: first.depositAddress ?? undefined,
+        depositMemo:    first.depositMemo ?? undefined,
+        amount:         first.amountIn ?? input.sourceAmount,
+        token:          from.token,
+        chain:          from.chain,
+        expiresAt:      undefined,
+      }
+    : {
+        screen:      'collect_fiat',
+        bankDetails: {
+            institution:       '', // Minimal reconstruction
+            accountIdentifier: '',
+            accountName:       '',
+            amountToTransfer:  String(first.amountIn ?? first.amountOut ?? 0),
+            currency:          from.currency,
+        },
+        expiresAt:   undefined,
+      };
+
+  const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
+  const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS    / 10000);
+  const bridgeFeeUsd = steps.reduce((s, e) => {
+    return s + ((e.provider === 'chainrails' || e.provider === 'nearintents') ? (e.feeUsd ?? 0) : 0);
+  }, 0);
+
+  return {
+    firstStep:  { sequence: 0, provider: first.provider, fromAsset: first.fromAsset, toAsset: first.toAsset },
+    nextAction,
+    destAmount: last.amountOut ?? 0,
+    steps: steps.map(e => ({
+      sequence:   e.sequence,
+      externalId: e.externalId,
+      amountIn:   e.amountIn ?? 0,
+      amountOut:  e.amountOut ?? 0,
+    })),
+    feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd },
+  };
+}
+
 // ── Orchestrator ────────────────────────────────────────────────────────────
 
 export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult> {
   const { plan, orderId } = input;
 
-  // 1. Idempotency Check: If we already have recorded steps for this order,
-  //    reconstruct the ExecuteResult from them instead of calling providers again.
+  // 1. Idempotency Check
   const existingSteps = await prisma.routeStep.findMany({
     where: { orderId },
     orderBy: { sequence: 'asc' }
   });
 
   if (existingSteps.length > 0) {
-    const first = existingSteps[0];
-    const last = existingSteps[existingSteps.length - 1];
+    // If steps already exist AND have externalId, we are done.
+    // If they are "pending", it means a race is happening.
+    return reconstructResultFromSteps(input, existingSteps);
+  }
 
+<<<<<<< HEAD
     // Reconstruct nextAction from stored data
     const from = parseAsset(first.fromAsset);
     const nextAction: FirstStepAction = {
@@ -325,9 +376,27 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         externalId: e.externalId,
         amountIn: e.amountIn ?? 0,
         amountOut: e.amountOut ?? 0,
+=======
+  // 2. Pre-create steps to lock the order and prevent race conditions.
+  try {
+    await prisma.routeStep.createMany({
+      data: plan.steps.map((s, i) => ({
+        orderId: orderId,
+        sequence: i,
+        provider: s.provider,
+        fromAsset: s.fromAsset,
+        toAsset: s.toAsset,
+        status: 'pending',
+>>>>>>> 64484883e0a894ac3cc964af4ca2684c38b17df5
       })),
-      feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd },
-    };
+    });
+  } catch (err: any) {
+    // Unique constraint violation means another request just created them.
+    const steps = await prisma.routeStep.findMany({
+      where: { orderId },
+      orderBy: { sequence: 'asc' }
+    });
+    return reconstructResultFromSteps(input, steps);
   }
 
   const last = plan.steps.length - 1;
@@ -337,12 +406,15 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   let downstreamRecipient: string | null = null;
   let exactTargetUsdc: number | null = null;
 
+  console.log(`[executor] executing order ${orderId}: sourceAmount=${input.sourceAmount}, usdEquivalent=${input.usdEquivalent}`);
+
   for (let i = last; i >= 0; i--) {
     const step = plan.steps[i];
     const amountIn = i === 0 ? input.sourceAmount : input.usdEquivalent;
     const stepRef = `${input.reference}-${i}`;
     let exec: StepExecution;
 
+<<<<<<< HEAD
     if (step.provider === 'paystack') {
       // Guard: merchant must have a SYNCED subaccount so funds route to their bank
       const merchant = await prisma.merchant.findUniqueOrThrow({
@@ -352,6 +424,28 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         throw new Error(
           `Merchant ${input.merchantId} Paystack subaccount not synced. Status: ${merchant.paystackSubaccountStatus}`
         );
+=======
+    console.log(`[executor] step ${i}: provider=${step.provider}, amountIn=${amountIn}`);
+
+    if (step.provider === 'paycrest') {
+      const from = parseAsset(step.fromAsset);
+      if (from.kind === 'crypto') {
+        if (!input.destBank) throw new Error('paycrest offramp requires destBank');
+        if (!WEAVE_EVM_REFUND_ADDRESS) throw new Error('paycrest offramp requires WEAVE_EVM_REFUND_ADDRESS');
+        
+        let paycrestAmountIn = amountIn;
+        if (input.destAmountFiat && input.appFeeBps) {
+          paycrestAmountIn = input.usdEquivalent * (1 - input.appFeeBps / 10000);
+          exactTargetUsdc = paycrestAmountIn;
+        }
+        
+        exec = await runPaycrestOfframp(step, paycrestAmountIn, stepRef, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
+      } else {
+        if (!input.refundAccount) throw new Error('paycrest onramp requires refundAccount');
+        const recipient = downstreamRecipient || input.destWallet;
+        if (!recipient)           throw new Error('paycrest onramp requires destWallet or downstreamRecipient');
+        exec = await runPaycrestOnramp(step, amountIn, stepRef, input.refundAccount, recipient);
+>>>>>>> 64484883e0a894ac3cc964af4ca2684c38b17df5
       }
 
       // Gross-up: payer pays net + Paystack fee so the merchant receives exactly amountIn
@@ -442,6 +536,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     if (exec.depositAddress) downstreamRecipient = exec.depositAddress;
   }
 
+<<<<<<< HEAD
   // Persist RouteStep rows (after all providers succeeded, so we don't leave
   // half-created orders pointing at nothing).
   await prisma.$transaction(
@@ -521,6 +616,25 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     })),
     feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd: totalBridgeFee },
   };
+=======
+  // 4. Persistence Update: Populate the pre-created steps with results
+  const updatedSteps = await Promise.all(executions.map(async (e, i) => {
+    return prisma.routeStep.update({
+      where: { orderId_sequence: { orderId, sequence: i } },
+      data: {
+        externalId:     e.externalId,
+        amountIn:       e.amountIn,
+        amountOut:      e.amountOut,
+        depositAddress: e.depositAddress,
+        depositMemo:    e.depositMemo,
+        status:         i === 0 ? 'awaiting_deposit' : 'pending',
+        feeUsd:         e.feeUsd,
+      }
+    });
+  }));
+
+  return reconstructResultFromSteps(input, updatedSteps);
+>>>>>>> 64484883e0a894ac3cc964af4ca2684c38b17df5
 }
 
 // ── Webhook-driven step advance ─────────────────────────────────────────────
@@ -569,6 +683,26 @@ export async function markStepDone(params: {
   }
 
   return { orderId: step.orderId, stepId: step.id, orderStatus: nextOrderStatus };
+}
+
+export async function markStepProgress(params: { provider: string; externalId: string }) {
+  const step = await prisma.routeStep.findFirst({
+    where: { provider: params.provider, externalId: params.externalId },
+  });
+  if (!step) return null;
+
+  await prisma.$transaction([
+    prisma.routeStep.update({
+      where: { id: step.id },
+      data:  { status: 'in_flight' },
+    }),
+    prisma.order.update({
+      where: { id: step.orderId },
+      data:  { status: 'processing' },
+    }),
+  ]);
+
+  return { orderId: step.orderId, stepId: step.id };
 }
 
 export async function markStepFailed(params: { provider: string; externalId: string; reason?: string; isRefund?: boolean }) {
@@ -643,6 +777,7 @@ export async function syncOrder(orderId: string) {
         } else if (isFailed || isRefund) {
           await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund });
         }
+<<<<<<< HEAD
       } else if (step.provider === 'paystack' && step.externalId) {
         console.log(`[sync] checking paystack step ${step.id} for ref ${step.externalId}`);
         const ps = await paystack.verifyTransaction(step.externalId);
@@ -652,6 +787,17 @@ export async function syncOrder(orderId: string) {
           await markStepDone({ provider: 'paystack', externalId: step.externalId, amountOut: ps.amount / 100 });
         } else if (['failed', 'abandoned'].includes(ps.status)) {
           await markStepFailed({ provider: 'paystack', externalId: step.externalId });
+=======
+      } else if (step.provider === 'chainrails' && step.externalId) {
+        console.log(`[sync] checking chainrails step ${step.id} for intent ${step.externalId}`);
+        const intent = await chainRails.getIntent(step.externalId);
+        console.log(`[sync] chainrails status for ${step.id}: ${intent.intent_status}`);
+        
+        if (intent.intent_status === 'COMPLETED') {
+          await markStepDone({ provider: 'chainrails', externalId: step.externalId });
+        } else if (intent.intent_status === 'FAILED') {
+          await markStepFailed({ provider: 'chainrails', externalId: step.externalId });
+>>>>>>> 64484883e0a894ac3cc964af4ca2684c38b17df5
         }
       }
     } catch (err: any) {

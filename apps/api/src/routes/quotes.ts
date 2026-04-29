@@ -59,27 +59,52 @@ router.get('/', requireApiKey, async (req, res) => {
     // spread (absorbed by SLIPPAGE_BUFFER_BPS).
     const feeRate        = (SENDER_FEE_BPS + APP_FEE_BPS) / 10000;
     const slippageBuffer = SLIPPAGE_BUFFER_BPS / 10000;
+    // 1. Get prices for all assets involved
+    let srcPrice = 1;
+    if (src.kind === 'crypto') {
+      const sym = src.token.toUpperCase();
+      if (sym === 'USDC' || sym === 'USDT') {
+        srcPrice = 1;
+      } else {
+        try {
+          // Try Coinbase public API first for common assets
+          const cb = await fetch(`https://api.coinbase.com/v2/prices/${sym}-USD/spot`).then(r => r.json());
+          if (cb?.data?.amount) {
+            srcPrice = Number(cb.data.amount);
+          } else {
+            // Fallback to Near Intents
+            const token = await nearIntents.resolveToken(from);
+            if (token.price > 0) srcPrice = token.price;
+          }
+        } catch (err) {
+          try {
+            const token = await nearIntents.resolveToken(from);
+            if (token.price > 0) srcPrice = token.price;
+          } catch {}
+        }
+      }
+    }
+
     const usdEquivalent = (() => {
       if (src.kind === 'crypto' && dst.kind === 'fiat') {
-        if (amountIn === 'source') return amount;
+        if (amountIn === 'source') return amount * srcPrice;
         
         // Dest-anchored: `amount` is the exact fiat the merchant MUST receive.
         const targetFiat = new Decimal(amount);
         const sr = new Decimal(sellRate);
-        const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
         
+        // Match the linear subtraction in line 115: netUsd = usdEquivalent * (1 - fees)
+        // So usdEquivalent = netUsd / (1 - fees)
+        const totalFeeRate = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS + SLIPPAGE_BUFFER_BPS).div(10000);
         const netUsdc = targetFiat.div(sr);
-        const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
         
-        // Weave collects the old slippage buffer as guaranteed margin
-        const appFeePct = new Decimal(APP_FEE_BPS).plus(SLIPPAGE_BUFFER_BPS).div(10000);
-        return targetUsdc.div(new Decimal(1).minus(appFeePct)).toNumber();
+        return netUsdc.div(new Decimal(1).minus(totalFeeRate)).toNumber();
       }
       if (src.kind === 'fiat' && dst.kind === 'crypto') {
         // Onramp: source is fiat; dest is USDC-equivalent.
         return amountIn === 'source' ? new Decimal(amount).div(buyRate).toNumber() : amount;
       }
-      return amount;
+      return amount * srcPrice;
     })();
 
     const plan = planRoute({ sourceAsset: from, destAsset: to, amount: usdEquivalent });
@@ -124,11 +149,8 @@ router.get('/', requireApiKey, async (req, res) => {
     // it's a meaningful conversion. Falls back to usdEquivalent when the
     // source isn't on NEAR Intents (e.g. direct USDC-on-Base same-asset).
     let sourceAmount = usdEquivalent;
-    if (src.kind === 'crypto') {
-      try {
-        const token = await nearIntents.resolveToken(from); // `from` is the raw string key like "crypto:BASE:USDC"
-        if (token.price > 0) sourceAmount = usdEquivalent / token.price;
-      } catch {}
+    if (src.kind === 'crypto' && srcPrice > 0) {
+      sourceAmount = usdEquivalent / srcPrice;
     }
 
     res.json({

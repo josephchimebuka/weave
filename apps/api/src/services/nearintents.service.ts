@@ -9,6 +9,7 @@
 // The poller in queues/nearintents_poller.ts drives step transitions.
 
 import { parseAsset } from '../lib/assets';
+import { CHAIN_ENUM, TOKENS } from '../lib/registry';
 
 // ── Chain mapping ───────────────────────────────────────────────────────────
 // Our canonical chain name (uppercase) → NEAR Intents `blockchain` enum.
@@ -211,9 +212,17 @@ export class NearIntentsService {
     if (a.kind !== 'crypto') throw new Error(`NEAR Intents: fiat asset ${key} not supported`);
     const blockchain = chainToNear(a.chain);
     const symbol     = a.token.toUpperCase();
-
     const tokens = await this.listTokens();
-    const hit = tokens.find(t => t.blockchain === blockchain && t.symbol.toUpperCase() === symbol);
+    const chainEnum = CHAIN_ENUM[a.chain.toUpperCase()];
+    const ourToken = chainEnum ? TOKENS[chainEnum]?.[symbol] : null;
+
+    const hit = tokens.find(t => {
+      const sameChain = t.blockchain === blockchain;
+      const sameSymbol = t.symbol.toUpperCase() === symbol || t.symbol.toUpperCase() === `${symbol}0`;
+      const sameAddress = ourToken && t.contractAddress?.toLowerCase() === ourToken.address.toLowerCase();
+      return sameChain && (sameSymbol || sameAddress);
+    });
+
     if (!hit) throw new Error(`NEAR Intents: no token for ${blockchain}/${symbol}`);
     return hit;
   }

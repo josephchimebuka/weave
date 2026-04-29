@@ -15,10 +15,39 @@ import {
 } from '@weave/shared';
 import type { CSSProperties, ReactNode } from 'react';
 import { QRCodeSVG as QRCodeSVGRaw } from 'qrcode.react';
+import {
+  WagmiProvider,
+  useAccount, useConnect, useDisconnect, useSwitchChain,
+  useWriteContract, useSendTransaction, useBalance, useReadContract,
+} from 'wagmi';
+import { waitForTransactionReceipt } from '@wagmi/core';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { formatEther, formatUnits, parseEther, parseUnits } from 'viem';
+
+const MINIMAL_ERC20_ABI = [
+  {
+    type: 'function',
+    name: 'transfer',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'recipient', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bool' }],
+  },
+] as const;
+import {
+  wagmiConfig,
+  SUPPORTED_CHAIN_IDS, CHAIN_ID_TO_API_NAME, CHAIN_ID_TO_DISPLAY, CHAIN_TINT,
+  USDC_BY_CHAIN_ID, USDT_BY_CHAIN_ID,
+} from '../lib/wagmi';
 // `qrcode.react`'s peer pulls @types/react@19 into the pnpm store, which clashes
 // with the widget's @types/react@18 (bigint in ReactNode). Cast to sidestep the
 // JSX-element type mismatch without adding a workspace-wide overrides entry.
 const QRCodeSVG = QRCodeSVGRaw as unknown as (props: { value: string; size?: number; level?: string; includeMargin?: boolean }) => ReactNode;
+// Same @types/react@18 vs wagmi's @types/react@19 mismatch — cast to sidestep it.
+const WagmiProviderC = WagmiProvider as unknown as (props: { config: typeof wagmiConfig; children: ReactNode }) => ReactNode;
+const QueryClientProviderC = QueryClientProvider as unknown as (props: { client: QueryClient; children: ReactNode }) => ReactNode;
 import {
   createOrder,
   fetchOrder,
@@ -439,7 +468,7 @@ const secondaryBtn: CSSProperties = {
 
 // ── Screens ──────────────────────────────────────────────────────────────────
 
-type PathPick = 'fiat' | 'crypto' | 'deposit';
+type PathPick = 'fiat' | 'crypto' | 'deposit' | 'externalDeposit';
 
 function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
   onPick: (p: PathPick) => void;
@@ -513,17 +542,7 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur }: {
           </button>
         ) : (
           <Stack gap={6} style={{ padding: '2px 0' }}>
-            <Row gap={6}>
-              <button onClick={() => onPick('deposit')} style={{ ...methodCardSm, flex: 1 }}>
-                <IconDot bg="#3B99FC" size={20}>W</IconDot>
-                <span style={{ fontSize: 12.5, fontWeight: 500 }}>WalletConnect</span>
-              </button>
-              <button onClick={() => onPick('deposit')} style={{ ...methodCardSm, flex: 1 }}>
-                <IconDot bg="#0052FF" size={20}>B</IconDot>
-                <span style={{ fontSize: 12.5, fontWeight: 500 }}>Coinbase</span>
-              </button>
-            </Row>
-            <button onClick={() => onPick('deposit')} style={methodCardSm}>
+            <button onClick={() => onPick('externalDeposit')} style={methodCardSm}>
               <div style={{ width: 20, height: 20, borderRadius: 5, background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="14" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="3" y="14" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /></svg>
               </div>
@@ -637,14 +656,28 @@ function ScreenQuote({
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
 }) {
+  if (quoteLoading && !quote) {
+    return (
+      <Stack style={{ padding: '60px 0', minHeight: 320, alignItems: 'center', justifyContent: 'center' }}>
+        <WeavingLoader />
+        <div style={{ marginTop: 16, fontSize: 13, color: WEAVE.mute }}>Calculating best route…</div>
+      </Stack>
+    );
+  }
+
   const c = currencies[merchant.currency] || CURRENCIES[merchant.currency];
-  const fallbackNeeded = merchant.amount / (c?.rate || 1);
+  const rate = c?.rate || 1;
+  const fallbackNeeded = merchant.amount / rate;
   const needed = quote ? quote.breakdown.inputAmount : fallbackNeeded;
-  const cryptoAmount = needed / (balance.usd / balance.amount);
+
+  // Calculate cryptoAmount safely
+  const tokenPriceInUsd = balance.amount > 0 ? (balance.usd / balance.amount) : (balance.token === 'ETH' ? 3400 : 1);
+  const cryptoAmount = needed / (tokenPriceInUsd || 1);
+
   const bridgeFee = quote ? quote.breakdown.bridgeFeeUsd : (balance.chain === 'Base' && balance.token === 'USDC' ? 0 : 1.80);
   const weaveFee = quote ? quote.breakdown.senderFeeUsd + quote.breakdown.appFeeUsd : needed * 0.0075;
   const totalFees = bridgeFee + weaveFee;
-  const sellRate = quote ? quote.breakdown.sellRate : (c?.rate || 1515);
+  const sellRate = quote ? quote.breakdown.sellRate : rate;
   const fiatOut = quote ? quote.estimatedFiat : merchant.amount;
 
   return (
@@ -870,7 +903,7 @@ function ScreenProcessing({
     { label: 'Confirming your transfer', sub: `Matching the ${fiatDisplay} from your bank`, dur: 1600 },
     { label: 'Completing payment', sub: `Sending to ${merchant.name}`, dur: 2400 },
   ] : [
-    { label: 'Deposit detected', sub: 'Processing your transaction on-chain', dur: 1400 },
+    { label: 'Confirming transaction', sub: 'Processing your transaction on-chain', dur: 1400 },
     { label: 'Confirming your payment', sub: `Settling ${c?.name || merchant.currency} to ${merchant.name}`, dur: 2600 },
   ];
 
@@ -1954,6 +1987,271 @@ function ScreenVirtualAccount({
   );
 }
 
+// ── Wallet connect screens ───────────────────────────────────────────────────
+
+function ScreenWalletConnect({
+  onConnected,
+  onExternalFlow,
+}: {
+  onConnected: () => void;
+  onExternalFlow: () => void;
+}) {
+  const { connect, connectors, isPending } = useConnect();
+  const { isConnected } = useAccount();
+
+  useEffect(() => {
+    if (isConnected) onConnected();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected]);
+
+  return (
+    <Stack gap={16} style={{ padding: '22px 20px 6px' }}>
+      <Stack gap={4}>
+        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>Connect your wallet</div>
+        <div style={{ fontSize: 12.5, color: WEAVE.mute, lineHeight: 1.5 }}>
+          Pay directly from your crypto holdings. We'll handle the conversion.
+        </div>
+      </Stack>
+      <Stack gap={8}>
+        {connectors.map(connector => {
+          const n = connector.name.toLowerCase();
+          const subtitle = n.includes('metamask') ? 'Browser extension or MetaMask mobile'
+            : n.includes('coinbase') ? 'Coinbase Wallet app or extension'
+              : n.includes('phantom') ? 'Phantom wallet extension'
+                : n.includes('brave') ? 'Brave browser built-in wallet'
+                  : 'Connect with this wallet';
+          return (
+            <button
+              key={connector.uid}
+              onClick={() => connect({ connector })}
+              disabled={isPending}
+              style={{ ...methodCard, opacity: isPending ? 0.6 : 1 }}
+            >
+              <div style={{
+                width: 40, height: 40, borderRadius: 10,
+                background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0, overflow: 'hidden',
+              }}>
+                {(connector as any).icon ? (
+                  <img
+                    src={(connector as any).icon}
+                    alt={connector.name}
+                    style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
+                  />
+                ) : (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                    <rect x="2" y="6" width="20" height="14" rx="3" stroke={WEAVE.ink2} strokeWidth="1.8" />
+                    <path d="M2 10H22" stroke={WEAVE.ink2} strokeWidth="1.8" />
+                    <circle cx="17" cy="15" r="1.5" fill={WEAVE.ink2} />
+                  </svg>
+                )}
+              </div>
+              <Stack gap={2} style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{connector.name}</div>
+                <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{subtitle}</div>
+              </Stack>
+              {isPending
+                ? <div style={{ width: 12, height: 12, borderRadius: 6, background: WEAVE.accent, opacity: 0.5, animation: 'wpulse 1s infinite' }} />
+                : <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              }
+            </button>
+          );
+        })}
+      </Stack>
+      <button
+        onClick={onExternalFlow}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, color: WEAVE.mute, padding: '4px 0', textAlign: 'center' }}
+      >
+        Don't have a browser wallet? Send from any app →
+      </button>
+    </Stack>
+  );
+}
+
+function ScreenWalletAsset({
+  onSelectToken,
+  onExternalFlow,
+  merchant,
+  currencies,
+  fmtCur,
+  ethUsdPrice,
+  loadingEthPrice,
+}: {
+  onSelectToken: (token: string, bal: Balance) => void;
+  onExternalFlow: () => void;
+  merchant: Merchant;
+  currencies: Record<string, Currency>;
+  fmtCur: (n: number, cur: string) => string;
+  ethUsdPrice: number;
+  loadingEthPrice: boolean;
+}) {
+  const { address, chainId } = useAccount();
+  const { switchChain, isPending: switching } = useSwitchChain();
+
+  const usdcAddr = chainId ? USDC_BY_CHAIN_ID[chainId] : undefined;
+  const usdtAddr = chainId ? USDT_BY_CHAIN_ID[chainId] : undefined;
+  const supported = chainId ? SUPPORTED_CHAIN_IDS.has(chainId) : false;
+  const chainName = chainId ? (CHAIN_ID_TO_DISPLAY[chainId] ?? 'Unknown') : 'Unknown';
+  const chainTint = chainId ? (CHAIN_TINT[chainId] ?? WEAVE.accent) : WEAVE.accent;
+  const truncated = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '';
+
+  const { data: ethBal, isLoading: ethLoading } = useBalance({ address, chainId, query: { enabled: !!address } });
+  const { data: usdcBal, isLoading: usdcLoading } = useBalance({
+    address,
+    token: usdcAddr,
+    chainId,
+    query: { enabled: !!address && !!usdcAddr },
+  });
+  const { data: usdtBal, isLoading: usdtLoading } = useBalance({
+    address,
+    token: usdtAddr,
+    chainId,
+    query: { enabled: !!address && !!usdtAddr },
+  });
+
+  const ethAmount = ethBal ? Number(formatEther(ethBal.value)) : 0;
+  const usdcAmount = usdcBal ? Number(formatUnits(usdcBal.value, usdcBal.decimals)) : 0;
+  const usdtAmount = usdtBal ? Number(formatUnits(usdtBal.value, usdtBal.decimals)) : 0;
+
+  const isLoading = loadingEthPrice || ethLoading || usdcLoading || usdtLoading;
+
+  if (isLoading) {
+    return (
+      <Stack style={{ padding: '60px 0', minHeight: 280, alignItems: 'center', justifyContent: 'center' }}>
+        <WeavingLoader />
+        <div style={{ marginTop: 16, fontSize: 13, color: WEAVE.mute }}>Fetching market rates…</div>
+      </Stack>
+    );
+  }
+
+  const ethUsdApprox = ethAmount * ethUsdPrice;
+
+  const minRequired = merchant.amount / (currencies[merchant.currency]?.rate || 1);
+
+  const TOKEN_LOGO: Record<string, string> = {
+    ETH: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
+    USDC: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
+    USDT: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png',
+  };
+
+  const tokens: Array<Balance & { tokenKey: string }> = [
+    { tokenKey: 'USDC', token: 'USDC', chain: chainName, amount: usdcAmount, usd: usdcAmount, icon: '$', chainTint, logo: TOKEN_LOGO.USDC },
+    ...(usdtAddr ? [{ tokenKey: 'USDT', token: 'USDT', chain: chainName, amount: usdtAmount, usd: usdtAmount, icon: '$', chainTint, logo: TOKEN_LOGO.USDT }] : []),
+    { tokenKey: 'ETH', token: 'ETH', chain: chainName, amount: ethAmount, usd: ethUsdApprox, icon: 'Ξ', chainTint, logo: TOKEN_LOGO.ETH },
+  ];
+
+  if (!supported) {
+    return (
+      <Stack gap={14} style={{ padding: '22px 20px 6px' }}>
+        <Stack gap={4}>
+          <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>Switch Network</div>
+          <div style={{ fontSize: 12.5, color: WEAVE.mute, lineHeight: 1.5 }}>
+            Your wallet is on an unsupported chain. Switch to one of these to continue.
+          </div>
+        </Stack>
+        <Stack gap={6}>
+          {([8453, 10, 42161, 1, 137] as const).map(id => (
+            <button
+              key={id}
+              onClick={() => switchChain({ chainId: id })}
+              disabled={switching}
+              style={{ ...methodCard, opacity: switching ? 0.6 : 1 }}
+            >
+              <div style={{
+                width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+                background: CHAIN_TINT[id], color: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 700, fontSize: 13,
+              }}>
+                {CHAIN_ID_TO_DISPLAY[id][0]}
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>{CHAIN_ID_TO_DISPLAY[id]}</div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 'auto' }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+          ))}
+        </Stack>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack gap={14} style={{ padding: '18px 20px 6px' }}>
+      <Row justify="space-between" align="center">
+        <Stack gap={1}>
+          <div style={{ fontSize: 10.5, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>Connected wallet</div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: WEAVE.ink, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{truncated}</div>
+        </Stack>
+        <Pill tone="accent">{chainName}</Pill>
+      </Row>
+
+      <div style={{ fontSize: 12.5, color: WEAVE.mute, lineHeight: 1.5 }}>
+        Select a token to pay with. We'll bridge it to {currencies[merchant.currency]?.name ?? merchant.currency} automatically.
+      </div>
+
+      <Stack gap={6}>
+        {tokens.map(t => {
+          const enough = t.usd >= minRequired;
+          return (
+            <button
+              key={t.tokenKey}
+              onClick={() => enough && onSelectToken(t.tokenKey, t)}
+              disabled={!enough}
+              style={{ ...methodCard, opacity: enough ? 1 : 0.42, cursor: enough ? 'pointer' : 'not-allowed' }}
+            >
+              <div style={{
+                width: 36, height: 36, borderRadius: 9, flexShrink: 0,
+                background: t.chainTint + '22', border: `1px solid ${t.chainTint}44`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 700, fontSize: 15, color: t.chainTint, overflow: 'hidden',
+              }}>
+                {t.logo
+                  ? <img src={t.logo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : t.icon}
+              </div>
+              <Stack gap={2} style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{fmtCrypto(t.amount, t.tokenKey === 'ETH' ? 4 : 2)} {t.tokenKey}</div>
+                <div style={{ fontSize: 11.5, color: WEAVE.mute }}>≈ ${t.usd.toFixed(2)} on {chainName}</div>
+              </Stack>
+              {!enough
+                ? <Pill tone="warn">Insufficient</Pill>
+                : <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              }
+            </button>
+          );
+        })}
+      </Stack>
+
+      <button
+        onClick={onExternalFlow}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, color: WEAVE.mute, textAlign: 'center', padding: '2px 0' }}
+      >
+        Pay from another wallet or exchange →
+      </button>
+    </Stack>
+  );
+}
+
+function ScreenWalletSign({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Stack gap={20} style={{ padding: '40px 20px 20px', minHeight: 280, alignItems: 'center', justifyContent: 'center' }}>
+      <WeavingLoader />
+      <Stack gap={6} style={{ alignItems: 'center' }}>
+        <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: -0.3 }}>Confirm in your wallet</div>
+        <div style={{ fontSize: 12.5, color: WEAVE.mute, textAlign: 'center', maxWidth: 260, lineHeight: 1.6 }}>
+          Check your wallet extension or app and approve the transaction to send funds.
+        </div>
+        <button
+          onClick={onRetry}
+          style={{ ...secondaryBtn, marginTop: 12, fontSize: 13, padding: '8px 16px' }}
+        >
+          Not seeing the pop-up? Try again
+        </button>
+      </Stack>
+    </Stack>
+  );
+}
+
 // ── Shell ────────────────────────────────────────────────────────────────────
 
 export interface WeaveCheckoutProps {
@@ -1983,7 +2281,9 @@ const CHAIN_TO_API: Record<string, string> = {
   Polygon: 'POLYGON',
 };
 
-export function WeaveCheckout({
+const _queryClient = new QueryClient();
+
+function WeaveCheckoutInner({
   merchant = DEFAULT_MERCHANT,
   apiKey: propApiKey,
   userAddress: propUserAddress,
@@ -2007,6 +2307,16 @@ export function WeaveCheckout({
     propUserAddress ??
     ((import.meta as any).env?.VITE_WEAVE_DEMO_USER_ADDRESS as string | undefined) ??
     '0x0000000000000000000000000000000000000000';
+
+  // Wagmi wallet hooks
+  const { address: wagmiAddress, chainId: wagmiChainId, isConnected: wagmiConnected } = useAccount();
+  const { disconnect: wagmiDisconnect } = useDisconnect();
+  const disconnect = () => {
+    wagmiDisconnect();
+    localStorage.clear();
+  };
+  const { writeContractAsync } = useWriteContract();
+  const { sendTransactionAsync } = useSendTransaction();
 
   const [screen, setScreen] = useState('connect');
   const [direction, setDirection] = useState<'offramp' | 'onramp'>('offramp');
@@ -2038,6 +2348,10 @@ export function WeaveCheckout({
   });
   const depositReq = useRef(0);
   const quoteReq = useRef(0);
+  const [walletToken, setWalletToken] = useState<string>('USDC');
+  const [walletBalanceEntry, setWalletBalanceEntry] = useState<Balance | null>(null);
+  const [ethUsdPrice, setEthUsdPrice] = useState<number>(3400);
+  const [loadingEthPrice, setLoadingEthPrice] = useState(true);
 
   // ── Persistence & Resumption ──────────────────────────────────────────────
 
@@ -2122,6 +2436,29 @@ export function WeaveCheckout({
     }
   }, [apiKey]); // Run once on mount
 
+  useEffect(() => {
+    if (!apiKey) return;
+    setLoadingEthPrice(true);
+    fetchQuote(apiKey, {
+      from: 'crypto:ETHEREUM:ETH',
+      to: fiatKey(merchant.currency),
+      amount: 1,
+      amountIn: 'source'
+    }).then(q => {
+      // Find the fiat rate to convert back to USD
+      const fiatAsset = supportedAssets.fiat.find(f => f.key === fiatKey(merchant.currency));
+      const rate = fiatAsset?.rate || 1515;
+      const price = q.estimatedDest / rate;
+      if (!isNaN(price) && price > 0) {
+        setEthUsdPrice(price);
+      }
+      setLoadingEthPrice(false);
+    }).catch(err => {
+      console.warn('[WeaveCheckoutInner] Live ETH price fetch failed:', err);
+      setLoadingEthPrice(false);
+    });
+  }, [apiKey, merchant.currency, supportedAssets.fiat]);
+
   // 2. Persistence logic: Save state whenever orderId or screen changes
   useEffect(() => {
     if (orderId && !['success', 'error'].includes(screen)) {
@@ -2175,6 +2512,7 @@ export function WeaveCheckout({
     setDepositError(null);
     setBankDetails(null);
     setQuote(null);
+    setWalletBalanceEntry(null);
     if (method === 'fiat') {
       setDirection('onramp');
       if (merchant.currency === 'NGN') {
@@ -2186,6 +2524,11 @@ export function WeaveCheckout({
       setDirection('offramp');
       setScreen('wallet');
     } else if (method === 'deposit') {
+      // "Pay with crypto wallet" — go to wallet connect flow (ChainRails self flow)
+      setDirection('offramp');
+      setScreen(wagmiConnected ? 'walletAsset' : 'walletConnect');
+    } else if (method === 'externalDeposit') {
+      // "Pay from mobile / hardware / exchange" — NEAR Intents deposit address flow
       setDirection('offramp');
       setScreen('deposit');
     }
@@ -2281,6 +2624,45 @@ export function WeaveCheckout({
     }
   };
 
+  const advanceToWalletQuote = async (balEntry: Balance, token: string) => {
+    setWalletBalanceEntry(balEntry);
+    setWalletToken(token);
+    setScreen('quote');
+    if (!wagmiChainId) return;
+    const apiChain = CHAIN_ID_TO_API_NAME[wagmiChainId];
+    if (!apiChain) return;
+    const myReq = ++quoteReq.current;
+    setQuoteLoading(true);
+    setQuote(null);
+    try {
+      const q = await fetchQuote(apiKey, {
+        from: cryptoKey(apiChain, token),
+        to: fiatKey(merchant.currency),
+        amount: merchant.amount,
+        amountIn: 'dest',
+      });
+      if (quoteReq.current !== myReq) return;
+      setQuote({
+        estimatedFiat: q.estimatedDest,
+        netUsdc: q.breakdown.netUsd,
+        fiatCurrency: merchant.currency,
+        breakdown: {
+          inputAmount: q.breakdown.usdEquivalent,
+          inputToken: token,
+          fastPath: q.route.steps.length === 1,
+          bridgeFeeUsd: q.breakdown.bridgeFeeUsd,
+          senderFeeUsd: q.breakdown.senderFeeUsd,
+          appFeeUsd: q.breakdown.appFeeUsd,
+          sellRate: q.breakdown.sellRate ?? 0,
+        },
+      });
+    } catch {
+      // Keep fallback math
+    } finally {
+      if (quoteReq.current === myReq) setQuoteLoading(false);
+    }
+  };
+
   const advance = (next: string) => {
     if (next === 'success' && onSuccess && orderId) {
       onSuccess({ orderId, status: 'completed' });
@@ -2330,34 +2712,99 @@ export function WeaveCheckout({
   const submitRefundAccount = () => createFiatOrder(refundAccount);
 
   const confirmOfframp = async () => {
-    const bal = BALANCES[selectedBalance ?? 0];
+    if (submitting) return;
+    // Use real wallet balance entry if in the connect-wallet flow, else fall back to mock BALANCES
+    const bal = walletBalanceEntry ?? BALANCES[selectedBalance ?? 0];
+    const isWalletFlow = wagmiConnected && wagmiAddress && wagmiChainId && walletBalanceEntry;
+
     setSubmitting(true);
     setApiError(null);
     try {
-      const from = cryptoKey(CHAIN_TO_API[bal.chain] ?? bal.chain, bal.token);
-      const to = fiatKey(merchant.currency);
-      const q = await fetchQuote(apiKey, {
-        from, to, amount: merchant.amount, amountIn: 'dest',
-      });
-      const source: { inline: InlineWalletInstrument } = {
-        inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: userAddress },
-      };
-      const res = await createOrder(apiKey, {
-        source,
-        amount: merchant.amount,
-        amountIn: 'dest',
-        dest: merchant.destInstrument ? {
+      let activeOrderId = orderId;
+      let activeDepositAddr = depositAddress;
+      let activeSourceAmt = depositAmount;
+
+      if (!activeOrderId || !activeDepositAddr) {
+        const apiChain = isWalletFlow
+          ? (CHAIN_ID_TO_API_NAME[wagmiChainId!] ?? CHAIN_TO_API[bal.chain] ?? bal.chain)
+          : (CHAIN_TO_API[bal.chain] ?? bal.chain);
+        const token = isWalletFlow ? walletToken : bal.token;
+        const from = cryptoKey(apiChain, token);
+
+        const source: { inline: InlineWalletInstrument } = {
           inline: {
-            ...merchant.destInstrument,
-            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
-          }
-        } : undefined,
-      });
-      setOrderId(res.order.id);
-      setDepositAddress(res.nextAction.depositAddress ?? null);
+            kind: 'crypto_wallet',
+            assetKey: from,
+            walletAddress: isWalletFlow ? wagmiAddress! : userAddress,
+          },
+        };
+        const res = await createOrder(apiKey, {
+          source,
+          amount: merchant.amount,
+          amountIn: 'dest',
+          flow: isWalletFlow ? 'self' : undefined,
+          dest: merchant.destInstrument ? {
+            inline: {
+              ...merchant.destInstrument,
+              assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+            }
+          } : undefined,
+        });
+        activeOrderId = res.order.id;
+        activeDepositAddr = res.nextAction.depositAddress ?? null;
+        activeSourceAmt = res.order.sourceAmount;
+        
+        setOrderId(activeOrderId);
+        setDepositAddress(activeDepositAddr);
+        setDepositAmount(activeSourceAmt);
+        setDepositToken(res.nextAction.token ?? token);
+        setDepositChain(res.nextAction.chain ?? apiChain);
+      }
+
+      if (isWalletFlow && activeDepositAddr) {
+        // Self flow: prompt wallet to sign the transfer to the ChainRails intent address
+        setScreen('walletSign');
+        const token = walletToken;
+        const sourceAmt = activeSourceAmt!;
+        let hash: `0x${string}`;
+        if (token === 'ETH') {
+          hash = await sendTransactionAsync({
+            to: activeDepositAddr as any,
+            value: parseEther(sourceAmt.toString()) as any,
+            chainId: wagmiChainId as any,
+          } as any);
+        } else {
+          const tokenAddr = token === 'USDC'
+            ? USDC_BY_CHAIN_ID[wagmiChainId!]
+            : USDT_BY_CHAIN_ID[wagmiChainId!];
+          if (!tokenAddr) throw new Error(`${token} is not available on this chain`);
+          hash = await writeContractAsync({
+            address: tokenAddr as any,
+            abi: MINIMAL_ERC20_ABI as any,
+            functionName: 'transfer' as any,
+            args: [activeDepositAddr as any, parseUnits(sourceAmt.toString(), 6) as any],
+            chainId: wagmiChainId as any,
+          } as any);
+        }
+        // Wait for on-chain confirmation before moving to processing screen.
+        // We timeout after 60s to avoid hanging if the txn is stuck in mempool.
+        try {
+          await waitForTransactionReceipt(wagmiConfig as any, { hash, timeout: 60000 });
+        } catch (err: any) {
+          console.warn('[widget] transaction wait timed out or failed:', err.message);
+          // We continue to processing screen anyway; the backend will eventually see it
+          // OR the user will see it's still awaiting deposit.
+        }
+      } else {
+        setDepositAddress(activeDepositAddr);
+      }
+
       setScreen('processing');
     } catch (e: any) {
-      setApiError(e.message ?? 'Failed to create order');
+      const msg = e.message ?? '';
+      const rejected = msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied') || msg.toLowerCase().includes('cancelled');
+      setApiError(rejected ? 'Transaction was rejected. Please try again.' : (msg || 'Failed to complete payment'));
+      if (screen === 'walletSign') setScreen('quote');
       onError?.(e);
     } finally {
       setSubmitting(false);
@@ -2392,6 +2839,7 @@ export function WeaveCheckout({
     setDepositMemo(null);
     setDepositError(null);
     setQuote(null);
+    setWalletBalanceEntry(null);
     setScreen(target);
   };
 
@@ -2405,9 +2853,12 @@ export function WeaveCheckout({
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} />;
     } else {
+      if (screen === 'walletConnect') return <ScreenWalletConnect onConnected={() => setScreen('walletAsset')} onExternalFlow={() => { setDirection('offramp'); setScreen('deposit'); }} />;
+      if (screen === 'walletAsset') return <ScreenWalletAsset onSelectToken={(token, bal) => advanceToWalletQuote(bal, token)} onExternalFlow={() => setScreen('deposit')} merchant={merchant} currencies={currencies} fmtCur={fmtCur} ethUsdPrice={ethUsdPrice} loadingEthPrice={loadingEthPrice} />;
+      if (screen === 'walletSign') return <ScreenWalletSign onRetry={confirmOfframp} />;
       if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainIdx={preSelectedChainIdx} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'wallet') return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance} currencies={currencies} />;
-      if (screen === 'quote') return <ScreenQuote merchant={merchant} balance={balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'quote') return <ScreenQuote merchant={merchant} balance={walletBalanceEntry ?? balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')} />;
@@ -2416,12 +2867,14 @@ export function WeaveCheckout({
   })();
 
   const showBack =
-    (['wallet', 'quote', 'deposit'].includes(screen) && !isOnramp) ||
+    (['wallet', 'quote', 'deposit', 'walletConnect', 'walletAsset', 'walletSign'].includes(screen) && !isOnramp) ||
     (['refundAccount', 'vaccount'].includes(screen) && isOnramp);
   const backTarget =
-    screen === 'quote' ? 'wallet' :
+    screen === 'quote' ? (walletBalanceEntry ? 'walletAsset' : 'wallet') :
       screen === 'vaccount' ? 'refundAccount' :
-        'connect';
+        screen === 'walletAsset' ? 'connect' :
+          screen === 'walletSign' ? 'quote' :
+            'connect';
 
   return (
     <div
@@ -2442,12 +2895,25 @@ export function WeaveCheckout({
         merchantName={merchant.name}
         onClose={() => { setClosed(true); onClose?.(); }}
         showBack={showBack}
-        onBack={() => setScreen(backTarget)}
+        onBack={() => {
+          if (screen === 'walletAsset') disconnect();
+          setScreen(backTarget);
+        }}
       />
       <div key={screen} style={{ animation: 'wfade 0.25s ease' }}>
         {body}
       </div>
       <WidgetFooter />
     </div>
+  );
+}
+
+export function WeaveCheckout(props: WeaveCheckoutProps) {
+  return (
+    <WagmiProviderC config={wagmiConfig}>
+      <QueryClientProviderC client={_queryClient}>
+        <WeaveCheckoutInner {...props} />
+      </QueryClientProviderC>
+    </WagmiProviderC>
   );
 }

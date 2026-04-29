@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma';
 import { requireAuth } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
-import { executeOrder } from '../services/executor.service';
+import { executeOrder, syncOrder } from '../services/executor.service';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
@@ -161,11 +161,24 @@ router.post('/', requireAuth, async (req, res) => {
         }
       }
 
-      if (srcP.kind === 'crypto' && body.amountIn === 'dest' && !sourceAmount) {
-        const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
-        if (token.price > 0) sourceAmount = usdEquivalent / token.price;
+      if (srcP.kind === 'crypto' && body.amountIn === 'dest' && (!sourceAmount || sourceAmount === 0)) {
+        try {
+          const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
+          if (token.price > 0) {
+            sourceAmount = usdEquivalent / token.price;
+          } else if (sourceInstrument.assetKey.toUpperCase().includes('USD')) {
+            sourceAmount = usdEquivalent;
+          }
+        } catch (err: any) {
+          console.warn(`[orders] failed to resolve price for ${sourceInstrument.assetKey}, using fallback:`, err.message);
+          if (sourceInstrument.assetKey.toUpperCase().includes('USD')) {
+            sourceAmount = usdEquivalent;
+          }
+        }
       }
-    } catch { }
+    } catch (err: any) {
+      console.error(`[orders] calculation error:`, err.message);
+    }
 
     // 4. Create or Reuse the Order row (Idempotency)
     // If the merchant provided a reference, check for an existing order first.
@@ -253,6 +266,7 @@ router.post('/', requireAuth, async (req, res) => {
     const updated = await prisma.order.update({
       where: { id: order.id },
       data: {
+        sourceAmount: execResult.steps[0].amountIn, // Corrected amount including fees
         destAmount: execResult.destAmount,
         senderFeeUsd: execResult.feeSummary.senderFeeUsd,
         appFeeUsd: execResult.feeSummary.appFeeUsd,
@@ -310,23 +324,16 @@ router.get('/:id', requireAuth, async (req, res) => {
     let paycrestStatus: string | null = null;
     let nearStatus: string | null = null;
     if (!TERMINAL.has(order.status)) {
-      const { syncOrder } = await import('../services/executor.service');
-      await syncOrder(order.id);
-
-      // Re-fetch with fresh status
-      const updated = await prisma.order.findFirst({
-        where: { id: req.params.id, merchantId: req.merchantId },
-        include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
-      });
-      if (updated) {
-        order = updated as any;
-
-        // Backward compatibility for status strings if needed by widget
-        const activePaycrestStep = order?.steps.find((s: any) => s.provider === 'paycrest' && s.externalId);
-        if (activePaycrestStep) paycrestStatus = activePaycrestStep.status;
-
-        const activeNearStep = order?.steps.find((s: any) => s.provider === 'nearintents' && s.depositAddress);
-        if (activeNearStep) nearStatus = activeNearStep.status;
+      try {
+        await syncOrder(order.id);
+        // Refetch to get the latest state after sync
+        const fresh = await prisma.order.findUnique({
+          where: { id: req.params.id },
+          include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
+        });
+        if (fresh) order = fresh;
+      } catch (err: any) {
+        console.warn(`[orders] sync failed for ${order.id}:`, err.message);
       }
     }
 

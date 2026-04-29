@@ -399,22 +399,24 @@ export default function DemoPage() {
         </div>
       </main>
 
+      <style dangerouslySetInnerHTML={{
+        __html: `
       <style dangerouslySetInnerHTML={{ __html: `
-        .shadow-leaf {
-          box-shadow: 0 4px 12px rgba(11, 15, 14, 0.1);
+          .shadow - leaf {
+          box - shadow: 0 4px 12px rgba(11, 15, 14, 0.1);
         }
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 4px;
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 4px;
         }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
         }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #E8EAE6;
-          border-radius: 10px;
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #E8EAE6;
+      border-radius: 10px;
         }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #6B7572;
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #6B7572;
         }
       ` }} />
     </div>

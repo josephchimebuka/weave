@@ -1,46 +1,6 @@
 import crypto from 'crypto';
 
-// ── Chain + token registry (demo scope) ──────────────────────────────────────
-
-export const CHAIN_ENUM: Record<string, string> = {
-  BASE:      'BASE_MAINNET',
-  ETHEREUM:  'ETHEREUM_MAINNET',
-  OPTIMISM:  'OPTIMISM_MAINNET',
-  ARBITRUM:  'ARBITRUM_MAINNET',
-  POLYGON:   'POLYGON_MAINNET',
-  BSC:       'BSC_MAINNET',
-  AVALANCHE: 'AVALANCHE_MAINNET',
-  LISK:      'LISK_MAINNET',
-};
-
-interface TokenInfo { address: string; decimals: number; }
-
-export const TOKENS: Record<string, Record<string, TokenInfo>> = {
-  BASE_MAINNET: {
-    USDC: { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },
-    USDT: { address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2', decimals: 6 },
-    ETH:  { address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', decimals: 18 },
-  },
-  ETHEREUM_MAINNET: {
-    USDC: { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6 },
-    USDT: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6 },
-    ETH:  { address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', decimals: 18 },
-  },
-  OPTIMISM_MAINNET: {
-    USDC: { address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', decimals: 6 },
-    USDT: { address: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58', decimals: 6 },
-    ETH:  { address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', decimals: 18 },
-  },
-  ARBITRUM_MAINNET: {
-    USDC: { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 },
-    USDT: { address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6 },
-    ETH:  { address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', decimals: 18 },
-  },
-  POLYGON_MAINNET: {
-    USDC: { address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 },
-    USDT: { address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', decimals: 6 },
-  },
-};
+import { CHAIN_ENUM, TOKENS, TokenInfo } from '../lib/registry';
 
 export function resolveChain(symbol: string): string {
   const e = CHAIN_ENUM[symbol.toUpperCase()];
@@ -56,9 +16,13 @@ export function resolveToken(chainEnum: string, symbol: string): TokenInfo {
 
 /** Human amount → smallest-unit integer string (e.g., 100 USDC @ 6 dec → "100000000"). */
 export function toSmallestUnit(amount: number | string, decimals: number): string {
-  const [whole, frac = ''] = String(amount).split('.');
-  const fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
-  const combined = (whole + fracPadded).replace(/^0+/, '');
+  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+  if (!Number.isFinite(num)) return '0';
+  
+  // Use toFixed to avoid scientific notation (1e-7 -> 0.0000001)
+  const fixed = num.toFixed(decimals);
+  const [whole, frac = ''] = fixed.split('.');
+  const combined = (whole + frac).replace(/^0+/, '');
   return combined || '0';
 }
 
@@ -140,22 +104,34 @@ export class ChainRailsService {
 
   constructor() {
     this.baseUrl       = (process.env.CHAINRAILS_API_URL || 'https://api.chainrails.io/api/v1').replace(/\/$/, '');
-    this.apiKey        = process.env.CHAINRAILS_API_KEY || '';
+    this.apiKey        = (process.env.CHAINRAILS_API_KEY || '').replace(/^["']|["']$/g, '').trim();
     this.webhookSecret = process.env.CHAINRAILS_WEBHOOK_SECRET || '';
+    if (!this.apiKey) {
+      console.warn('[ChainRails] CHAINRAILS_API_KEY is not set. All requests will fail with 401.');
+    }
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`ChainRails ${res.status}: ${text}`);
-    return JSON.parse(text) as T;
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      const text = await res.text();
+      if (!res.ok) throw new Error(`ChainRails ${res.status}: ${text}`);
+      return JSON.parse(text) as T;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   /** GET /quotes/best — best quote across all bridges. */
@@ -186,7 +162,7 @@ export class ChainRailsService {
     const srcTok   = resolveToken(srcChain, params.sourceToken);
     const scaled   = toSmallestUnit(params.amount, srcTok.decimals);
 
-    return this.request<CRIntent>('POST', '/intents', {
+    const payload = {
       amount:            scaled,
       amountSymbol:      params.sourceToken.toUpperCase(),
       tokenIn:           srcTok.address,
@@ -196,7 +172,11 @@ export class ChainRailsService {
       ...(params.sender        ? { sender:         params.sender        } : {}),
       ...(params.refundAddress ? { refund_address: params.refundAddress } : {}),
       ...(params.metadata      ? { metadata:       params.metadata      } : {}),
-    });
+    };
+
+    const intent = await this.request<CRIntent>('POST', '/intents', payload);
+
+    return intent;
   }
 
   async getIntent(id: string | number): Promise<CRIntent> {
