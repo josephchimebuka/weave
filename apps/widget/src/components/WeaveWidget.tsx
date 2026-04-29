@@ -430,7 +430,7 @@ function WidgetFooter() {
         Secured by Dewdrop Labs
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span>v1.0.0</span>
+        <span>xoxo ❤️</span>
       </div>
     </div>
   );
