@@ -32,7 +32,7 @@ export default function PayClient({ link }: { link: LinkData }) {
       {/* Left Column: Product Summary */}
       <div className="flex-1 flex flex-col items-center lg:items-end justify-center py-10 sm:py-16 lg:py-24 px-4 sm:px-6 lg:px-12 border-b lg:border-b-0 lg:border-r border-hair/10">
         <div className="w-full max-w-[440px] fade-up lg:mr-8 xl:mr-16">
-          
+
           {/* Merchant Identity */}
           <div className="flex items-center gap-3 mb-8 lg:mb-12">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-forest text-cream flex items-center justify-center font-bold text-lg shadow-leaf">
@@ -43,7 +43,7 @@ export default function PayClient({ link }: { link: LinkData }) {
 
           <div className="space-y-1 lg:space-y-2 mb-8 lg:mb-10">
             <h2 className="text-[14px] sm:text-[16px] font-medium text-ink-muted tracking-tight uppercase tracking-[0.1em]">{link.title}</h2>
-            
+
             {/* Liquid Glass Amount Display */}
             <div className="relative group pt-2 lg:pt-4">
               <div className="absolute -inset-x-4 lg:-inset-x-6 -inset-y-4 bg-forest/5 rounded-[40px] blur-2xl opacity-0 lg:group-hover:opacity-100 transition-opacity duration-700" />
@@ -78,7 +78,7 @@ export default function PayClient({ link }: { link: LinkData }) {
       {/* Right Column: Checkout Widget */}
       <div className="flex-1 flex flex-col items-center lg:items-start justify-center py-10 sm:py-16 lg:py-24 px-4 sm:px-6 lg:px-12 bg-cream-soft/30">
         <div className="w-full max-w-[420px] fade-up lg:ml-8 xl:ml-16">
-          <WeaveCheckout 
+          <WeaveCheckout
             apiKey={link.publishableKey}
             merchant={{
               name: link.merchantName,
@@ -92,11 +92,11 @@ export default function PayClient({ link }: { link: LinkData }) {
             accentColor="forest"
             borderRadius={28}
             onSuccess={(data) => console.log("Payment success:", data)}
-            onClose={() => {}}
+            onClose={() => { }}
           />
 
           {/* Checkout Footer */}
-          <div className="mt-8 lg:mt-12 px-4 shadow-leaf-soft">
+          {/* <div className="mt-8 lg:mt-12 px-4 shadow-leaf-soft">
             <div className="flex flex-col sm:flex-row items-center sm:justify-between gap-4 text-[12px] sm:text-[13px] text-ink-muted font-medium">
               <div className="flex items-center gap-2">
                 <span>Secured by</span>
@@ -107,7 +107,7 @@ export default function PayClient({ link }: { link: LinkData }) {
                 <span className="hover:text-ink cursor-pointer transition-colors">Privacy</span>
               </div>
             </div>
-          </div>
+          </div> */}
         </div>
       </div>
     </div>
