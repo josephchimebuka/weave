@@ -244,6 +244,19 @@ export class PaystackService {
       feeUsd: (paystackFeeNgn + weaveFeeNgn) / quoteRate,
     };
   }
+
+  /**
+   * Settlements
+   * Fetches the list of settlements for a specific subaccount.
+   */
+  async getSettlements(subaccountCode: string): Promise<any[]> {
+    const res = await fetch(`${BASE}/settlement?subaccount=${subaccountCode}`, {
+      headers: getHeaders(),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(`Paystack /settlement error: ${body.message || res.statusText}`);
+    return body.data;
+  }
 }
 
 export const paystack = new PaystackService();

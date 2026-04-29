@@ -11,6 +11,7 @@ import {
   LifeBuoy,
   LogOut,
   Link as LinkIcon,
+  Landmark,
   X,
 } from 'lucide-react';
 
@@ -24,6 +25,7 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: '/',               label: 'Dashboard',    icon: LayoutGrid },
   { href: '/transactions',   label: 'Transactions', icon: Receipt },
+  { href: '/payouts',        label: 'Payouts',      icon: Landmark },
   { href: '/links',          label: 'Payment Links', icon: LinkIcon },
   { href: '/onboarding/kyb', label: 'KYB',          icon: ShieldCheck, match: ['/onboarding', '/compliance'] },
   { href: '/settings',       label: 'Settings',     icon: Settings2 },

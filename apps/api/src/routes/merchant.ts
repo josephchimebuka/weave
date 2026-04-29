@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { requireSession } from '../middleware/auth';
 import { sendDeletionRequestEmail } from '../services/email.service';
 import { syncPaystackSubaccount } from '../lib/merchant';
+import { paystack } from '../services/paystack.service';
 
 const router = Router();
 
@@ -176,6 +177,30 @@ router.get('/payouts', requireSession, async (req, res) => {
       },
     });
   } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/v1/merchant/payouts/settlements
+// Returns historical settlements from Paystack for this merchant's subaccount
+router.get('/payouts/settlements', requireSession, async (req, res) => {
+  try {
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: req.merchantId },
+    });
+    if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
+
+    if (!merchant.paystackSubaccountCode) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const settlements = await paystack.getSettlements(merchant.paystackSubaccountCode);
+    return res.json({
+      success: true,
+      data: settlements,
+    });
+  } catch (err: any) {
+    console.error('Fetch settlements error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });

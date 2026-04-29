@@ -15,7 +15,7 @@ export function ClientLayout({ children, merchantName }: { children: React.React
     setSidebarOpen(false);
   }, [pathname]);
 
-  const isAuth   = pathname.startsWith('/auth') || pathname.startsWith('/pay');
+  const isAuth   = pathname.startsWith('/auth') || pathname === '/pay' || pathname.startsWith('/pay/');
   const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy');
 
   if (isAuth) {
