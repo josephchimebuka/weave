@@ -112,10 +112,8 @@ router.get('/profile', requireSession, async (req, res) => {
 // PATCH /api/v1/merchant/profile
 router.patch('/profile', requireSession, async (req, res) => {
   const name = String(req.body?.name ?? '').trim();
-
-  if (!name) {
-    return res.status(400).json({ success: false, error: 'name is required' });
-  }
+  if (!name) return res.status(400).json({ success: false, error: 'name is required' });
+  if (name.length > 100) return res.status(400).json({ success: false, error: 'name must be under 100 characters' });
 
   try {
     const merchant = await prisma.merchant.update({
@@ -191,15 +189,19 @@ router.put('/payouts', requireSession, async (req, res) => {
     if (!kind || !['bank_account', 'crypto_wallet'].includes(kind)) {
       return res.status(400).json({ success: false, error: 'Invalid or missing kind' });
     }
-    if (!assetKey) {
-      return res.status(400).json({ success: false, error: 'assetKey is required' });
+    if (!assetKey || typeof assetKey !== 'string' || assetKey.length > 20) {
+      return res.status(400).json({ success: false, error: 'Invalid assetKey' });
     }
 
     if (kind === 'bank_account' && (!bankInstitution || !bankAccountIdentifier || !bankAccountName)) {
       return res.status(400).json({ success: false, error: 'bankInstitution, bankAccountIdentifier, and bankAccountName are required for bank accounts' });
     }
-    if (kind === 'crypto_wallet' && !walletAddress) {
-      return res.status(400).json({ success: false, error: 'walletAddress is required for crypto wallets' });
+    if (kind === 'bank_account') {
+      if (bankAccountName.length > 200) return res.status(400).json({ success: false, error: 'bankAccountName too long' });
+      if (bankAccountIdentifier.length > 50) return res.status(400).json({ success: false, error: 'bankAccountIdentifier too long' });
+    }
+    if (kind === 'crypto_wallet' && (!walletAddress || typeof walletAddress !== 'string' || walletAddress.length > 128)) {
+      return res.status(400).json({ success: false, error: 'Invalid walletAddress' });
     }
 
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });

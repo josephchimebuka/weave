@@ -28,6 +28,8 @@ router.post('/', requireSession, linkCreationLimiter, async (req, res) => {
     if (!title || !asset || amount === undefined || amount === null) {
       return res.status(400).json({ success: false, error: 'Title, asset, and amount are required' });
     }
+    if (title.length > 100) return res.status(400).json({ success: false, error: 'Title too long' });
+    if (description && description.length > 500) return res.status(400).json({ success: false, error: 'Description too long' });
 
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(404).json({ success: false, error: 'Merchant not found' });
@@ -88,6 +90,8 @@ router.get('/public/:slug', apiLimiter, async (req, res) => {
 router.patch('/:id', requireSession, async (req, res) => {
   try {
     const { title, description, amount, asset, isActive } = req.body;
+    if (title && title.length > 100) return res.status(400).json({ success: false, error: 'Title too long' });
+    if (description && description.length > 500) return res.status(400).json({ success: false, error: 'Description too long' });
     
     // Safety check: ensure the link belongs to the merchant
     const existing = await prisma.paymentLink.findFirst({

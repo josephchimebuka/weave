@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
+import { redis } from '../lib/serverless-redis';
 import { Prisma } from '@prisma/client';
 import { 
   sendWelcomeEmail, 
@@ -267,7 +268,18 @@ router.post('/reset-password', authLimiter, async (req, res) => {
     ) {
       return res.status(400).json({ success: false, error: 'invalid or expired reset token' });
     }
-    if (challenge.codeHash !== hashCode(otpCode)) {
+    const challengeKey = `otp-attempts:${challenge.id}`;
+    const attempts = (await redis.get<number>(challengeKey)) || 0;
+    if (attempts >= 5) {
+      return res.status(400).json({ success: false, error: 'Too many failed attempts. This reset token is now invalid.' });
+    }
+
+    const expectedHash = Buffer.from(challenge.codeHash, 'hex');
+    const actualHash   = Buffer.from(hashCode(otpCode), 'hex');
+    
+    if (expectedHash.length !== actualHash.length || !crypto.timingSafeEqual(expectedHash, actualHash)) {
+      await redis.incr(challengeKey);
+      if (attempts === 0) await redis.pexpire(challengeKey, 15 * 60 * 1000);
       return res.status(400).json({ success: false, error: 'invalid OTP code' });
     }
 
@@ -303,8 +315,8 @@ router.post('/reset-password', authLimiter, async (req, res) => {
 
 // ── POST /api/v1/auth/logout ─────────────────────────────────────────────────
 router.post('/logout', async (req, res) => {
-  const token = String(req.body?.sessionToken ?? req.headers['x-session-token'] ?? '');
-  if (!token) return res.status(400).json({ success: false, error: 'sessionToken is required' });
+  const token = String(req.headers['x-session-token'] ?? '');
+  if (!token) return res.status(400).json({ success: false, error: 'x-session-token header is required' });
 
   try {
     await prisma.session.deleteMany({ where: { token } });

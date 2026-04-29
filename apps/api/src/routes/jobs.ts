@@ -14,7 +14,13 @@ const router = Router();
 const verifyQStash = async (req: Request, res: Response, next: Function) => {
   // Only bypass verification when explicitly opted in via env flag.
   // Never key off NODE_ENV — that would leave staging/misconfigured prod unprotected.
-  if (process.env.SKIP_QSTASH_VERIFICATION === 'true') return next();
+  if (process.env.SKIP_QSTASH_VERIFICATION === 'true') {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('[jobs] CRITICAL: SKIP_QSTASH_VERIFICATION cannot be true in production');
+      return res.status(500).json({ error: 'Server misconfiguration' });
+    }
+    return next();
+  }
 
   const signature = req.headers['upstash-signature'] as string;
   const rawBody = (req as any).rawBody;
@@ -178,6 +184,7 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
       depositAddress: { not: null },
     },
     take: 15,
+    orderBy: { createdAt: 'asc' },
   });
 
   for (const step of openSteps) {

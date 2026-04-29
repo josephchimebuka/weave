@@ -42,11 +42,18 @@ export function rateLimit(options: RateLimitOptions) {
       return next();
     }
 
-    // 3. /orders — order creation and status polling must never be rate-limited.
-    //    The widget polls GET /orders/:id every few seconds during an active
-    //    checkout; capping it would break payment confirmation for real users.
+    // 3. /orders — status polling (GET /orders/:id) is frequent, but creation (POST /orders) is sensitive.
     if (req.path.startsWith('/v1/orders')) {
-      return next();
+      if (req.method === 'GET') {
+        // Polling limit: 300 per 1 min (very generous for widget)
+        const pollKey = `${keyPrefix}:poll:${ip}`;
+        const count = (await redis.get<number>(pollKey)) || 0;
+        if (count >= 300) return res.status(429).json({ success: false, error: 'Too many polling requests' });
+        await redis.incr(pollKey);
+        if (count === 0) await redis.pexpire(pollKey, 60 * 1000);
+        return next();
+      }
+      // POST /orders falls through to the main limiter
     }
 
     // 4. /assets — static supported-asset list, safe to call freely.

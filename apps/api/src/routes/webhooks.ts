@@ -27,7 +27,8 @@ router.post('/chainrails', async (req: Request, res: Response) => {
   }
 
   const { qstash } = await import('../lib/qstash');
-  const baseUrl = process.env.API_BASE || `https://${req.headers.host}/api/v1`;
+  const baseUrl = process.env.API_BASE;
+  if (!baseUrl) throw new Error('API_BASE env is required for job callbacks');
 
   await qstash.publishJSON({
     url: `${baseUrl}/jobs/process-webhook`,
@@ -69,7 +70,8 @@ router.post('/paycrest', async (req: Request, res: Response) => {
   }
 
   const { qstash } = await import('../lib/qstash');
-  const baseUrl = process.env.API_BASE || `https://${req.headers.host}/api/v1`;
+  const baseUrl = process.env.API_BASE;
+  if (!baseUrl) throw new Error('API_BASE env is required for job callbacks');
 
   await qstash.publishJSON({
     url: `${baseUrl}/jobs/process-webhook`,
@@ -109,7 +111,8 @@ router.post('/paystack', async (req: Request, res: Response) => {
   }
 
   const { qstash } = await import('../lib/qstash');
-  const baseUrl = process.env.API_BASE || `https://${req.headers.host}/api/v1`;
+  const baseUrl = process.env.API_BASE;
+  if (!baseUrl) throw new Error('API_BASE env is required for job callbacks');
 
   await qstash.publishJSON({
     url: `${baseUrl}/jobs/process-webhook`,

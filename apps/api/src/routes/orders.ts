@@ -34,6 +34,9 @@ router.post('/', requireAuth, async (req, res) => {
   if (!Number.isFinite(body.amount) || body.amount <= 0) {
     return res.status(400).json({ success: false, error: 'Invalid amount' });
   }
+  if (body.reference && body.reference.length > 100) {
+    return res.status(400).json({ success: false, error: 'Reference too long' });
+  }
 
   try {
     // Validate inline source shape early so we return a clean 400
