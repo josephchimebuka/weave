@@ -1,4 +1,4 @@
-import { readSessionCookie } from '../../../../../lib/auth-server';
+import { readSessionCookie } from '../../../../lib/auth-server';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
