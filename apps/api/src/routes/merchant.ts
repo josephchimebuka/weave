@@ -181,6 +181,23 @@ router.get('/payouts', requireSession, async (req, res) => {
   }
 });
 
+// POST /api/v1/merchant/payouts/resolve-account
+// Resolves a bank account name via Paystack — same chain used by syncPaystackSubaccount
+// so the name shown in the form matches exactly what ends up on the Paystack subaccount.
+router.post('/payouts/resolve-account', requireSession, async (req, res) => {
+  try {
+    const { accountNumber, institution } = req.body;
+    if (!accountNumber || !institution) {
+      return res.status(400).json({ success: false, error: 'accountNumber and institution are required' });
+    }
+    const bankCode = await paystack.resolveBankCode(String(institution));
+    const resolved = await paystack.resolveAccount(String(accountNumber), bankCode);
+    return res.json({ success: true, data: resolved.account_name });
+  } catch (err: any) {
+    return res.status(502).json({ success: false, error: err.message });
+  }
+});
+
 // GET /api/v1/merchant/payouts/settlements
 // Returns historical settlements from Paystack for this merchant's subaccount
 router.get('/payouts/settlements', requireSession, async (req, res) => {

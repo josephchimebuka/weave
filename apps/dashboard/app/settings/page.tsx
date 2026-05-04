@@ -95,6 +95,8 @@ function SettingsContent() {
   const [savingPayout, setSavingPayout] = useState(false);
   const [payoutSaved, setPayoutSaved] = useState(false);
   const [banks, setBanks] = useState<{name: string; code: string}[]>([]);
+  const [resolvingName, setResolvingName] = useState(false);
+  const [resolutionError, setResolutionError] = useState<string | null>(null);
 
   const SETTLEMENT_ASSETS = [
     { key: 'crypto:BASE:USDC', label: 'USDC (Base)', active: true },
@@ -158,6 +160,29 @@ function SettingsContent() {
       .then((d) => setBanks(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, []);
+
+  // Auto-resolve account name via Paystack — same chain used when syncing the subaccount,
+  // so the name shown here is exactly what gets stored on the Paystack subaccount.
+  useEffect(() => {
+    if (bankAccountIdentifier.length !== 10 || !bankInstitution) return;
+    setResolvingName(true);
+    setResolutionError(null);
+    fetch('/api/merchant/payouts/resolve-account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountNumber: bankAccountIdentifier, institution: bankInstitution }),
+    })
+      .then((r) => r.json())
+      .then((resp) => {
+        if (resp.success && resp.data) {
+          setBankAccountName(resp.data);
+        } else {
+          setResolutionError('Could not resolve — enter name manually');
+        }
+      })
+      .catch(() => setResolutionError('Resolution timed out — enter name manually'))
+      .finally(() => setResolvingName(false));
+  }, [bankAccountIdentifier, bankInstitution]);
 
   async function regenerateKeys() {
     setRegenerating(true);
@@ -539,13 +564,21 @@ export default function CheckoutPage() {
                      </div>
                      <div>
                        <label className="block text-[12px] font-medium text-ink-soft mb-1.5">Account Name</label>
-                       <input 
+                       <input
                          type="text"
-                         value={bankAccountName}
-                         onChange={(e) => setBankAccountName(e.target.value)}
-                         placeholder="e.g. ACME Corp"
-                         className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40"
+                         value={resolvingName ? '' : bankAccountName}
+                         onChange={(e) => { setBankAccountName(e.target.value); setResolutionError(null); }}
+                         placeholder={resolvingName ? 'Resolving…' : 'Auto-filled after account number entry'}
+                         readOnly={resolvingName}
+                         className={`w-full border rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none transition-colors ${
+                           resolvingName
+                             ? 'bg-cream-deep/30 border-hair-soft text-ink-muted animate-pulse cursor-wait'
+                             : 'bg-cream-deep/50 border-hair-soft focus:border-forest/40'
+                         }`}
                        />
+                       {resolutionError && (
+                         <p className="mt-1 text-[11px] text-amber-600">{resolutionError}</p>
+                       )}
                      </div>
                    </div>
                 ) : (

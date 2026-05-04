@@ -9,7 +9,7 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const currency = url.searchParams.get('currency');
-    
+
     if (!currency) return Response.json({ error: 'currency required' }, { status: 400 });
 
     const res = await fetch(`${API_BASE}/institutions?currency=${currency}`, {
