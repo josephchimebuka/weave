@@ -33,6 +33,11 @@ export async function syncPaystackSubaccount(merchantId: string): Promise<void> 
     // against the live /bank list (cached 24 h).
     const bankCode = await paystack.resolveBankCode(instrument.bankInstitution || '');
 
+    // Verify the account exists at the bank and use the bank-returned name as the
+    // subaccount business_name so it matches the actual account holder.
+    const resolved = await paystack.resolveAccount(accountNumber, bankCode);
+    const businessName = resolved.account_name;
+
     if (merchant.paystackSubaccountCode) {
       try {
         await paystack.updateSubaccount(merchant.paystackSubaccountCode, { bankCode, accountNumber });
@@ -40,21 +45,13 @@ export async function syncPaystackSubaccount(merchantId: string): Promise<void> 
       } catch (updateErr: any) {
         // Stale code (e.g. test vs live key switch) — create a fresh one
         if (/not found/i.test(updateErr.message)) {
-          subaccountCode = await paystack.createSubaccount({
-            businessName: merchant.name,
-            bankCode,
-            accountNumber,
-          });
+          subaccountCode = await paystack.createSubaccount({ businessName, bankCode, accountNumber });
         } else {
           throw updateErr;
         }
       }
     } else {
-      subaccountCode = await paystack.createSubaccount({
-        businessName:  merchant.name,
-        bankCode,
-        accountNumber,
-      });
+      subaccountCode = await paystack.createSubaccount({ businessName, bankCode, accountNumber });
     }
 
     await prisma.merchant.update({

@@ -105,6 +105,7 @@ export class PaystackService {
         settlement_bank:   params.bankCode,
         account_number:    params.accountNumber,
         percentage_charge: 0, // Weave absorbs all fees; gross-up handles this on the charge side
+        active:            true,
       }),
     });
 
@@ -124,6 +125,7 @@ export class PaystackService {
       body: JSON.stringify({
         settlement_bank: params.bankCode,
         account_number:  params.accountNumber,
+        active:          true,
       }),
     });
     if (!res.ok) {
@@ -243,6 +245,19 @@ export class PaystackService {
       paystackFeeNgn: chargeAmountNgn - netAmountNgn - weaveFeeNgn, // adjusted for rounding
       feeUsd: (paystackFeeNgn + weaveFeeNgn) / quoteRate,
     };
+  }
+
+  /**
+   * Resolves and verifies a bank account number against the given bank code.
+   * Returns the account name as held by the bank.
+   */
+  async resolveAccount(accountNumber: string, bankCode: string): Promise<{ account_name: string; account_number: string }> {
+    const res = await fetch(`${BASE}/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`, {
+      headers: getHeaders(),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(`Paystack /bank/resolve error: ${body.message || res.statusText}`);
+    return body.data;
   }
 
   /**

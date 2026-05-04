@@ -19,11 +19,14 @@ import AutoRefresh from '../AutoRefresh';
 interface Settlement {
   id: number;
   status: string;
-  amount: number;
   currency: string;
-  reference: string;
+  total_amount: number;
+  effective_amount: number;
+  total_fees: number;
+  total_processed: number;
+  settlement_date: string;
   createdAt: string;
-  settled_by: string;
+  settled_by: string | null;
 }
 
 export default function PayoutsPage() {
@@ -79,7 +82,7 @@ export default function PayoutsPage() {
     return sum;
   }, 0);
 
-  const lastSettledAmount = lastSettlement ? lastSettlement.amount / 100 : 0;
+  const lastSettledAmount = lastSettlement ? lastSettlement.total_amount / 100 : 0;
 
   // Next payout estimation (T+1 business days)
   const getNextPayoutDate = () => {
@@ -163,7 +166,7 @@ export default function PayoutsPage() {
         {/* Payout list */}
         <div className="relative rounded-3xl bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden flex-1 flex flex-col fade-up" style={{ animationDelay: '200ms' }}>
           <div className="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1.5fr_1fr_1fr_1fr] gap-4 px-6 py-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted border-b border-hair-soft">
-            <div>Reference</div>
+            <div>Settlement ID</div>
             <div className="hidden sm:block">Date</div>
             <div className="text-center">Status</div>
             <div className="text-right">Amount</div>
@@ -183,7 +186,7 @@ export default function PayoutsPage() {
                   className="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1.5fr_1fr_1fr_1fr] gap-4 items-center px-6 py-5 border-b border-hair-soft/60 last:border-b-0 hover:bg-cream-deep/30 transition-colors"
                 >
                   <div className="min-w-0">
-                    <p className="font-semibold text-ink text-[14px] truncate">{s.reference}</p>
+                    <p className="font-semibold text-ink text-[14px] truncate font-mono">#{s.id}</p>
                     <p className="sm:hidden text-[11px] text-ink-muted">{fmtDate(s.createdAt)}</p>
                   </div>
                   <div className="hidden sm:block text-[13px] text-ink-soft">
@@ -197,7 +200,7 @@ export default function PayoutsPage() {
                     </span>
                   </div>
                   <div className="text-right font-semibold text-ink tabular-nums text-[14px]">
-                    {fmtCurrency(s.amount / 100)}
+                    {fmtCurrency(s.total_amount / 100)}
                   </div>
                 </div>
               ))}
