@@ -167,16 +167,16 @@ model Order {
 
   sourceAssetKey     String       // denormalized for quick filtering
   destAssetKey       String
-  sourceAmount       Float
-  destAmount         Float?       // expected payout, filled after route plan
-  quoteRate          Float?       // source→dest rate snapshot at creation
+  sourceAmount       Decimal      @db.Decimal(36, 18)
+  destAmount         Decimal?     @db.Decimal(36, 18)  // confirmed settled amount, updated on completion
+  quoteRate          Decimal?     @db.Decimal(36, 18)  // source→dest rate snapshot at creation
 
   status             String       // "awaiting_deposit" | "processing" | "completed" | "failed" | "refunded"
   routePlan          Json?        // RoutePlan snapshot from the router
   reference          String?      // merchant-supplied reference
-  senderFeeUsd       Float?
-  appFeeUsd          Float?
-  bridgeFeeUsd       Float?
+  senderFeeUsd       Decimal?     @db.Decimal(18, 8)
+  appFeeUsd          Decimal?     @db.Decimal(18, 8)
+  bridgeFeeUsd       Decimal?     @db.Decimal(18, 8)
 
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
@@ -199,9 +199,9 @@ model RouteStep {
   provider       String    // "paycrest" | "chainrails" | "nearintents" | "direct"
   fromAsset      String
   toAsset        String
-  amountIn       Float?
-  amountOut      Float?
-  feeUsd         Float?
+  amountIn       Decimal?     @db.Decimal(36, 18)
+  amountOut      Decimal?     @db.Decimal(36, 18)
+  feeUsd         Decimal?     @db.Decimal(18, 8)
   status         String    // "pending" | "awaiting_deposit" | "in_flight" | "done" | "failed"
   externalId     String?   // provider-side id
   depositAddress String?   // for crypto steps: where funds should be sent
@@ -265,7 +265,7 @@ model PaymentLink {
   
   title       String
   description String?
-  amount      Float    // if null, user can specify
+  amount      Decimal  @db.Decimal(18, 8)
   asset       String   // e.g. "NGN", "USDC"
   
   isActive    Boolean  @default(true)

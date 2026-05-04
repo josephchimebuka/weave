@@ -578,7 +578,16 @@ export async function markStepDone(params: {
   const anyFailed = fresh.some((s: any) => s.status === 'failed');
   const nextOrderStatus = anyFailed ? 'failed' : allDone ? 'completed' : 'processing';
 
-  await prisma.order.update({ where: { id: step.orderId }, data: { status: nextOrderStatus } });
+  // On completion, overwrite destAmount with the last step's actual confirmed output
+  // so merchants see what was truly settled, not the initial quote estimate.
+  const orderUpdate: Record<string, unknown> = { status: nextOrderStatus };
+  if (nextOrderStatus === 'completed') {
+    const lastStep = fresh[fresh.length - 1];
+    if (lastStep?.amountOut != null) {
+      orderUpdate.destAmount = lastStep.amountOut;
+    }
+  }
+  await prisma.order.update({ where: { id: step.orderId }, data: orderUpdate });
 
   // ── Notify Merchant ───────────────────────────────────────────────────────
   if (nextOrderStatus === 'completed') {

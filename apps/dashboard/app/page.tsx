@@ -87,13 +87,10 @@ function formatUsd(n: number): string {
 function netSettlement(order: Order): number {
   if (order.destAmount == null) return 0;
   const isDestFiat = parseAsset(order.destAssetKey).kind === 'fiat';
-  if (!isDestFiat) return order.destAmount;
-
-  // For fiat settlements, Weave/Paycrest fee is often bundled in the gross destAmount.
-  // We subtract the fee at the target rate to show what actually hits the bank.
-  const feeInDest = (order.senderFeeUsd || 0) * (order.quoteRate || 0);
-  const net = Math.max(0, order.destAmount - feeInDest);
-  return Math.round(net);
+  // destAmount is already the net settled amount — fees were deducted by the
+  // provider before computing it, and markStepDone overwrites it with the
+  // confirmed figure on completion. Never subtract fees again here.
+  return isDestFiat ? Math.round(order.destAmount) : order.destAmount;
 }
 
 // Previously misnamed 'approximateFiat', we now use the net settlement amount.

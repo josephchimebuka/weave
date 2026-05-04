@@ -11,6 +11,27 @@ import { Decimal } from 'decimal.js';
 
 const router = Router();
 
+// Prisma Decimal fields serialize to strings in JSON. Convert them to numbers
+// at the API boundary so dashboard and widget consumers don't need to change.
+function serializeOrder(order: any) {
+  const decNum = (v: any) => v != null ? Number(v) : v;
+  return {
+    ...order,
+    sourceAmount: decNum(order.sourceAmount),
+    destAmount:   decNum(order.destAmount),
+    quoteRate:    decNum(order.quoteRate),
+    senderFeeUsd: decNum(order.senderFeeUsd),
+    appFeeUsd:    decNum(order.appFeeUsd),
+    bridgeFeeUsd: decNum(order.bridgeFeeUsd),
+    steps: order.steps?.map((s: any) => ({
+      ...s,
+      amountIn:  decNum(s.amountIn),
+      amountOut: decNum(s.amountOut),
+      feeUsd:    decNum(s.feeUsd),
+    })),
+  };
+}
+
 interface CreateOrderBody {
   source: InstrumentRef;
   dest?: InstrumentRef;
@@ -281,7 +302,7 @@ router.post('/', requireAuth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        order: updated,
+        order: serializeOrder(updated),
         nextAction: execResult.nextAction,
         firstStep: execResult.firstStep,
       },
@@ -340,7 +361,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       }
     }
 
-    res.json({ success: true, data: { ...order, paycrestStatus, nearStatus } });
+    res.json({ success: true, data: { ...serializeOrder(order), paycrestStatus, nearStatus } });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -355,7 +376,7 @@ router.get('/', requireAuth, async (req, res) => {
       take: 50,
       include: { steps: { orderBy: { sequence: 'asc' } } },
     });
-    res.json({ success: true, data: orders });
+    res.json({ success: true, data: orders.map(serializeOrder) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -324,7 +324,7 @@ export async function sendMerchantPaymentNotification(orderId: string) {
 
     const m = order.merchant;
     const isCrypto = order.destAssetKey.startsWith('crypto:');
-    const amount = order.destAmount || 0;
+    const amount = order.destAmount ? Number(order.destAmount) : 0;
     const symbol = order.destAssetKey.split(':').pop();
     const amountStr = isCrypto 
       ? `${amount.toFixed(4)} ${symbol}` 
