@@ -2552,7 +2552,10 @@ function WeaveCheckoutInner({
     setWalletBalanceEntry(null);
     if (method === 'fiat') {
       setDirection('onramp');
-      if (merchant.currency === 'NGN') {
+      // Skip refundAccount screen only for pure NGN→NGN (Paystack) flows.
+      // Paycrest onramp (any fiat→crypto route) requires a real refundAccount.
+      const isPureNgn = merchant.currency === 'NGN' && merchant.destAssetKey === 'fiat:NGN';
+      if (isPureNgn) {
         createFiatOrder();
       } else {
         setScreen('refundAccount');
@@ -2582,28 +2585,39 @@ function WeaveCheckoutInner({
     setDepositChain(null);
     try {
       const from = cryptoKey(apiChain, token);
-      const to = fiatKey(merchant.currency);
+      const to = merchant.destAssetKey || fiatKey(merchant.currency);
       const finalAmountIn = merchant.amountIn ?? 'dest';
 
+      let targetAmount = merchant.amount;
+
+      // Bug 2 Fix: If destination is crypto but merchant amount is in fiat (NGN),
+      // we must find the actual crypto value of that fiat amount first.
+      if (to.startsWith('crypto:') && merchant.currency === 'NGN') {
+        const fiatToCrypto = await fetchQuote(apiKey, {
+          from: fiatKey(merchant.currency),
+          to,
+          amount: merchant.amount,
+          amountIn: 'source'
+        });
+        targetAmount = fiatToCrypto.estimatedDest;
+      }
+
       const q = await fetchQuote(apiKey, {
-        from, to, amount: merchant.amount, amountIn: finalAmountIn,
+        from, to, amount: targetAmount, amountIn: finalAmountIn,
       });
-      // External flow: sender identity is unknown at order-creation time. We
-      // omit walletAddress on the source instrument and pass the user-provided
-      // refund wallet as a dedicated top-level field so the backend wires it
-      // straight into NEAR Intents' refundTo without conflating the two roles.
+      // External flow: sender identity is unknown at order-creation time.
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: '' },
       };
       const res = await createOrder(apiKey, {
         source,
-        amount: merchant.amount,
+        amount: targetAmount,
         amountIn: finalAmountIn,
         refundAddress: refundAddr,
         dest: merchant.destInstrument ? {
           inline: {
             ...merchant.destInstrument,
-            assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
+            assetKey: to,
           }
         } : undefined,
       });
