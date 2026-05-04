@@ -482,6 +482,12 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
   const [showMoreCrypto, setShowMoreCrypto] = useState(false);
   const [picked, setPicked] = useState<PathPick | null>(null);
 
+  // Reset picked when the parent's submitting resolves — handles API failures where
+  // the screen stays at 'connect' but picked was left set, permanently locking the button.
+  useEffect(() => {
+    if (!submitting) setPicked(null);
+  }, [submitting]);
+
   const pick = (method: PathPick) => {
     if (submitting || picked) return;
     setPicked(method);
