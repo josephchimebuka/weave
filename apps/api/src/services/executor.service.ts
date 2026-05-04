@@ -173,7 +173,7 @@ async function runPaycrestOnramp(
   return {
     externalId: pc.id,
     amountIn,
-    amountOut: Number(prov.amountToTransfer) || amountIn,
+    amountOut: Number(pc.amount) * (1 - (SENDER_FEE_BPS + APP_FEE_BPS) / 10000),
     depositAddress: null,
     depositMemo: null,
     expiresAt: prov.validUntil,
@@ -211,11 +211,11 @@ async function runChainRailsBridge(
   });
 
   const totalRequired = Number(intent.total_amount_in_asset_token) / (10 ** intent.asset_token_decimals);
-  
+
   return {
-    externalId:     String(intent.id),
-    amountIn:       totalRequired,
-    amountOut:      amountIn,
+    externalId: String(intent.id),
+    amountIn: totalRequired,
+    amountOut: amountIn,
     depositAddress: intent.intent_address,
     depositMemo: null,
     expiresAt: intent.expires_at,
@@ -284,41 +284,41 @@ function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): Execute
   const from = parseAsset(first.fromAsset);
   const nextAction: FirstStepAction = from.kind === 'crypto'
     ? {
-        screen:         'collect_crypto',
-        depositAddress: first.depositAddress ?? undefined,
-        depositMemo:    first.depositMemo ?? undefined,
-        amount:         first.amountIn ?? input.sourceAmount,
-        token:          from.token,
-        chain:          from.chain,
-        expiresAt:      undefined,
-      }
+      screen: 'collect_crypto',
+      depositAddress: first.depositAddress ?? undefined,
+      depositMemo: first.depositMemo ?? undefined,
+      amount: first.amountIn ?? input.sourceAmount,
+      token: from.token,
+      chain: from.chain,
+      expiresAt: undefined,
+    }
     : {
-        screen:      'collect_fiat',
-        bankDetails: {
-            institution:       '', // Minimal reconstruction
-            accountIdentifier: '',
-            accountName:       '',
-            amountToTransfer:  String(first.amountIn ?? first.amountOut ?? 0),
-            currency:          from.currency,
-        },
-        expiresAt:   undefined,
-      };
+      screen: 'collect_fiat',
+      bankDetails: {
+        institution: '', // Minimal reconstruction
+        accountIdentifier: '',
+        accountName: '',
+        amountToTransfer: String(first.amountIn ?? first.amountOut ?? 0),
+        currency: from.currency,
+      },
+      expiresAt: undefined,
+    };
 
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
-  const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS    / 10000);
+  const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
   const bridgeFeeUsd = steps.reduce((s, e) => {
     return s + ((e.provider === 'chainrails' || e.provider === 'nearintents') ? (e.feeUsd ?? 0) : 0);
   }, 0);
 
   return {
-    firstStep:  { sequence: 0, provider: first.provider, fromAsset: first.fromAsset, toAsset: first.toAsset },
+    firstStep: { sequence: 0, provider: first.provider, fromAsset: first.fromAsset, toAsset: first.toAsset },
     nextAction,
     destAmount: last.amountOut ?? 0,
     steps: steps.map(e => ({
-      sequence:   e.sequence,
+      sequence: e.sequence,
       externalId: e.externalId,
-      amountIn:   e.amountIn ?? 0,
-      amountOut:  e.amountOut ?? 0,
+      amountIn: e.amountIn ?? 0,
+      amountOut: e.amountOut ?? 0,
     })),
     feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd },
   };
@@ -400,10 +400,10 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       // The remainder goes to the merchant subaccount. bearer:'subaccount' means Paystack's
       // processing fee is deducted from the merchant's share, not added on top for the payer.
       const txn = await paystack.initializeTransaction({
-        email:             'admin@dewdroplabs.com',
-        amountNgn:         chargeAmountNgn,
-        reference:         paystackRef,
-        subaccount:        merchant.paystackSubaccountCode!,
+        email: 'admin@dewdroplabs.com',
+        amountNgn: chargeAmountNgn,
+        reference: paystackRef,
+        subaccount: merchant.paystackSubaccountCode!,
         transactionCharge: Math.round(weaveFeeNgn * 100), // kobo
       });
 
@@ -466,9 +466,9 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');
       if (!input.destWallet) throw new Error('direct requires destWallet');
       exec = {
-        externalId: null,
+        externalId: `direct:${input.orderId}`,
         amountIn,
-        amountOut: amountIn,
+        amountOut: amountIn * (1 - (SENDER_FEE_BPS + APP_FEE_BPS) / 10000),
         depositAddress: input.destWallet,
         depositMemo: null,
         expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
@@ -487,14 +487,14 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     prisma.routeStep.update({
       where: { orderId_sequence: { orderId, sequence: i } },
       data: {
-        externalId:     e.externalId,
-        amountIn:       e.amountIn,
-        amountOut:      e.amountOut,
+        externalId: e.externalId,
+        amountIn: e.amountIn,
+        amountOut: e.amountOut,
         depositAddress: e.depositAddress,
-        depositMemo:    e.depositMemo,
-        status:         i === 0 ? 'awaiting_deposit' : 'pending',
-        feeUsd:         e.feeUsd,
-        startedAt:      new Date(),
+        depositMemo: e.depositMemo,
+        status: i === 0 ? 'awaiting_deposit' : 'pending',
+        feeUsd: e.feeUsd,
+        startedAt: new Date(),
       },
     })
   ));
@@ -506,42 +506,42 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   const nextAction: FirstStepAction =
     firstFrom.kind === 'crypto'
       ? {
-          screen:         'collect_crypto',
-          depositAddress: firstExec.depositAddress ?? undefined,
-          depositMemo:    firstExec.depositMemo ?? undefined,
-          amount:         firstExec.amountIn,
-          token:          firstFrom.token,
-          chain:          firstFrom.chain,
-          expiresAt:      firstExec.expiresAt ?? undefined,
-        }
+        screen: 'collect_crypto',
+        depositAddress: firstExec.depositAddress ?? undefined,
+        depositMemo: firstExec.depositMemo ?? undefined,
+        amount: firstExec.amountIn,
+        token: firstFrom.token,
+        chain: firstFrom.chain,
+        expiresAt: firstExec.expiresAt ?? undefined,
+      }
       : firstStep.provider === 'paystack'
         ? {
-            screen:               'paystack_popup',
-            paystackPopupDetails: (firstExec as any).paystackPopupDetails,
-            expiresAt:            firstExec.expiresAt ?? undefined,
-          }
+          screen: 'paystack_popup',
+          paystackPopupDetails: (firstExec as any).paystackPopupDetails,
+          expiresAt: firstExec.expiresAt ?? undefined,
+        }
         : {
-            screen:      'collect_fiat',
-            bankDetails: firstExec.bankDetails,
-            expiresAt:   firstExec.expiresAt ?? undefined,
-          };
+          screen: 'collect_fiat',
+          bankDetails: firstExec.bankDetails,
+          expiresAt: firstExec.expiresAt ?? undefined,
+        };
 
   const totalBridgeFee = executions.reduce((s, e, i) => {
     const p = plan.steps[i].provider;
     return s + ((p === 'chainrails' || p === 'nearintents') ? e.feeUsd : 0);
   }, 0);
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
-  const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS    / 10000);
+  const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
 
   return {
-    firstStep:  { sequence: 0, provider: firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
+    firstStep: { sequence: 0, provider: firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
     nextAction,
     destAmount: executions[last].amountOut,
     steps: executions.map((e, i) => ({
-      sequence:   i,
+      sequence: i,
       externalId: e.externalId,
-      amountIn:   e.amountIn,
-      amountOut:  e.amountOut,
+      amountIn: e.amountIn,
+      amountOut: e.amountOut,
     })),
     feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd: totalBridgeFee },
   };
@@ -604,11 +604,11 @@ export async function markStepProgress(params: { provider: string; externalId: s
   await prisma.$transaction([
     prisma.routeStep.update({
       where: { id: step.id },
-      data:  { status: 'in_flight' },
+      data: { status: 'in_flight' },
     }),
     prisma.order.update({
       where: { id: step.orderId },
-      data:  { status: 'processing' },
+      data: { status: 'processing' },
     }),
   ]);
 
@@ -707,6 +707,13 @@ export async function syncOrder(orderId: string) {
         } else if (intent.intent_status === 'FAILED') {
           await markStepFailed({ provider: 'chainrails', externalId: step.externalId });
         }
+      } else if (step.provider === 'direct' && step.externalId) {
+        console.log(`[sync] checking on-chain for direct step ${step.id} (dest: ${step.depositAddress})`);
+        const confirmedAmount = await checkOnChainDirect(step as any);
+        if (confirmedAmount != null) {
+          console.log(`[sync] direct payment confirmed on-chain: ${confirmedAmount} USDC`);
+          await markStepDone({ provider: 'direct', externalId: step.externalId, amountOut: confirmedAmount });
+        }
       }
     } catch (err: any) {
       console.warn(`[sync] failed to sync step ${step.id} (${step.provider}):`, err.message);
@@ -733,4 +740,66 @@ export async function syncAllOpenOrders() {
       console.error(`[sync] failed for order ${order.id}:`, err.message);
     }
   }
+}
+
+async function checkOnChainDirect(step: { toAsset: string; depositAddress: string; amountIn: number }): Promise<number | null> {
+  // v1: Only USDC on Base is supported for direct polling
+  if (step.toAsset !== 'crypto:BASE:USDC') return null;
+  const merchantAddress = step.depositAddress;
+  if (!merchantAddress) return null;
+
+  const expectedAmount = step.amountIn;
+  if (!expectedAmount) return null;
+
+  try {
+    // USDC on Base has 6 decimals
+    const expectedSmallest = Math.floor(expectedAmount * 1_000_000);
+    const amountHex = '0x' + expectedSmallest.toString(16).padStart(64, '0');
+    const merchantHex = '0x' + merchantAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+
+    const rpc = 'https://mainnet.base.org';
+
+    // Get current block to look back
+    const blockRes = await fetch(rpc, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] })
+    });
+    const blockData = await blockRes.json();
+    const currentBlock = parseInt(blockData.result, 16);
+    const fromBlock = '0x' + (currentBlock - 500).toString(16); // Look back ~500 blocks
+
+    const body = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'eth_getLogs',
+      params: [{
+        address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+        topics: [
+          '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', // Transfer(address,address,uint256)
+          null, // from (any)
+          merchantHex, // to (merchant)
+        ],
+        fromBlock,
+        toBlock: 'latest'
+      }]
+    };
+
+    const res = await fetch(rpc, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    const logs = data.result || [];
+
+    // Find a log where the data (amount) matches our expected amount
+    // Note: some ERC20s put amount in topics, but USDC puts it in data.
+    const match = logs.find((l: any) => l.data.toLowerCase() === amountHex.toLowerCase());
+    if (match) return expectedAmount;
+  } catch (err: any) {
+    console.warn(`[checkOnChainDirect] RPC call failed:`, err.message);
+  }
+
+  return null;
 }

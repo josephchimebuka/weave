@@ -323,7 +323,12 @@ export async function sendMerchantPaymentNotification(orderId: string) {
     }
 
     const m = order.merchant;
-    const amountStr = `${Math.round(order.destAmount || 0)} ${order.destAssetKey.split(':').pop()}`;
+    const isCrypto = order.destAssetKey.startsWith('crypto:');
+    const amount = order.destAmount || 0;
+    const symbol = order.destAssetKey.split(':').pop();
+    const amountStr = isCrypto 
+      ? `${amount.toFixed(4)} ${symbol}` 
+      : `${Math.round(amount).toLocaleString()} ${symbol}`;
     const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
 
     const { data, error } = await resend.emails.send({
