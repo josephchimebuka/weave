@@ -567,13 +567,14 @@ export default function CheckoutPage() {
                        <input
                          type="text"
                          value={resolvingName ? '' : bankAccountName}
-                         onChange={(e) => { setBankAccountName(e.target.value); setResolutionError(null); }}
-                         placeholder={resolvingName ? 'Resolving…' : 'Auto-filled after account number entry'}
-                         readOnly={resolvingName}
-                         className={`w-full border rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none transition-colors ${
+                         readOnly
+                         placeholder={resolvingName ? 'Resolving…' : 'Auto-filled when account number is entered'}
+                         className={`w-full border rounded-xl px-4 py-3 text-[14px] focus:outline-none transition-colors cursor-default select-none ${
                            resolvingName
-                             ? 'bg-cream-deep/30 border-hair-soft text-ink-muted animate-pulse cursor-wait'
-                             : 'bg-cream-deep/50 border-hair-soft focus:border-forest/40'
+                             ? 'bg-cream-deep/30 border-hair-soft text-ink-muted animate-pulse'
+                             : bankAccountName
+                             ? 'bg-forest/5 border-forest/20 text-forest-deep font-medium'
+                             : 'bg-cream-deep/30 border-hair-soft text-ink-muted'
                          }`}
                        />
                        {resolutionError && (
