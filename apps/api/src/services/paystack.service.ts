@@ -265,12 +265,14 @@ export class PaystackService {
    * Fetches the list of settlements for a specific subaccount.
    */
   async getSettlements(subaccountCode: string): Promise<any[]> {
-    const res = await fetch(`${BASE}/settlement?subaccount=${subaccountCode}`, {
-      headers: getHeaders(),
-    });
+    const res  = await fetch(`${BASE}/settlement?perPage=100`, { headers: getHeaders() });
     const body = await res.json();
     if (!res.ok) throw new Error(`Paystack /settlement error: ${body.message || res.statusText}`);
-    return body.data;
+    // Paystack's ?subaccount= filter expects a numeric ID, not the code, so we filter
+    // client-side: keep only settlements attributed to this merchant's subaccount.
+    return (body.data as any[]).filter(
+      (s) => s.subaccount?.subaccount_code === subaccountCode
+    );
   }
 }
 
