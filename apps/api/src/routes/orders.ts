@@ -49,12 +49,17 @@ interface CreateOrderBody {
 // POST /api/v1/orders — direction-agnostic order creation.
 router.post('/', requireAuth, async (req, res) => {
   const body = req.body as CreateOrderBody;
-  if (!body?.source || !body?.amount) {
+  const amount = Number(body?.amount);
+
+  if (!body?.source || body?.amount === undefined) {
     return res.status(400).json({ success: false, error: 'Missing source, amount' });
   }
-  if (!Number.isFinite(body.amount) || body.amount <= 0) {
+  if (!Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({ success: false, error: 'Invalid amount' });
   }
+  
+  // Re-assign as number to body for downstream usage
+  body.amount = amount;
   if (body.reference && body.reference.length > 100) {
     return res.status(400).json({ success: false, error: 'Reference too long' });
   }
