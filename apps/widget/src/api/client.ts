@@ -19,18 +19,27 @@ function getApiBase() {
   );
 }
 
-async function apiFetch(path: string, publishableKey: string, options?: RequestInit) {
+async function apiFetch(path: string, publishableKey: string, options?: RequestInit, timeoutMs = 15000) {
   const base = getApiBase();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'x-api-key': publishableKey,
     ...(options?.headers as Record<string, string> | undefined),
   };
-  const res  = await fetch(`${base}${path}`, { ...options, headers });
-  if (res.status === 204) return null;
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error ?? 'API error');
-  return json.data;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res  = await fetch(`${base}${path}`, { ...options, headers, signal: controller.signal });
+    if (res.status === 204) return null;
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error ?? 'API error');
+    return json.data;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw new Error('Request timed out — please check your connection');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── Asset key helpers ──────────────────────────────────────────────────────
@@ -136,6 +145,7 @@ export async function createOrder(
     amountIn?:       'source' | 'dest';
     flow?:           Flow;
     refundAddress?:  string;
+    reference?:      string;
   },
 ): Promise<CreateOrderResponse> {
   return apiFetch('/orders', publishableKey, {

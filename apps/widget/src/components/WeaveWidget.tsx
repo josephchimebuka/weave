@@ -956,11 +956,15 @@ function ScreenProcessing({
     if (!orderId) return;
     pollTerminated.current = false;
     let timer: ReturnType<typeof setTimeout>;
+    let failCount = 0;
+    const POLL_BASE = 5000;
+    const POLL_MAX  = 30000;
 
     const tick = async () => {
       if (pollTerminated.current) return;
       try {
         const order = await fetchOrder(apiKey, orderId);
+        failCount = 0;
         const status = String(order.status ?? '').toLowerCase();
         const pcStatus = String(order.paycrestStatus ?? '').toLowerCase();
         if (TERMINAL_OK.has(status)) {
@@ -979,9 +983,10 @@ function ScreenProcessing({
           setStage(1);
         }
       } catch {
-        // swallow transient network errors; keep polling
+        failCount++;
       }
-      timer = setTimeout(tick, 5000);
+      const delay = Math.min(POLL_BASE * Math.pow(2, failCount), POLL_MAX);
+      timer = setTimeout(tick, delay);
     };
     tick();
     return () => {
@@ -2385,6 +2390,15 @@ function WeaveCheckoutInner({
   });
   const depositReq = useRef(0);
   const quoteReq = useRef(0);
+  const pendingOrderRef = useRef<string | null>(null);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
+  useEffect(() => {
+    const up   = () => setIsOnline(true);
+    const down = () => setIsOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+  }, []);
   const [walletToken, setWalletToken] = useState<string>('USDC');
   const [walletBalanceEntry, setWalletBalanceEntry] = useState<Balance | null>(null);
   const [ethUsdPrice, setEthUsdPrice] = useState<number>(3400);
@@ -2609,11 +2623,13 @@ function WeaveCheckoutInner({
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: '' },
       };
+      pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
       const res = await createOrder(apiKey, {
         source,
         amount: targetAmount,
         amountIn: finalAmountIn,
         refundAddress: refundAddr,
+        reference: pendingOrderRef.current,
         dest: merchant.destInstrument ? {
           inline: {
             ...merchant.destInstrument,
@@ -2622,6 +2638,7 @@ function WeaveCheckoutInner({
         } : undefined,
       });
       if (depositReq.current !== myReq) return;
+      pendingOrderRef.current = null;
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
       setDepositMemo(res.nextAction.depositMemo ?? null);
@@ -2734,9 +2751,11 @@ function WeaveCheckoutInner({
           bankAccountName: refundAccount.accountName,
         },
       };
+      pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
       const res = await createOrder(apiKey, {
         source,
         amount: merchant.amount,
+        reference: pendingOrderRef.current,
         dest: merchant.destInstrument ? {
           inline: {
             ...merchant.destInstrument,
@@ -2745,6 +2764,7 @@ function WeaveCheckoutInner({
         } : undefined,
         amountIn: merchant.destAssetKey?.startsWith('fiat:') ? 'dest' : undefined,
       });
+      pendingOrderRef.current = null;
       setOrderId(res.order.id);
       setBankDetails(res.nextAction.bankDetails ?? null);
       setPaystackPopupDetails(res.nextAction.paystackPopupDetails ?? null);
@@ -2789,11 +2809,13 @@ function WeaveCheckoutInner({
             walletAddress: isWalletFlow ? wagmiAddress! : userAddress,
           },
         };
+        pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
         const res = await createOrder(apiKey, {
           source,
           amount: merchant.amount,
           amountIn: 'dest',
           flow: isWalletFlow ? 'self' : undefined,
+          reference: pendingOrderRef.current,
           dest: merchant.destInstrument ? {
             inline: {
               ...merchant.destInstrument,
@@ -2801,6 +2823,7 @@ function WeaveCheckoutInner({
             }
           } : undefined,
         });
+        pendingOrderRef.current = null;
         activeOrderId = res.order.id;
         activeDepositAddr = res.nextAction.depositAddress ?? null;
         activeSourceAmt = res.order.sourceAmount;
@@ -2882,6 +2905,7 @@ function WeaveCheckoutInner({
   const isOnramp = direction === 'onramp';
 
   const retry = (target: string) => {
+    pendingOrderRef.current = null;
     setOrderId(null);
     setApiError(null);
     setBankDetails(null);
@@ -2951,6 +2975,19 @@ function WeaveCheckoutInner({
           setScreen(backTarget);
         }}
       />
+      {!isOnline && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 16px',
+          background: WEAVE.warnSoft,
+          color: WEAVE.warn,
+          fontSize: 12,
+          fontWeight: 500,
+        }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 6l5.5 5.5M17 6l-5.5 5.5M12 20v.01"/><path d="M5 10l-4-4M23 2L1 22"/></svg>
+          No connection — your payment is safe, reconnecting…
+        </div>
+      )}
       <div key={screen} style={{ animation: 'wfade 0.25s ease' }}>
         {body}
       </div>

@@ -8,6 +8,7 @@ export default function AutoRefresh({ interval = 15000, onRefresh }: { interval?
 
   useEffect(() => {
     const timer = setInterval(() => {
+      if (!navigator.onLine) return;
       if (onRefresh) {
         onRefresh();
       } else {
