@@ -38,7 +38,7 @@ export function ClientLayout({ children, merchantName }: { children: React.React
             <Link href="/auth/login" className="text-[13px] text-ink-muted hover:text-forest transition-colors">Sign in →</Link>
           </div>
         </header>
-        <main className="max-w-5xl mx-auto px-6 md:px-10 py-10">
+        <main className="max-w-screen mx-auto px-6 md:px-6 py-6">
           {children}
         </main>
       </div>

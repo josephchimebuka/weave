@@ -2,144 +2,120 @@
 
 import { useState } from 'react';
 import {
-  FileText, Code, Globe, Zap, Shield, Bell, Layers, Terminal,
-  Check, Copy, ChevronDown, Network, GitBranch,
+  BookOpen, Info, Layout, Cpu, Bell, Globe, Shield,
+  MessageSquare, Zap, Network, GitBranch, Terminal,
+  Check, Copy, ChevronDown, KeyRound, Play,
+  AlertTriangle, FlaskConical, Lock, ArrowRight,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 
-type DocTab = 'html' | 'react' | 'nextjs' | 'api';
+const WeaveCheckout = dynamic(
+  () => import('@weave/widget').then(m => m.WeaveCheckout),
+  { ssr: false }
+);
+
+type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'webhooks';
+type CodeTab  = 'html' | 'react' | 'nextjs';
 
 export default function DocsPage() {
-  const [activeTab, setActiveTab] = useState<DocTab>('html');
-  const [openEndpoint, setOpenEndpoint] = useState<string | null>(null);
+  const [activePage, setActivePage] = useState<DocPage>('introduction');
+  const [copied, setCopied] = useState<string | null>(null);
 
-  const scrollToIntegration = (tab: DocTab) => {
-    setActiveTab(tab);
-    document.getElementById('widget-integration')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  function copy(id: string, text: string) {
+    navigator.clipboard.writeText(text);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
+  }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-14 pb-24">
-
-      {/* Hero */}
-      <div className="fade-up pt-4">
-        <div className="inline-flex items-center gap-2 text-[12px] font-semibold text-forest bg-forest/8 px-3 py-1.5 rounded-full mb-5 border border-forest/15">
-          <FileText size={11} /> Integration Guide
-        </div>
-        <h1 className="font-display text-[48px] font-semibold text-ink tracking-tight leading-tight">
-          Accept any currency,<br />settle anywhere.
-        </h1>
-        <p className="text-ink-muted text-[17px] mt-4 max-w-2xl leading-relaxed">
-          Weave lets your customers pay in crypto or fiat. You receive NGN to your bank account or USDC to a wallet — no manual conversion required.
-        </p>
-      </div>
-
-      {/* Quick-start cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 fade-up" style={{ animationDelay: '80ms' }}>
-        <DocCard icon={<Zap className="text-forest" size={18} />} title="2-Minute Setup" description="One script tag. No build step required." onClick={() => scrollToIntegration('html')} />
-        <DocCard icon={<Layers className="text-forest" size={18} />} title="React + Next.js" description="First-class component with full TypeScript." onClick={() => scrollToIntegration('nextjs')} />
-        <DocCard icon={<Terminal className="text-forest" size={18} />} title="REST API" description="Server-side orders and programmatic control." onClick={() => scrollToIntegration('api')} />
-        <DocCard icon={<Network className="text-forest" size={18} />} title="Payment Corridors" description="ChainRails, NEAR Intents, Paycrest, Paystack." onClick={() => document.getElementById('payment-corridors')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} />
-      </div>
-
-      {/* Settlement note */}
-      <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed fade-up" style={{ animationDelay: '120ms' }}>
-        <strong>Settlement times:</strong> NGN bank payments via Paystack settle <strong>T+1 business day</strong>. Crypto-to-fiat settlements (customer pays crypto → you receive NGN) settle in <strong>30 s – 2 min</strong> via Paycrest. Crypto wallet payouts (USDC/USDT) are near-instant.
-      </div>
-
-      {/* Asset Key primer */}
-      <div className="bg-cream-soft border border-hair-soft rounded-2xl px-5 py-4 fade-up" style={{ animationDelay: '140ms' }}>
-        <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-widest mb-3">Asset Key Format</p>
-        <p className="text-[13.5px] text-ink-muted mb-4 leading-relaxed">
-          Every asset in Weave uses a canonical <code className="bg-cream-deep px-1.5 py-0.5 rounded text-forest-deep font-mono text-[12px]">crypto:CHAIN:TOKEN</code> or <code className="bg-cream-deep px-1.5 py-0.5 rounded text-forest-deep font-mono text-[12px]">fiat:CCY</code> identifier. Chain and token are always uppercase.
-        </p>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-y-2 gap-x-4">
-          {[
-            ['fiat:NGN',         'Nigerian Naira'],
-            ['crypto:BASE:USDC', 'USDC on Base'],
-            ['crypto:ETH:USDC',  'USDC on Ethereum'],
-            ['crypto:ETH:ETH',   'Ether on Ethereum'],
-            ['crypto:ARB:USDC',  'USDC on Arbitrum'],
-            ['crypto:SOL:SOL',   'SOL on Solana'],
-          ].map(([key, label]) => (
-            <div key={key} className="flex items-center gap-2">
-              <code className="text-[11.5px] font-mono text-forest-deep bg-cream-deep px-2 py-0.5 rounded shrink-0">{key}</code>
-              <span className="text-[11.5px] text-ink-muted">{label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Widget Integration tabs */}
-      <section id="widget-integration" className="space-y-6 fade-up" style={{ animationDelay: '160ms' }}>
-        <h2 className="font-display text-[28px] font-semibold text-ink">Widget Integration</h2>
-
-        <div className="flex items-center gap-1 p-1 bg-cream-deep/50 rounded-2xl border border-hair-soft w-fit overflow-x-auto">
-          {(['html', 'react', 'nextjs', 'api'] as DocTab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-5 py-2.5 rounded-xl text-[13.5px] font-medium transition-all ${
-                activeTab === tab
-                  ? 'bg-cream-soft text-forest-deep shadow-leaf'
-                  : 'text-ink-muted hover:text-ink-soft'
-              }`}
-            >
-              {tab === 'html' ? 'HTML / JS' : tab === 'api' ? 'REST API' : tab === 'nextjs' ? 'Next.js' : 'React'}
-            </button>
-          ))}
+    <div className="flex min-h-[calc(100vh-120px)] bg-cream-soft rounded-[32px] overflow-hidden border border-hair-soft shadow-leaf-lg mb-12">
+      {/* ── Sidebar ─────────────────────────────────────────────────────────── */}
+      <aside className="hidden md:flex w-[220px] border-r border-hair-soft bg-cream-soft flex-col shrink-0">
+        <div className="p-6 border-b border-hair-soft">
+          <div className="flex items-center gap-2 mb-1">
+            <BookOpen size={13} strokeWidth={2} className="text-forest-deep" />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-ink-faint">Docs</span>
+          </div>
+          <h2 className="font-display text-[15px] font-semibold text-ink">Weave v1.0</h2>
         </div>
 
-        <div className="bg-ink rounded-[32px] p-8 md:p-10 text-cream-soft overflow-hidden shadow-leaf-lg relative group">
-          <div className="absolute top-0 right-0 w-80 h-80 bg-forest/10 blur-[120px] pointer-events-none group-hover:bg-forest/15 transition-all" />
-          <div className="relative z-10 space-y-6">
+        <nav className="flex-1 p-3 overflow-y-auto">
+          <NavGroup label="Guides">
+            <NavItem icon={<Info size={14} />}    label="Introduction"       active={activePage === 'introduction'} onClick={() => setActivePage('introduction')} />
+            <NavItem icon={<Layout size={14} />}  label="Widget Playground"  active={activePage === 'widget'}       onClick={() => setActivePage('widget')} />
+          </NavGroup>
+          <NavGroup label="Reference">
+            <NavItem icon={<Cpu size={14} />}        label="API Reference"    active={activePage === 'api'}        onClick={() => setActivePage('api')} />
+            <NavItem icon={<Terminal size={14} />}   label="API Playground"   active={activePage === 'playground'} onClick={() => setActivePage('playground')} />
+            <NavItem icon={<Bell size={14} />}       label="Webhooks"         active={activePage === 'webhooks'}   onClick={() => setActivePage('webhooks')} />
+          </NavGroup>
+          <NavGroup label="More">
+            <NavItem icon={<Shield size={14} />}  label="Security"           onClick={() => setActivePage('introduction')} />
+            <NavItem icon={<MessageSquare size={14} />} label="Support"      onClick={() => {}} />
+          </NavGroup>
+        </nav>
 
-            {activeTab === 'html' && (
-              <div className="fade-in space-y-5">
-                <SectionLabel icon={<Globe size={13} />} label="HTML / Vanilla JS" />
-                <p className="text-[14.5px] text-cream-soft/70 leading-relaxed">
-                  Drop two tags into any page. Your publishable key is on the <strong className="text-cream-soft/90">Developer</strong> tab in Settings.
-                </p>
-                <CodeBlock language="html">{`<div id="weave-checkout"></div>
+        <div className="p-4 border-t border-hair-soft">
+          <div className="bg-forest/6 rounded-xl p-3 border border-forest/12">
+            <p className="text-[11px] text-forest-deep leading-snug">
+              Need a custom corridor?{' '}
+              <a href="mailto:support@weave.dev" className="underline underline-offset-2 font-semibold">Contact us</a>
+            </p>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Content ─────────────────────────────────────────────────────────── */}
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-5xl mx-auto px-6 md:px-10 py-10">
+          {activePage === 'introduction' && <IntroductionPage setActivePage={setActivePage} copy={copy} copied={copied} />}
+          {activePage === 'widget'       && <WidgetPlayground />}
+          {activePage === 'api'          && <ApiReferencePage copy={copy} copied={copied} />}
+          {activePage === 'playground'   && <ApiPlayground />}
+          {activePage === 'webhooks'     && <WebhooksPage copy={copy} copied={copied} />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Introduction
+// ─────────────────────────────────────────────────────────────────────────────
+
+function IntroductionPage({ setActivePage, copy, copied }: { setActivePage: (p: DocPage) => void; copy: (id: string, text: string) => void; copied: string | null }) {
+  const [tab, setTab] = useState<CodeTab>('html');
+
+  const SNIPPETS: Record<CodeTab, string> = {
+    html: `<div id="weave-checkout"></div>
 
 <script src="https://unpkg.com/@weave/widget/dist/umd.js"></script>
 <script>
   Weave.mount('#weave-checkout', {
     apiKey:       'pk_live_...',
-    theme:        'organic',      // 'organic' | 'minimal'
-    accentColor:  'forest',       // 'forest' | 'tan' | any hex, e.g. '#0F5D4C'
+    theme:        'organic',
+    accentColor:  '#3D6B50',
     borderRadius: 16,
     merchant: {
       name:        'Acme Store',
       amount:      5000,
       currency:    'NGN',
       description: 'Order #1042',
-      // amountIn: 'dest'  — customer pays whatever crypto covers this exact NGN amount
-      // sourceAssetKey: 'crypto:ETH:USDC'  — lock the payer's asset
-      // destAssetKey:   'fiat:NGN'         — lock the settlement asset
     },
-    onSuccess: (txn) => console.log('Order complete', txn.orderId, txn.status),
+    onSuccess: (txn) => console.log('Paid', txn.orderId),
     onError:   (err) => console.error(err.message),
-    onClose:   ()    => console.log('Widget closed'),
+    onClose:   ()    => console.log('closed'),
   });
-</script>
-
-<!-- Tip: Use Sandbox Keys during development -->
-<!-- pk_test_... orders complete instantly with mock funds -->`}</CodeBlock>
-              </div>
-            )}
-
-            {activeTab === 'react' && (
-              <div className="fade-in space-y-5">
-                <SectionLabel icon={<Code size={13} />} label="React" />
-                <CodeBlock language="bash">{`npm install @weave/widget`}</CodeBlock>
-                <CodeBlock language="tsx">{`import { WeaveCheckout } from '@weave/widget';
+</script>`,
+    react: `import { WeaveCheckout } from '@weave/widget';
+// npm install @weave/widget
 
 export default function CheckoutPage() {
   return (
     <WeaveCheckout
       apiKey="pk_live_..."
-      theme="organic"         // 'organic' | 'minimal'
-      accentColor="forest"    // 'forest' | 'tan' | any hex colour
+      theme="organic"
+      accentColor="#3D6B50"
       borderRadius={16}
       merchant={{
         name:        'Acme Store',
@@ -149,21 +125,12 @@ export default function CheckoutPage() {
       }}
       onSuccess={(txn) => fulfillOrder(txn.orderId)}
       onError={(err)   => showError(err.message)}
-      onClose={()      => setShowCheckout(false)}
+      onClose={()      => setOpen(false)}
     />
   );
-}`}</CodeBlock>
-              </div>
-            )}
-
-            {activeTab === 'nextjs' && (
-              <div className="fade-in space-y-5">
-                <SectionLabel icon={<Zap size={13} />} label="Next.js (App Router)" />
-                <p className="text-[14.5px] text-cream-soft/70 leading-relaxed">
-                  The widget accesses <code>window</code> and wallet APIs, so it must be a client component or lazy-loaded with <code>ssr: false</code>.
-                </p>
-                <CodeBlock language="tsx">{`'use client';
-
+}`,
+    nextjs: `'use client';
+// The widget uses window + wallet APIs — must be client-only.
 import dynamic from 'next/dynamic';
 
 const WeaveCheckout = dynamic(
@@ -176,34 +143,726 @@ export default function CheckoutPage() {
     <WeaveCheckout
       apiKey="pk_live_..."
       theme="organic"
-      accentColor="forest"
+      accentColor="#3D6B50"
       borderRadius={16}
-      merchant={{
-        name:        'Acme Store',
-        amount:      5000,
-        currency:    'NGN',
-        description: 'Order #1042',
-      }}
-      onSuccess={(txn) => console.log('Paid:', txn.orderId)}
+      merchant={{ name: 'Acme Store', amount: 5000, currency: 'NGN' }}
+      onSuccess={(txn) => console.log('paid', txn.orderId)}
       onError={(err)   => console.error(err.message)}
       onClose={()      => router.back()}
     />
   );
-}`}</CodeBlock>
+}`,
+  };
+
+  return (
+    <div className="space-y-14 fade-up pb-16">
+      {/* Hero */}
+      <header className="space-y-4 pt-2">
+        <div className="inline-flex items-center gap-2 text-[11px] font-bold text-forest bg-forest/8 px-3 py-1.5 rounded-full border border-forest/15 uppercase tracking-widest">
+          <BookOpen size={11} /> Integration Guide
+        </div>
+        <h1 className="font-display text-[44px] font-semibold text-ink tracking-tight leading-[1.05]">
+          Accept any currency,<br />settle anywhere.
+        </h1>
+        <p className="text-[17px] text-ink-muted max-w-2xl leading-relaxed">
+          Weave is a universal payment orchestrator. Customers pay in 30+ chains or fiat;
+          you receive NGN to your bank account or USDC to a wallet — automatically.
+        </p>
+      </header>
+
+      {/* Settlement note */}
+      <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed">
+        <strong>Settlement times:</strong> NGN via Paystack — <strong>T+1 business day</strong>.
+        Crypto-sourced NGN via Paycrest — <strong>30 s – 2 min</strong>.
+        Crypto wallet payouts — <strong>near-instant</strong>.
+      </div>
+
+      {/* Quick-nav cards */}
+      <div className="grid grid-cols-2 gap-4">
+        {[
+          { icon: <Zap size={17} className="text-forest" />, title: '2-min setup', desc: 'One script tag. No build step.', action: () => {} },
+          { icon: <Terminal size={17} className="text-forest" />, title: 'REST API', desc: 'Server-side, programmatic control.', action: () => setActivePage('api') },
+          { icon: <Network size={17} className="text-forest" />, title: 'Corridors', desc: 'ChainRails, NEAR Intents, Paycrest.', action: () => {} },
+          { icon: <Bell size={17} className="text-forest" />, title: 'Webhooks', desc: 'HMAC-signed async notifications.', action: () => setActivePage('webhooks') },
+        ].map(({ icon, title, desc, action }) => (
+          <button key={title} onClick={action} className="group text-left bg-cream-deep/30 hover:bg-cream-deep/60 border border-hair-soft hover:border-forest/25 rounded-[20px] p-5 transition-all">
+            <div className="mb-3">{icon}</div>
+            <p className="font-display text-[15px] font-semibold text-ink group-hover:text-forest-deep transition-colors">{title}</p>
+            <p className="text-[12.5px] text-ink-muted mt-0.5">{desc}</p>
+          </button>
+        ))}
+      </div>
+
+      <div className="rule-dotted" />
+
+      {/* Authentication */}
+      <section className="space-y-5">
+        <SectionHeading icon={<KeyRound size={18} />} title="Authentication" />
+        <p className="text-[14.5px] text-ink-muted leading-relaxed">
+          Every request must include an <IC>x-api-key</IC> header. Two key types exist — use each in the right context.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="bg-cream-soft border border-hair-soft rounded-[20px] p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold bg-forest/10 text-forest-deep px-2 py-0.5 rounded-full uppercase tracking-wider">Public</span>
+              <code className="text-[12px] font-mono text-forest-deep">pk_live_…</code>
+            </div>
+            <p className="text-[13px] text-ink-muted leading-relaxed">Safe to use in browser code and the widget. Used for <strong className="text-ink">quotes</strong> and <strong className="text-ink">order creation</strong>. Never grants read access to your account details.</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[20px] p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold bg-tan/15 text-tan-deep px-2 py-0.5 rounded-full uppercase tracking-wider">Secret</span>
+              <code className="text-[12px] font-mono text-tan-deep">sk_live_…</code>
+            </div>
+            <p className="text-[13px] text-ink-muted leading-relaxed">Server-side only. Never expose in client code, logs, or version control. Shown exactly once after generation — store it immediately.</p>
+          </div>
+        </div>
+        <CodeBlock id="auth-header" copy={copy} copied={copied} lang="bash">
+{`# Publishable key — safe in the browser / widget
+curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:NGN&amount=50" \\
+  -H "x-api-key: pk_live_..."`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Sandbox */}
+      <section className="space-y-5">
+        <SectionHeading icon={<FlaskConical size={18} />} title="Sandbox Mode" />
+        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl px-5 py-4 text-[13.5px] text-amber-900 leading-relaxed">
+          Use <IC>pk_test_…</IC> keys for development. Orders auto-complete instantly with mock amounts — no real funds move.
+        </div>
+        <p className="text-[14.5px] text-ink-muted leading-relaxed">
+          Your sandbox publishable key is on the <strong className="text-ink">Developer</strong> tab in Settings. Sandbox orders appear in your dashboard with a sandbox badge and are excluded from revenue metrics.
+        </p>
+        <div className="bg-cream-soft border border-hair-soft rounded-[20px] overflow-hidden">
+          {[
+            { label: 'Sandbox key prefix',    value: 'pk_test_…'     },
+            { label: 'Orders auto-complete',  value: 'Yes — instant' },
+            { label: 'Real provider calls',   value: 'None'          },
+            { label: 'Emails / webhooks',     value: 'Suppressed'    },
+            { label: 'Revenue metrics',       value: 'Excluded'      },
+          ].map(({ label, value }, i, arr) => (
+            <div key={label} className={`flex justify-between items-center px-5 py-3.5 text-[13px] ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <span className="text-ink-muted">{label}</span>
+              <span className="font-mono font-semibold text-ink text-[12.5px]">{value}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Asset Key format */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Network size={18} />} title="Asset Key Format" />
+        <p className="text-[14.5px] text-ink-muted leading-relaxed">
+          Every asset uses a canonical <IC>crypto:CHAIN:TOKEN</IC> or <IC>fiat:CCY</IC> identifier. Chain and token are always uppercase.
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {[
+            ['fiat:NGN',            'Nigerian Naira'],
+            ['crypto:BASE:USDC',    'USDC on Base'],
+            ['crypto:ETHEREUM:ETH', 'ETH on Ethereum'],
+            ['crypto:ETHEREUM:USDC','USDC on Ethereum'],
+            ['crypto:ARBITRUM:USDC','USDC on Arbitrum'],
+            ['crypto:SOLANA:SOL',   'SOL on Solana'],
+          ].map(([key, label]) => (
+            <div key={key} className="bg-cream-deep/50 border border-hair-soft rounded-xl p-3 space-y-1">
+              <code className="block text-[11.5px] font-mono text-forest-deep font-semibold">{key}</code>
+              <span className="text-[11px] text-ink-muted">{label}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Quick setup */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Zap size={18} />} title="Quick Setup" />
+
+        <div className="flex items-center gap-1 p-1 bg-cream-deep/50 rounded-2xl border border-hair-soft w-fit">
+          {(['html', 'react', 'nextjs'] as CodeTab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-5 py-2 rounded-xl text-[13px] font-medium transition-all ${tab === t ? 'bg-cream-soft text-forest-deep shadow-leaf' : 'text-ink-muted hover:text-ink'}`}
+            >
+              {t === 'html' ? 'HTML / JS' : t === 'react' ? 'React' : 'Next.js'}
+            </button>
+          ))}
+        </div>
+
+        <CodeBlock id="quickstart" copy={copy} copied={copied} lang={tab === 'html' ? 'html' : 'tsx'}>
+          {SNIPPETS[tab]}
+        </CodeBlock>
+
+        {tab === 'nextjs' && (
+          <div className="bg-forest/5 border border-forest/15 rounded-xl px-4 py-3 text-[13px] text-forest-deep leading-relaxed">
+            The widget accesses <code>window</code> and wallet APIs — it must be a client component or lazy-loaded with <code>ssr: false</code>.
+          </div>
+        )}
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Payment corridors summary */}
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={18} />} title="Payment Corridors" />
+        <p className="text-[14.5px] text-ink-muted leading-relaxed">
+          Weave routes automatically. Pass <IC>flow</IC> on <IC>POST /orders</IC> to control the bridge provider.
+        </p>
+        <div className="space-y-3">
+          {[
+            {
+              name: 'Paystack', route: 'fiat:NGN → fiat:NGN', flow: 'external',
+              settle: 'T+1 business day',
+              desc: 'Direct Nigerian bank transfer via Paystack. Customer completes payment through a Paystack-hosted popup.',
+            },
+            {
+              name: 'NEAR Intents', route: 'any chain → crypto:BASE:USDC', flow: 'external',
+              settle: '30 – 90 s',
+              desc: 'Cross-chain swap from 30+ chains. A deposit address is generated; customer sends from any wallet.',
+            },
+            {
+              name: 'ChainRails', route: 'EVM → crypto:BASE:USDC', flow: 'self',
+              settle: '~60 s',
+              desc: 'EVM connected-wallet flow. Customer signs from their wallet — no deposit address copy-paste. Lower fee than NEAR Intents.',
+            },
+            {
+              name: 'Paycrest', route: 'crypto:BASE:USDC ↔ fiat:NGN', flow: 'automatic',
+              settle: '30 s – 2 min',
+              desc: 'Automatic terminal settlement hop whenever a route touches NGN. Also handles onramps (NGN → USDC).',
+            },
+          ].map(({ name, route, flow, settle, desc }) => (
+            <div key={name} className="bg-cream-soft border border-hair-soft rounded-[20px] p-5 space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="font-display font-semibold text-[15px] text-ink">{name}</span>
+                <code className="text-[11px] font-mono bg-cream-deep px-2 py-0.5 rounded-lg text-forest-deep">{route}</code>
               </div>
-            )}
+              <div className="flex flex-wrap gap-4 text-[12px] text-ink-muted">
+                <span><strong className="text-ink">flow:</strong> <code className="font-mono text-[11.5px]">{flow}</code></span>
+                <span><strong className="text-ink">Settles in:</strong> {settle}</span>
+              </div>
+              <p className="text-[13px] text-ink-muted leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
 
-            {activeTab === 'api' && (
-              <div className="fade-in space-y-6">
-                <SectionLabel icon={<Terminal size={13} />} label="REST API — Core Workflow" />
-                <p className="text-[14.5px] text-cream-soft/70 leading-relaxed">
-                  Use your <strong className="text-cream-soft/90">API key</strong> (<code>x-api-key</code>) for server-side requests. Never expose secret keys in client code.
-                </p>
+      <div className="rule-dotted" />
 
-                <p className="text-[11px] font-semibold text-cream-soft/40 uppercase tracking-widest">Step 1 — Get a Quote</p>
-                <CodeBlock language="bash">{`curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:ETH:USDC&to=fiat:NGN&amount=50" \\
-  -H "x-api-key: pk_live_..."`}</CodeBlock>
-                <CodeBlock language="json">{`{
+      {/* Security callout */}
+      <section className="bg-forest/5 border border-forest/15 rounded-[24px] p-7 space-y-4">
+        <div className="flex items-center gap-3">
+          <Shield size={20} className="text-forest" strokeWidth={1.75} />
+          <h3 className="font-display text-[20px] font-semibold text-forest-deep">Security Model</h3>
+        </div>
+        <div className="space-y-3 text-[13.5px] text-forest-deep/80 leading-relaxed">
+          <p><strong className="text-forest-deep">API keys are scoped.</strong> Publishable keys (<IC>pk_</IC>) are browser-safe. Secret keys (<IC>sk_</IC>) must never leave your server.</p>
+          <p><strong className="text-forest-deep">All webhooks are signature-verified.</strong> Incoming provider webhooks (Paystack, Paycrest, ChainRails) are HMAC-SHA256 verified before any state is mutated. Outgoing merchant webhooks are also signed.</p>
+          <p><strong className="text-forest-deep">Idempotent processing.</strong> Every webhook event is deduplicated by <IC>{'(source, event, externalId)'}</IC> — duplicate deliveries are safely ignored.</p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Widget Playground
+// ─────────────────────────────────────────────────────────────────────────────
+
+function WidgetPlayground() {
+  const [theme,   setTheme]   = useState<'organic' | 'minimal'>('organic');
+  const [accent,  setAccent]  = useState('#3D6B50');
+  const [radius,  setRadius]  = useState(16);
+  const [amount,  setAmount]  = useState(5000);
+  const [currency,setCurrency]= useState('NGN');
+  const [amountIn,setAmountIn]= useState<'source' | 'dest'>('dest');
+  const [key,     setKey]     = useState(0);
+  const [copied,  setCopied]  = useState(false);
+
+  const snippet = `<WeaveCheckout
+  apiKey="pk_test_..."
+  theme="${theme}"
+  accentColor="${accent}"
+  borderRadius={${radius}}
+  merchant={{
+    name: "My Store",
+    amount: ${amount},
+    currency: "${currency}",
+    amountIn: "${amountIn}"
+  }}
+/>`;
+
+  function copy() {
+    navigator.clipboard.writeText(snippet);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="space-y-8 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Widget Playground</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">Configure the widget in real-time and copy the generated code.</p>
+      </header>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Controls */}
+        <div className="lg:col-span-5 space-y-4">
+          <div className="bg-cream-deep/30 border border-hair-soft rounded-[24px] p-6 space-y-6">
+            <div>
+              <Label>Theme</Label>
+              <div className="mt-2 flex gap-2">
+                {(['organic', 'minimal'] as const).map(t => (
+                  <button
+                    key={t}
+                    onClick={() => setTheme(t)}
+                    className={`flex-1 py-2.5 rounded-xl text-[13px] font-medium border transition-all ${theme === t ? 'bg-forest text-cream-soft border-forest shadow-leaf' : 'bg-cream-soft text-ink-muted border-hair-soft hover:border-hair'}`}
+                  >
+                    {t.charAt(0).toUpperCase() + t.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-end mb-2">
+                <Label>Corner Radius</Label>
+                <span className="text-[12px] font-mono text-ink-muted">{radius}px</span>
+              </div>
+              <input
+                type="range" min="0" max="32" step="4" value={radius}
+                onChange={(e) => setRadius(parseInt(e.target.value))}
+                className="organic-range w-full"
+              />
+              <div className="flex justify-between text-[11px] text-ink-faint mt-1">
+                <span>Sharp</span><span>Soft</span>
+              </div>
+            </div>
+
+            <div>
+              <Label>Accent Color</Label>
+              <div className="mt-2 flex gap-2 flex-wrap">
+                {[['#3D6B50','bg-forest'],['#B8935A','bg-tan'],['#1C1B17','bg-ink'],['#7B6B4E','bg-tan-deep']].map(([hex,cls]) => (
+                  <button
+                    key={hex}
+                    onClick={() => setAccent(hex)}
+                    className={`w-8 h-8 rounded-full ${cls} transition-all ${accent === hex ? 'ring-2 ring-offset-2 ring-offset-cream-soft ring-forest scale-110' : 'hover:scale-110'}`}
+                    aria-label={hex}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-hair-soft space-y-4">
+              <Label>Payment</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span className="text-[10px] font-bold text-ink-faint uppercase tracking-widest block mb-1.5">Amount</span>
+                  <input
+                    type="number" value={amount} onChange={(e) => setAmount(parseFloat(e.target.value))}
+                    className="w-full bg-cream-soft border border-hair-soft rounded-xl px-3 py-2.5 text-[14px] focus:outline-none focus:border-forest/40"
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-ink-faint uppercase tracking-widest block mb-1.5">Currency</span>
+                  <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full bg-cream-soft border border-hair-soft rounded-xl px-3 py-2.5 text-[14px] focus:outline-none focus:border-forest/40">
+                    <option value="NGN">NGN</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-ink-faint uppercase tracking-widest block mb-1.5">Amount Logic</span>
+                <div className="flex gap-2">
+                  <button onClick={() => setAmountIn('dest')} className={`flex-1 py-2 rounded-xl text-[12px] font-medium border transition-all ${amountIn === 'dest' ? 'bg-forest/8 text-forest-deep border-forest/25' : 'bg-cream-soft text-ink-muted border-hair-soft'}`}>
+                    Merchant gets exact
+                  </button>
+                  <button onClick={() => setAmountIn('source')} className={`flex-1 py-2 rounded-xl text-[12px] font-medium border transition-all ${amountIn === 'source' ? 'bg-forest/8 text-forest-deep border-forest/25' : 'bg-cream-soft text-ink-muted border-hair-soft'}`}>
+                    Customer pays exact
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setKey(k => k + 1)}
+              className="w-full py-3 bg-forest text-cream-soft rounded-2xl font-semibold text-[14px] hover:bg-forest-deep transition-all shadow-leaf flex items-center justify-center gap-2"
+            >
+              <Play size={14} fill="currentColor" /> Update Preview
+            </button>
+          </div>
+
+          {/* Generated code */}
+          <div className="bg-ink rounded-[24px] overflow-hidden border border-cream-soft/5 shadow-leaf-lg">
+            <div className="px-5 py-3 border-b border-cream-soft/5 flex items-center justify-between">
+              <span className="text-[10px] font-bold text-cream-soft/30 uppercase tracking-[0.2em]">Generated Code</span>
+              <button onClick={copy} className="flex items-center gap-1.5 text-[11px] text-cream-soft/40 hover:text-cream-soft transition-colors">
+                {copied ? <><Check size={12} className="text-forest-light" /> Copied</> : <><Copy size={12} /> Copy</>}
+              </button>
+            </div>
+            <pre className="p-5 text-[12px] font-mono text-tan-soft overflow-x-auto leading-relaxed">
+              <code>{snippet}</code>
+            </pre>
+          </div>
+        </div>
+
+        {/* Preview */}
+        <div className="lg:col-span-7 flex justify-center sticky top-6">
+          <div className="w-full max-w-sm p-8 rounded-[32px] bg-cream-deep/40 border border-hair-soft shadow-leaf-lg">
+            <p className="text-[10px] font-bold text-ink-faint uppercase tracking-widest mb-5 text-center">Live Preview</p>
+            <div style={{ pointerEvents: 'none' }}>
+              <WeaveCheckout
+                key={key}
+                apiKey="pk_test_docs_playground"
+                theme={theme}
+                accentColor={accent}
+                borderRadius={radius}
+                merchant={{ name: 'Playground Store', amount, currency: currency as any, amountIn }}
+                onSuccess={() => {}} onError={() => {}} onClose={() => {}}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API Playground
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PlaygroundParam = { key: string; label: string; placeholder: string; required: boolean; inBody?: boolean };
+type PlaygroundEndpoint = {
+  method: 'GET' | 'POST';
+  path: string;
+  desc: string;
+  params: PlaygroundParam[];
+};
+
+const PLAYGROUND_ENDPOINTS: PlaygroundEndpoint[] = [
+  {
+    method: 'GET', path: '/quotes',
+    desc: 'Get a live exchange rate and fee breakdown for any asset pair.',
+    params: [
+      { key: 'from',     label: 'From',      placeholder: 'crypto:BASE:USDC', required: true  },
+      { key: 'to',       label: 'To',        placeholder: 'fiat:NGN',         required: true  },
+      { key: 'amount',   label: 'Amount',    placeholder: '50',               required: true  },
+      { key: 'amountIn', label: 'Amount In', placeholder: 'source',           required: false },
+    ],
+  },
+  {
+    method: 'POST', path: '/orders',
+    desc: 'Create a payment order. Returns nextAction for the widget.',
+    params: [
+      { key: 'source.inline.kind',         label: 'Source Kind',    placeholder: 'crypto_wallet',        required: true,  inBody: true },
+      { key: 'source.inline.assetKey',     label: 'Source Asset',   placeholder: 'crypto:BASE:USDC',    required: true,  inBody: true },
+      { key: 'source.inline.walletAddress',label: 'Wallet Address', placeholder: '0xYourWallet',         required: false, inBody: true },
+      { key: 'amount',                     label: 'Amount',         placeholder: '50',                   required: true,  inBody: true },
+      { key: 'flow',                       label: 'Flow',           placeholder: 'external',             required: false, inBody: true },
+    ],
+  },
+  {
+    method: 'GET', path: '/orders/:id',
+    desc: 'Fetch a single order status. Triggers a live sync from the active provider.',
+    params: [
+      { key: ':id', label: 'Order ID', placeholder: 'ord_abc123', required: true },
+    ],
+  },
+  {
+    method: 'GET', path: '/orders',
+    desc: 'List your last 50 orders, newest first.',
+    params: [],
+  },
+  {
+    method: 'GET', path: '/institutions',
+    desc: 'List supported bank institutions for a currency.',
+    params: [
+      { key: 'currency', label: 'Currency', placeholder: 'NGN', required: true },
+    ],
+  },
+];
+
+function ApiPlayground() {
+  const [apiKey, setApiKey]           = useState('');
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [values, setValues]           = useState<Record<string, string>>({});
+  const [loading, setLoading]         = useState(false);
+  const [result, setResult]           = useState<{ status: number; ok: boolean; data: unknown } | null>(null);
+  const [error, setError]             = useState<string | null>(null);
+
+  const endpoint = PLAYGROUND_ENDPOINTS[selectedIdx];
+
+  function setValue(key: string, val: string) {
+    setValues(v => ({ ...v, [key]: val }));
+    setResult(null);
+    setError(null);
+  }
+
+  function selectEndpoint(idx: number) {
+    setSelectedIdx(idx);
+    setValues({});
+    setResult(null);
+    setError(null);
+  }
+
+  async function send() {
+    if (!apiKey.trim()) { setError('Enter an API key (pk_test_… or pk_live_…) to send requests.'); return; }
+    setLoading(true);
+    setResult(null);
+    setError(null);
+
+    try {
+      // Build path (replace :param segments)
+      let resolvedPath = endpoint.path;
+      for (const p of endpoint.params) {
+        if (p.key.startsWith(':')) {
+          resolvedPath = resolvedPath.replace(p.key, values[p.key] ?? '');
+        }
+      }
+
+      // Separate query params from body params
+      const query: Record<string, string> = {};
+      const bodyObj: Record<string, unknown> = {};
+
+      for (const p of endpoint.params) {
+        if (p.key.startsWith(':')) continue;
+        const val = values[p.key] ?? '';
+        if (!val) continue;
+        if (p.inBody) {
+          // Nested key support: "source.inline.kind" → { source: { inline: { kind: val } } }
+          const parts = p.key.split('.');
+          let node: Record<string, unknown> = bodyObj;
+          for (let i = 0; i < parts.length - 1; i++) {
+            if (!node[parts[i]]) node[parts[i]] = {};
+            node = node[parts[i]] as Record<string, unknown>;
+          }
+          node[parts[parts.length - 1]] = val;
+        } else {
+          query[p.key] = val;
+        }
+      }
+
+      const res = await fetch('/api/playground', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          method: endpoint.method,
+          path: resolvedPath,
+          query: Object.keys(query).length ? query : undefined,
+          body: endpoint.method === 'POST' && Object.keys(bodyObj).length ? bodyObj : undefined,
+          apiKey: apiKey.trim(),
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) { setError(json.error ?? 'Proxy error'); return; }
+      setResult(json);
+    } catch (e: any) {
+      setError(e.message ?? 'Network error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-8 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">API Playground</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          Send live requests against the Weave API. Use <code className="bg-cream-deep px-1.5 py-0.5 rounded-md font-mono text-[12px] text-forest-deep">pk_test_…</code> to test without moving real funds.
+        </p>
+      </header>
+
+      {/* API key bar */}
+      <div className="flex items-center gap-3 bg-cream-deep/40 border border-hair-soft rounded-2xl px-4 py-3">
+        <KeyRound size={15} className="text-ink-muted shrink-0" strokeWidth={1.9} />
+        <input
+          type="password"
+          placeholder="pk_test_… or pk_live_…"
+          value={apiKey}
+          onChange={(e) => { setApiKey(e.target.value); setError(null); }}
+          className="flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none font-mono"
+          autoComplete="off"
+        />
+        {apiKey && (
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
+            apiKey.startsWith('pk_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
+          }`}>
+            {apiKey.startsWith('pk_test_') ? 'Sandbox' : 'Live'}
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+        {/* Endpoint list */}
+        <div className="md:col-span-4 space-y-1.5">
+          <p className="text-[10px] font-bold text-ink-faint uppercase tracking-widest px-1 mb-2">Endpoints</p>
+          {PLAYGROUND_ENDPOINTS.map((ep, i) => (
+            <button
+              key={`${ep.method} ${ep.path}`}
+              onClick={() => selectEndpoint(i)}
+              className={`w-full text-left px-4 py-3 rounded-2xl border transition-all ${
+                selectedIdx === i
+                  ? 'bg-cream-soft border-hair shadow-leaf'
+                  : 'bg-cream-soft/50 border-hair-soft hover:border-hair hover:bg-cream-soft/80'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <MethodBadge method={ep.method} />
+                <code className="text-[12px] font-mono font-semibold text-ink truncate">{ep.path}</code>
+              </div>
+              <p className="text-[11.5px] text-ink-muted leading-snug line-clamp-1">{ep.desc}</p>
+            </button>
+          ))}
+        </div>
+
+        {/* Request + response */}
+        <div className="md:col-span-8 space-y-5">
+          {/* Request builder */}
+          <div className="bg-cream-soft border border-hair-soft rounded-[24px] overflow-hidden shadow-leaf">
+            <div className="px-5 py-4 border-b border-hair-soft bg-cream-deep/20 flex items-center gap-3">
+              <MethodBadge method={endpoint.method} />
+              <code className="font-mono text-[13px] font-semibold text-ink flex-1">{endpoint.path}</code>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-[13px] text-ink-muted leading-relaxed">{endpoint.desc}</p>
+
+              {endpoint.params.length > 0 ? (
+                <div className="space-y-3">
+                  <p className="text-[10px] font-bold text-ink-soft uppercase tracking-widest">
+                    {endpoint.method === 'POST' ? 'Request Body' : 'Query Parameters'}
+                  </p>
+                  {endpoint.params.map((p) => (
+                    <div key={p.key} className="flex items-center gap-3">
+                      <label className="text-[12px] font-mono text-ink-soft w-36 shrink-0">
+                        {p.label}
+                        {p.required && <span className="text-tan-deep ml-1">*</span>}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={p.placeholder}
+                        value={values[p.key] ?? ''}
+                        onChange={(e) => setValue(p.key, e.target.value)}
+                        className="flex-1 bg-cream-deep/50 border border-hair-soft rounded-xl px-3 py-2 text-[13px] font-mono text-ink focus:outline-none focus:border-forest/40 transition-colors placeholder:text-ink-faint"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[13px] text-ink-faint italic">No parameters required.</p>
+              )}
+
+              {error && (
+                <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-[12.5px] text-red-700 flex items-start gap-2">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  {error}
+                </div>
+              )}
+
+              <button
+                onClick={send}
+                disabled={loading}
+                className="w-full py-3 bg-forest text-cream-soft rounded-2xl font-semibold text-[14px] hover:bg-forest-deep transition-all shadow-leaf flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {loading
+                  ? <><div className="w-4 h-4 border-2 border-cream-soft/30 border-t-cream-soft rounded-full animate-spin" /> Sending…</>
+                  : <><Play size={14} fill="currentColor" /> Send Request</>}
+              </button>
+            </div>
+          </div>
+
+          {/* Response */}
+          {result && (
+            <div className="bg-ink rounded-[24px] overflow-hidden shadow-leaf-lg border border-cream-soft/5 fade-up">
+              <div className="px-5 py-3 border-b border-cream-soft/5 flex items-center justify-between">
+                <span className="text-[10px] font-bold text-cream-soft/30 uppercase tracking-[0.18em]">Response</span>
+                <span className={`text-[11px] font-mono font-bold ${result.ok ? 'text-forest-light' : 'text-red-400'}`}>
+                  {result.status} {result.ok ? 'OK' : 'Error'}
+                </span>
+              </div>
+              <pre className="p-5 text-[12.5px] font-mono text-tan-soft overflow-x-auto leading-[1.65] max-h-[480px]">
+                <code>{JSON.stringify(result.data, null, 2)}</code>
+              </pre>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API Reference
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
+  const [open, setOpen] = useState<string | null>(null);
+
+  const toggle = (key: string) => setOpen(o => o === key ? null : key);
+
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">API Reference</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          Base URL: <IC>https://api.paywithweave.com/api/v1</IC><br />
+          Authenticate with <IC>x-api-key: pk_live_…</IC> on every request.
+        </p>
+      </header>
+
+      {/* Widget Props */}
+      <section className="space-y-4">
+        <SectionHeading icon={<Layout size={17} />} title="Widget Props" />
+
+        <PropsTable title="WeaveCheckout" rows={[
+          { name: 'apiKey',       type: 'string',                    req: false, desc: 'Publishable key (pk_live_… or pk_test_…). Falls back to window.__WEAVE_API_KEY__ or VITE_WEAVE_PUBLIC_KEY.' },
+          { name: 'merchant',     type: 'Merchant',                  req: false, desc: 'Payment context. See Merchant props below.' },
+          { name: 'theme',        type: '"organic" | "minimal"',     req: false, desc: 'Visual theme. organic (default) = soft curves + warmer palette; minimal = flat.' },
+          { name: 'accentColor',  type: 'string',                    req: false, desc: 'Brand accent. "forest" | "tan" or any hex, e.g. "#0F5D4C". Controls buttons and receipt.' },
+          { name: 'borderRadius', type: 'number',                    req: false, desc: 'Corner radius of the widget frame in px. Default: 16.' },
+          { name: 'userAddress',  type: 'string',                    req: false, desc: 'Pre-fill a connected wallet address.' },
+          { name: 'apiBase',      type: 'string',                    req: false, desc: 'Override the API base URL for proxying or local testing.' },
+          { name: 'onSuccess',    type: '(txn: { orderId, status }) => void', req: false, desc: 'Called when the order reaches completed status.' },
+          { name: 'onError',      type: '(err: Error) => void',      req: false, desc: 'Called on unrecoverable errors.' },
+          { name: 'onClose',      type: '() => void',                req: false, desc: 'Called when the user dismisses without completing.' },
+        ]} />
+
+        <PropsTable title="Merchant" rows={[
+          { name: 'name',           type: 'string',                             req: true,  desc: 'Business or store name shown to the payer.' },
+          { name: 'amount',         type: 'number',                             req: true,  desc: 'Payment amount denominated in currency (or in dest asset when amountIn is "dest").' },
+          { name: 'currency',       type: 'string',                             req: true,  desc: 'ISO 4217 settlement currency, e.g. "NGN".' },
+          { name: 'description',    type: 'string',                             req: false, desc: 'Order description shown in the widget and on the receipt.' },
+          { name: 'amountIn',       type: '"source" | "dest"',                 req: false, desc: '"source" (default) — customer deposits exactly this. "dest" — you receive exactly this; customer pays the crypto equivalent including fees.' },
+          { name: 'sourceAssetKey', type: 'string',                             req: false, desc: 'Lock payer to a specific asset, e.g. "crypto:ETH:USDC". Widget lets customer choose when omitted.' },
+          { name: 'destAssetKey',   type: 'string',                             req: false, desc: 'Lock settlement destination asset, e.g. "fiat:NGN". Overrides your configured default payout.' },
+          { name: 'destInstrument', type: 'InlineBankInstrument | InlineWalletInstrument', req: false, desc: 'Explicit payout instrument for this order. Overrides both destAssetKey and the merchant default.' },
+        ]} />
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Endpoints */}
+      <section className="space-y-4">
+        <SectionHeading icon={<Terminal size={17} />} title="Endpoints" />
+
+        {([
+          {
+            method: 'GET', path: '/quotes',
+            summary: 'Live exchange rate and full fee breakdown for any asset pair.',
+            params: [
+              { name: 'from',     type: 'string',            req: true,  desc: 'Source asset key — e.g. crypto:ETH:USDC' },
+              { name: 'to',       type: 'string',            req: true,  desc: 'Destination asset key — e.g. fiat:NGN' },
+              { name: 'amount',   type: 'number',            req: true,  desc: 'Amount in source asset (or dest when amountIn=dest)' },
+              { name: 'amountIn', type: '"source" | "dest"', req: false, desc: 'Whether amount is source- or dest-denominated. Default: source' },
+            ],
+            request: `curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:ETH:USDC&to=fiat:NGN&amount=50" \\
+  -H "x-api-key: pk_live_..."`,
+            response: `{
   "data": {
     "estimatedDest": 74250.00,
     "breakdown": {
@@ -217,34 +876,58 @@ export default function CheckoutPage() {
     },
     "route": {
       "steps": [
-        { "provider": "nearintents", "fromAsset": "crypto:ETH:USDC", "toAsset": "crypto:BASE:USDC", "expectedFeeBps": 25,  "expectedSecs": 90 },
-        { "provider": "paycrest",    "fromAsset": "crypto:BASE:USDC", "toAsset": "fiat:NGN",         "expectedFeeBps": 85,  "expectedSecs": 90 }
+        { "provider": "nearintents", "fromAsset": "crypto:ETH:USDC",  "toAsset": "crypto:BASE:USDC", "expectedFeeBps": 25, "expectedSecs": 90 },
+        { "provider": "paycrest",    "fromAsset": "crypto:BASE:USDC", "toAsset": "fiat:NGN",          "expectedFeeBps": 85, "expectedSecs": 90 }
       ],
       "totalExpectedFeeBps": 110,
       "totalExpectedSecs":   180
     }
   }
-}`}</CodeBlock>
-
-                <p className="text-[11px] font-semibold text-cream-soft/40 uppercase tracking-widest">Step 2a — Create Order (External Flow — NEAR Intents)</p>
-                <p className="text-[13px] text-cream-soft/60 leading-relaxed">Default. Generates a deposit address — customer sends from any wallet.</p>
-                <CodeBlock language="bash">{`curl https://api.paywithweave.com/api/v1/orders \\
-  -X POST -H "x-api-key: pk_live_..." -H "Content-Type: application/json" \\
+}`,
+          },
+          {
+            method: 'POST', path: '/orders',
+            summary: 'Create a payment order and receive nextAction for the widget.',
+            params: [
+              { name: 'source.inline.kind',         type: '"crypto_wallet" | "bank_account"', req: true,  desc: 'Type of source instrument' },
+              { name: 'source.inline.assetKey',     type: 'string',             req: true,  desc: 'Source asset key, e.g. crypto:ETH:USDC' },
+              { name: 'source.inline.walletAddress',type: 'string',             req: false, desc: 'Customer wallet address (crypto sources)' },
+              { name: 'amount',                     type: 'number',             req: true,  desc: 'Payment amount in source units (unless amountIn=dest)' },
+              { name: 'amountIn',                   type: '"source" | "dest"',  req: false, desc: 'Whether amount is source- or dest-denominated. Default: source' },
+              { name: 'flow',                       type: '"external" | "self"',req: false, desc: '"external" = NEAR Intents (deposit address, any chain). "self" = ChainRails (connected EVM wallet). Default: external' },
+              { name: 'refundAddress',              type: 'string',             req: false, desc: 'Customer wallet for refunds on failure. Defaults to walletAddress' },
+              { name: 'reference',                  type: 'string',             req: false, desc: 'Your unique ID for idempotent creation — returns HTTP 409 if a matching order already exists' },
+              { name: 'dest',                       type: 'InstrumentRef',      req: false, desc: 'Override the payout destination. Defaults to your merchant default' },
+            ],
+            request: `curl https://api.paywithweave.com/api/v1/orders \\
+  -X POST -H "x-api-key: pk_live_..." \\
+  -H "Content-Type: application/json" \\
   -d '{
     "source": {
       "inline": {
         "kind":          "crypto_wallet",
-        "assetKey":      "crypto:ETH:USDC",
+        "assetKey":      "crypto:ETHEREUM:USDC",
         "walletAddress": "0xCustomerWallet"
       }
     },
     "amount":        50,
     "flow":          "external",
     "refundAddress": "0xCustomerWallet"
-  }'`}</CodeBlock>
-                <CodeBlock language="json">{`{
+  }'`,
+            response: `{
   "data": {
-    "order": { "id": "ord_abc123", "status": "awaiting_deposit", "sourceAmount": 50.38 },
+    "order": {
+      "id":             "ord_abc123",
+      "status":         "awaiting_deposit",
+      "sourceAmount":   50.38,
+      "destAmount":     74250.00,
+      "sourceAssetKey": "crypto:ETHEREUM:USDC",
+      "destAssetKey":   "fiat:NGN",
+      "senderFeeUsd":   0.375,
+      "appFeeUsd":      0.05,
+      "bridgeFeeUsd":   0.10,
+      "createdAt":      "2026-05-01T10:00:00Z"
+    },
     "nextAction": {
       "screen":         "collect_crypto",
       "depositAddress": "0xNEARIntentsDepositAddress",
@@ -254,668 +937,469 @@ export default function CheckoutPage() {
       "chain":          "ETHEREUM"
     }
   }
-}`}</CodeBlock>
-
-                <p className="text-[11px] font-semibold text-cream-soft/40 uppercase tracking-widest">Step 2b — Create Order (Self Flow — ChainRails Connected Wallet)</p>
-                <p className="text-[13px] text-cream-soft/60 leading-relaxed">EVM only. The customer signs from their connected wallet — no deposit address copy-paste required. Lower fee (0.15 %) and faster (~60 s).</p>
-                <CodeBlock language="bash">{`curl https://api.paywithweave.com/api/v1/orders \\
-  -X POST -H "x-api-key: pk_live_..." -H "Content-Type: application/json" \\
-  -d '{
-    "source": {
-      "inline": {
-        "kind":          "crypto_wallet",
-        "assetKey":      "crypto:ETH:USDC",
-        "walletAddress": "0xConnectedWallet"
-      }
-    },
-    "amount": 50,
-    "flow":   "self"
-  }'`}</CodeBlock>
-                <CodeBlock language="json">{`{
-  "data": {
-    "order": { "id": "ord_xyz789", "status": "awaiting_deposit", "sourceAmount": 50.15 },
-    "nextAction": {
-      "screen":         "collect_crypto",
-      "depositAddress": "0xChainRailsIntentContractAddress",
-      "amount":         50.15,
-      "token":          "USDC",
-      "chain":          "ETHEREUM"
-    }
-  }
-}`}</CodeBlock>
-
-                <p className="text-[11px] font-semibold text-cream-soft/40 uppercase tracking-widest">Step 3 — Poll Order Status</p>
-                <p className="text-[13px] text-cream-soft/60 leading-relaxed">Direct transfers to merchant wallets (P2P) are automatically verified on-chain via Base RPC.</p>
-                <CodeBlock language="bash">{`curl https://api.paywithweave.com/api/v1/orders/ord_abc123 \\
-  -H "x-api-key: pk_live_..."`}</CodeBlock>
-                <CodeBlock language="json">{`{
+}`,
+          },
+          {
+            method: 'GET', path: '/orders/:id',
+            summary: 'Fetch a single order. Triggers a live sync from the active provider before returning.',
+            params: [
+              { name: ':id', type: 'string', req: true, desc: 'Order ID from POST /orders' },
+            ],
+            request: `curl https://api.paywithweave.com/api/v1/orders/ord_abc123 \\
+  -H "x-api-key: pk_live_..."`,
+            response: `{
   "data": {
     "id":             "ord_abc123",
-    "status":         "completed",   // awaiting_deposit | processing | completed | failed | expired
+    "status":         "completed",
     "sourceAmount":   50.38,
     "destAmount":     74250.00,
-    "steps": [
-      { "sequence": 0, "provider": "direct",      "status": "done", "externalId": "direct:..." },
-      { "sequence": 1, "provider": "paycrest",    "status": "done" }
-    ]
-  }
-}`}</CodeBlock>
-              </div>
-            )}
-
-          </div>
-        </div>
-      </section>
-
-      {/* Props reference */}
-      <section className="space-y-5 fade-up" style={{ animationDelay: '185ms' }}>
-        <h2 className="font-display text-[28px] font-semibold text-ink">Widget Props</h2>
-
-        <div className="space-y-4">
-          {/* WeaveCheckout props */}
-          <div className="bg-cream-soft rounded-[24px] border border-hair-soft overflow-hidden shadow-leaf">
-            <div className="px-6 py-3 border-b border-hair-soft">
-              <p className="text-[13px] font-semibold text-ink font-mono">WeaveCheckout</p>
-            </div>
-            {[
-              { prop: 'apiKey',       type: 'string',                     req: false, desc: 'Your publishable key (pk_live_… or pk_test_…). Falls back to window.__WEAVE_API_KEY__ or the VITE_WEAVE_PUBLIC_KEY env var.' },
-              { prop: 'merchant',     type: 'Merchant',                   req: false, desc: 'Payment context passed to the widget. See Merchant props below.' },
-              { prop: 'theme',        type: '"organic" | "minimal"',      req: false, desc: 'Visual theme. organic (default) uses soft curves and a warmer palette; minimal is flatter.' },
-              { prop: 'accentColor',  type: 'string',                     req: false, desc: 'Brand accent. Pass "forest" | "tan" or any hex value (e.g. "#0F5D4C"). Controls buttons, highlights, and the receipt.' },
-              { prop: 'borderRadius', type: 'number',                     req: false, desc: 'Corner radius of the widget frame in px. Default: 16.' },
-              { prop: 'userAddress',  type: 'string',                     req: false, desc: 'Pre-fill a connected wallet address. Useful when your app already manages the wallet connection.' },
-              { prop: 'apiBase',      type: 'string',                     req: false, desc: 'Override the API base URL. Useful for proxying through your own backend or testing against a local server.' },
-              { prop: 'onSuccess',    type: '(txn) => void',              req: false, desc: 'Called when the order reaches completed status. txn contains orderId and status.' },
-              { prop: 'onError',      type: '(err: Error) => void',       req: false, desc: 'Called on any unrecoverable error (order creation failure, provider error, etc.).' },
-              { prop: 'onClose',      type: '() => void',                 req: false, desc: 'Called when the user dismisses the widget without completing payment.' },
-            ].map(({ prop, type, req, desc }, i, arr) => (
-              <div key={prop} className={`flex items-start gap-4 px-6 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
-                <div className="min-w-[180px] shrink-0">
-                  <code className="text-[12.5px] font-mono font-semibold text-forest-deep">{prop}</code>
-                  {!req && <span className="ml-2 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">optional</span>}
-                </div>
-                <div className="flex-1">
-                  <p className="text-[11.5px] font-mono text-ink-soft mb-1">{type}</p>
-                  <p className="text-[12.5px] text-ink-muted leading-relaxed">{desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Merchant props */}
-          <div className="bg-cream-soft rounded-[24px] border border-hair-soft overflow-hidden shadow-leaf">
-            <div className="px-6 py-3 border-b border-hair-soft">
-              <p className="text-[13px] font-semibold text-ink font-mono">Merchant</p>
-            </div>
-            {[
-              { prop: 'name',           type: 'string',                              req: true,  desc: 'Your business or store name, shown to the payer throughout the checkout.' },
-              { prop: 'amount',         type: 'number',                              req: true,  desc: 'Payment amount, denominated in currency (or in the dest asset when amountIn is "dest").' },
-              { prop: 'currency',       type: 'string',                              req: true,  desc: 'ISO 4217 code for the settlement currency, e.g. "NGN".' },
-              { prop: 'description',    type: 'string',                              req: false, desc: 'Order description shown in the widget and printed on the receipt.' },
-              { prop: 'amountIn',       type: '"source" | "dest"',                  req: false, desc: '"source" (default) — amount is what the customer deposits. "dest" — amount is what you receive exactly; the customer pays the crypto equivalent including all fees.' },
-              { prop: 'sourceAssetKey', type: 'string',                              req: false, desc: 'Lock the payer to a specific asset, e.g. "crypto:ETH:USDC". When omitted the widget lets the customer choose.' },
-              { prop: 'destAssetKey',   type: 'string',                              req: false, desc: 'Lock the settlement destination asset, e.g. "fiat:NGN". Overrides your configured default payout instrument.' },
-              { prop: 'destInstrument', type: 'InlineBankInstrument | InlineWalletInstrument', req: false, desc: 'Explicit payout instrument for this order. Overrides both destAssetKey and the merchant default.' },
-            ].map(({ prop, type, req, desc }, i, arr) => (
-              <div key={prop} className={`flex items-start gap-4 px-6 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
-                <div className="min-w-[180px] shrink-0">
-                  <code className="text-[12.5px] font-mono font-semibold text-forest-deep">{prop}</code>
-                  {req
-                    ? <span className="ml-2 text-[10px] font-bold text-terracotta-deep uppercase tracking-wide">required</span>
-                    : <span className="ml-2 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">optional</span>}
-                </div>
-                <div className="flex-1">
-                  <p className="text-[11.5px] font-mono text-ink-soft mb-1">{type}</p>
-                  <p className="text-[12.5px] text-ink-muted leading-relaxed">{desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Payment Corridors */}
-      <section id="payment-corridors" className="space-y-6 fade-up" style={{ animationDelay: '200ms' }}>
-        <div className="flex items-center gap-3">
-          <Network className="text-forest" size={22} />
-          <h2 className="font-display text-[28px] font-semibold text-ink">Payment Corridors</h2>
-        </div>
-        <p className="text-[15px] text-ink-muted leading-relaxed -mt-2">
-          Weave automatically selects the right provider based on the source/destination asset pair and the <code className="bg-cream-deep px-1.5 py-0.5 rounded text-forest-deep font-mono text-[12px]">flow</code> parameter. The routing engine finds the shortest valid path using BFS across provider edges — up to 3 hops.
-        </p>
-
-        <div className="space-y-4">
-          <ProviderCard
-            name="Paystack"
-            badge="NGN → NGN"
-            badgeColor="bg-tan/15 text-tan-deep"
-            flow="external"
-            settlement="T+1 business day"
-            fee="~1.5%"
-            description="Handles direct Nigerian Naira bank-to-bank transfers. The customer completes payment via a Paystack-hosted popup (bank transfer or card). Your configured NGN bank account receives funds the next business day."
-            trigger="Automatically selected when both source and destination are fiat:NGN. Pass flow: &quot;external&quot; (the default). The nextAction contains a Paystack access_code — the widget opens the popup using it."
-            assetKey="fiat:NGN → fiat:NGN"
-          />
-          <ProviderCard
-            name="NEAR Intents"
-            badge="30+ chains"
-            badgeColor="bg-forest/10 text-forest-deep"
-            flow='"external" (default)'
-            settlement="30 – 90 seconds"
-            fee="built into rate"
-            description="Handles cross-chain swaps from ~30 supported chains to USDC on Base. A deposit address is generated — the customer sends from any wallet, anywhere. Used as the first hop before Paycrest settles funds to fiat."
-            trigger="Selected on crypto→fiat or crypto→USDC paths when flow: &quot;external&quot;. The widget shows the nextAction.depositAddress. For chains that require a memo (XRP, TON, XLM, NEAR native), nextAction.depositMemo will be non-null."
-            assetKey="crypto:*:* → crypto:BASE:USDC"
-          />
-          <ProviderCard
-            name="ChainRails"
-            badge="EVM Connected Wallet"
-            badgeColor="bg-ink/8 text-ink-soft"
-            flow='"self"'
-            settlement="~60 seconds"
-            fee="built into rate"
-            description="Bridges EVM tokens (USDC, USDT, ETH, DAI, BNB) from any supported EVM chain (Ethereum, Arbitrum, Optimism, Polygon, BSC, Avalanche, Base) to USDC on Base. The customer signs the transaction directly from their connected wallet — no deposit address copy-paste. Lower fee and faster than NEAR Intents for EVM sources."
-            trigger="Selected by passing flow: &quot;self&quot; on POST /orders with an EVM source asset. The nextAction.depositAddress is the ChainRails intent contract address the wallet sends to."
-            assetKey="crypto:EVM:* → crypto:BASE:USDC"
-          />
-          <ProviderCard
-            name="Paycrest"
-            badge="USDC ↔ Fiat"
-            badgeColor="bg-forest/10 text-forest-deep"
-            flow="automatic"
-            settlement="30 seconds – 2 minutes"
-            fee="built into rate"
-            description="Handles the crypto↔fiat conversion leg. For offramps (crypto → fiat) it receives USDC on Base and pushes NGN to your bank account. For onramps (fiat → crypto) it receives the customer's local payment and releases USDC on Base. Always used as the terminal fiat settlement hop — you do not select it directly."
-            trigger="Automatically selected whenever a route touches fiat. No flow parameter controls Paycrest; it is always the settlement provider for fiat corridors."
-            assetKey="crypto:BASE:USDC ↔ fiat:NGN"
-          />
-        </div>
-
-        {/* flow parameter box */}
-        <div className="bg-ink rounded-[28px] p-7 shadow-leaf-lg space-y-4">
-          <SectionLabel icon={<GitBranch size={13} />} label="The flow Parameter" />
-          <p className="text-[13.5px] text-cream-soft/70 leading-relaxed">
-            Pass <code className="text-cream-soft/90">flow</code> on <code className="text-cream-soft/90">POST /orders</code> to choose the cross-chain bridge. Defaults to <code className="text-cream-soft/90">"external"</code>.
-          </p>
-          <CodeBlock language="json">{`// flow: "external"  →  NEAR Intents
-//   Customer sends to a deposit address from any wallet on any supported chain.
-//   Works for 30+ chains. Good when you don't control the payer's wallet.
-{
-  "source": { "inline": { "kind": "crypto_wallet", "assetKey": "crypto:SOL:SOL", "walletAddress": "..." } },
-  "amount": 50,
-  "flow":   "external"
-}
-
-// flow: "self"  →  ChainRails
-//   Customer signs directly from a connected EVM wallet.
-//   EVM chains only. Lower fee (0.15 %) and faster (~60 s) than NEAR Intents.
-{
-  "source": { "inline": { "kind": "crypto_wallet", "assetKey": "crypto:ETH:USDC", "walletAddress": "0x..." } },
-  "amount": 50,
-  "flow":   "self"
-}`}</CodeBlock>
-        </div>
-      </section>
-
-      {/* API Reference */}
-      <section className="space-y-5 fade-up" style={{ animationDelay: '220ms' }}>
-        <h2 className="font-display text-[28px] font-semibold text-ink">API Reference</h2>
-        <p className="text-[15px] text-ink-muted leading-relaxed -mt-2">
-          Base URL: <code className="bg-cream-deep px-1.5 py-0.5 rounded-md text-forest-deep font-mono text-[12px]">https://api.paywithweave.com/api/v1</code>. Authenticate with <code className="bg-cream-deep px-1.5 py-0.5 rounded-md text-forest-deep font-mono text-[12px]">x-api-key: pk_live_...</code> on every request.
-        </p>
-
-        <div className="space-y-2">
-          {[
-            {
-              method: 'GET',
-              path: '/quotes',
-              summary: 'Live exchange rate and fee breakdown for any asset pair',
-              params: [
-                { name: 'from',     type: 'string',           req: true,  desc: 'Source asset key — e.g. crypto:ETH:USDC' },
-                { name: 'to',       type: 'string',           req: true,  desc: 'Destination asset key — e.g. fiat:NGN' },
-                { name: 'amount',   type: 'number',           req: true,  desc: 'Amount in source asset (or dest asset when amountIn=dest)' },
-                { name: 'amountIn', type: '"source" | "dest"', req: false, desc: 'Whether amount is source- or dest-denominated. Default: source' },
-              ],
-              response: `{
-  "data": {
-    "estimatedDest": 74250.00,   // amount the recipient will receive
-    "breakdown": {
-      "usdEquivalent": 50,       // source value in USD
-      "sourceAmount":  50,       // deposit amount for the customer
-      "senderFeeUsd":  0.375,    // Paycrest / Paystack cut (SENDER_FEE_BPS)
-      "appFeeUsd":     0.05,     // Weave platform fee (APP_FEE_BPS)
-      "bridgeFeeUsd":  0.10,     // bridge / swap spread
-      "netUsd":        49.475,   // after all deductions
-      "sellRate":      1500.00,  // NGN per USDC (null for crypto→crypto)
-      "buyRate":       null
-    },
-    "route": {
-      "steps": [
-        { "provider": "nearintents", "fromAsset": "crypto:ETH:USDC", "toAsset": "crypto:BASE:USDC", "expectedFeeBps": 25, "expectedSecs": 90 },
-        { "provider": "paycrest",    "fromAsset": "crypto:BASE:USDC", "toAsset": "fiat:NGN",         "expectedFeeBps": 85, "expectedSecs": 90 }
-      ],
-      "totalExpectedFeeBps": 110,
-      "totalExpectedSecs":   180
-    }
-  }
-}`,
-            },
-            {
-              method: 'POST',
-              path: '/orders',
-              summary: 'Create a payment order and receive nextAction for the widget',
-              params: [
-                { name: 'source',                     type: 'InstrumentRef',      req: true,  desc: 'Source instrument — see InstrumentRef below' },
-                { name: 'source.inline.kind',         type: '"crypto_wallet" | "bank_account"', req: true, desc: 'Type of the source instrument' },
-                { name: 'source.inline.assetKey',     type: 'string',             req: true,  desc: 'Asset key, e.g. crypto:ETH:USDC or fiat:NGN' },
-                { name: 'source.inline.walletAddress',type: 'string',             req: false, desc: 'Customer wallet address (crypto only)' },
-                { name: 'amount',                     type: 'number',             req: true,  desc: 'Payment amount in source units (unless amountIn=dest)' },
-                { name: 'amountIn',                   type: '"source" | "dest"',  req: false, desc: 'Whether amount is source- or dest-denominated. Default: source' },
-                { name: 'flow',                       type: '"external" | "self"',req: false, desc: 'Bridge provider. "external" = NEAR Intents (deposit address, any chain). "self" = ChainRails (connected wallet, EVM only). Default: external' },
-                { name: 'refundAddress',              type: 'string',             req: false, desc: 'Customer wallet to receive a refund on failure (crypto source). Defaults to walletAddress' },
-                { name: 'reference',                  type: 'string',             req: false, desc: 'Your unique order ID for idempotent creation — returns HTTP 409 if a matching order already exists' },
-                { name: 'dest',                       type: 'InstrumentRef',      req: false, desc: 'Override the payout destination. Defaults to your merchant default payout instrument' },
-              ],
-              response: `{
-  "data": {
-    "order": {
-      "id":             "ord_abc123",
-      "status":         "awaiting_deposit",
-      "sourceAmount":   50.38,
-      "destAmount":     74250.00,
-      "sourceAssetKey": "crypto:ETH:USDC",
-      "destAssetKey":   "fiat:NGN",
-      "senderFeeUsd":   0.375,
-      "appFeeUsd":      0.05,
-      "bridgeFeeUsd":   0.10,
-      "routePlan":      { "steps": [...], "totalExpectedFeeBps": 110, "totalExpectedSecs": 180 },
-      "createdAt":      "2026-04-29T10:00:00Z"
-    },
-    "nextAction": {
-      // screen: "collect_crypto" for crypto payments, "paystack_popup" for NGN bank transfers
-      "screen":         "collect_crypto",
-      "depositAddress": "0xDepositAddress",
-      // depositMemo is non-null for XRP, TON, XLM, and NEAR-native chains
-      "depositMemo":    null,
-      "amount":         50.38,
-      "token":          "USDC",
-      "chain":          "ETHEREUM"
-    }
-  }
-}`,
-            },
-            {
-              method: 'GET',
-              path: '/orders/:id',
-              summary: 'Fetch a single order. Triggers a live sync from the active provider before returning',
-              params: [
-                { name: ':id', type: 'string', req: true, desc: 'Order ID from POST /orders response' },
-              ],
-              response: `{
-  "data": {
-    "id":             "ord_abc123",
-    "status":         "completed",   // awaiting_deposit | processing | completed | failed | expired
-    "sourceAmount":   50.38,
-    "destAmount":     74250.00,
-    "sourceAssetKey": "crypto:ETH:USDC",
+    "sourceAssetKey": "crypto:ETHEREUM:USDC",
     "destAssetKey":   "fiat:NGN",
     "steps": [
       {
         "sequence":       0,
         "provider":       "nearintents",
-        "status":         "done",    // pending | awaiting_deposit | in_flight | done | failed
+        "status":         "done",
         "depositAddress": "0xNEARDeposit",
         "depositMemo":    null,
-        "externalId":     "ni_...",
-        "amountIn":       50.38
+        "amountIn":       50.38,
+        "amountOut":      50.30
       },
       {
         "sequence":  1,
         "provider":  "paycrest",
         "status":    "done",
-        "externalId": "pc_..."
+        "amountIn":  50.30,
+        "amountOut": 74250.00
       }
     ]
   }
 }`,
-            },
-            {
-              method: 'GET',
-              path: '/orders',
-              summary: 'List your last 50 orders, newest first',
-              params: [],
-              response: `{
+          },
+          {
+            method: 'GET', path: '/orders',
+            summary: 'List your last 50 orders, newest first.',
+            params: [],
+            request: `curl https://api.paywithweave.com/api/v1/orders \\
+  -H "x-api-key: pk_live_..."`,
+            response: `{
   "data": [
-    { "id": "ord_abc123", "status": "completed",        "sourceAmount": 50.38, "createdAt": "2026-04-29T10:05:00Z" },
-    { "id": "ord_xyz789", "status": "awaiting_deposit", "sourceAmount": 100,   "createdAt": "2026-04-29T09:12:00Z" }
+    {
+      "id":             "ord_abc123",
+      "status":         "completed",
+      "sourceAmount":   50.38,
+      "sourceAssetKey": "crypto:ETHEREUM:USDC",
+      "destAssetKey":   "fiat:NGN",
+      "createdAt":      "2026-05-01T10:05:00Z"
+    },
+    {
+      "id":             "ord_xyz789",
+      "status":         "awaiting_deposit",
+      "sourceAmount":   100,
+      "sourceAssetKey": "crypto:BASE:USDC",
+      "destAssetKey":   "fiat:NGN",
+      "createdAt":      "2026-05-01T09:12:00Z"
+    }
   ]
 }`,
-            },
-            {
-              method: 'GET',
-              path: '/institutions',
-              summary: 'List supported bank institutions for a currency — use to populate bank pickers in onramp flows',
-              params: [
-                { name: 'currency', type: 'string', req: true, desc: 'ISO 4217 currency code, e.g. NGN' },
-              ],
-              response: `{
+          },
+          {
+            method: 'GET', path: '/institutions',
+            summary: 'List supported bank institutions for a currency — use to populate bank pickers in onramp flows.',
+            params: [
+              { name: 'currency', type: 'string', req: true, desc: 'ISO 4217 currency code, e.g. NGN' },
+            ],
+            request: `curl "https://api.paywithweave.com/api/v1/institutions?currency=NGN" \\
+  -H "x-api-key: pk_live_..."`,
+            response: `{
   "data": [
-    { "name": "Access Bank",  "code": "ACCESS",  "id": "..." },
-    { "name": "GTBank",       "code": "GTBANK",  "id": "..." },
-    { "name": "Zenith Bank",  "code": "ZENITH",  "id": "..." }
+    { "name": "Access Bank", "code": "ACCESS", "id": "..." },
+    { "name": "GTBank",      "code": "GTBANK", "id": "..." },
+    { "name": "Zenith Bank", "code": "ZENITH", "id": "..." }
   ]
 }`,
-            },
-          ].map((ep) => {
-            const key = `${ep.method} ${ep.path}`;
-            const isOpen = openEndpoint === key;
-            return (
-              <div
-                key={key}
-                className={`rounded-2xl border transition-all overflow-hidden ${isOpen ? 'bg-cream-soft border-hair shadow-leaf' : 'bg-cream-soft/60 border-hair-soft hover:border-hair'}`}
-              >
-                <button
-                  onClick={() => setOpenEndpoint(isOpen ? null : key)}
-                  className="w-full flex items-center gap-4 px-5 py-4 text-left"
-                >
-                  <span className={`text-[11px] font-bold font-mono px-2 py-0.5 rounded-md shrink-0 ${ep.method === 'GET' ? 'bg-cream-deep text-ink-soft' : 'bg-forest/10 text-forest-deep'}`}>
-                    {ep.method}
-                  </span>
-                  <code className="text-[13.5px] font-mono text-ink font-semibold flex-1">{ep.path}</code>
-                  <span className="text-[12px] text-ink-muted hidden md:block truncate max-w-[280px]">{ep.summary}</span>
-                  <ChevronDown size={16} strokeWidth={2} className={`text-ink-muted shrink-0 transition-transform ${isOpen ? 'rotate-180 text-forest-deep' : ''}`} />
-                </button>
+          },
+        ] as EndpointDef[]).map((ep) => {
+          const key = `${ep.method} ${ep.path}`;
+          const isOpen = open === key;
+          return (
+            <div key={key} className={`rounded-[20px] border overflow-hidden transition-all ${isOpen ? 'bg-cream-soft border-hair shadow-leaf' : 'bg-cream-soft/60 border-hair-soft hover:border-hair'}`}>
+              <button onClick={() => toggle(key)} className="w-full flex items-center gap-4 px-5 py-4 text-left">
+                <MethodBadge method={ep.method} />
+                <code className="font-mono text-[13.5px] font-semibold text-ink flex-1">{ep.path}</code>
+                <span className="text-[12px] text-ink-muted hidden sm:block truncate max-w-[240px]">{ep.summary.split('.')[0]}</span>
+                <ChevronDown size={15} strokeWidth={2} className={`text-ink-muted shrink-0 transition-transform ${isOpen ? 'rotate-180 text-forest-deep' : ''}`} />
+              </button>
 
-                {isOpen && (
-                  <div className="px-5 pb-6 space-y-5 fade-up">
-                    <p className="text-[13.5px] text-ink-muted leading-relaxed">{ep.summary}</p>
+              {isOpen && (
+                <div className="px-5 pb-6 space-y-6 border-t border-hair-soft fade-up">
+                  <p className="text-[13.5px] text-ink-muted leading-relaxed pt-5">{ep.summary}</p>
 
-                    {ep.params.length > 0 && (
-                      <div>
-                        <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-widest mb-3">Parameters</p>
-                        <div className="space-y-2">
-                          {ep.params.map(p => (
-                            <div key={p.name} className="flex items-start gap-3 text-[12.5px]">
-                              <code className="font-mono text-forest-deep bg-cream-deep px-1.5 py-0.5 rounded text-[11.5px] shrink-0 mt-0.5">{p.name}</code>
-                              <span className="text-ink-faint font-mono text-[11px] shrink-0 mt-0.5">{p.type}</span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0 mt-0.5 uppercase tracking-wide ${p.req ? 'bg-terracotta/10 text-terracotta-deep' : 'bg-cream-deep text-ink-faint'}`}>{p.req ? 'req' : 'opt'}</span>
-                              <span className="text-ink-muted leading-relaxed">{p.desc}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
+                  {ep.params.length > 0 && (
                     <div>
-                      <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-widest mb-3">Response</p>
-                      <CodeBlock language="json" light>{ep.response}</CodeBlock>
+                      <p className="text-[10px] font-bold text-ink-soft uppercase tracking-widest mb-3">Parameters</p>
+                      <div className="bg-cream-deep/40 rounded-xl overflow-hidden border border-hair-soft">
+                        {ep.params.map((p, i, arr) => (
+                          <div key={p.name} className={`flex items-start gap-3 px-4 py-3 text-[12.5px] ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+                            <code className="font-mono text-forest-deep text-[11.5px] shrink-0 mt-0.5 min-w-[140px]">{p.name}</code>
+                            <span className="text-ink-faint font-mono text-[11px] shrink-0 mt-0.5 min-w-[80px]">{p.type}</span>
+                            <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-bold shrink-0 mt-0.5 uppercase tracking-wide ${p.req ? 'bg-tan/15 text-tan-deep' : 'bg-cream-deep text-ink-faint'}`}>
+                              {p.req ? 'req' : 'opt'}
+                            </span>
+                            <span className="text-ink-muted leading-relaxed">{p.desc}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
+                  )}
+
+                  <div>
+                    <p className="text-[10px] font-bold text-ink-soft uppercase tracking-widest mb-3">Request</p>
+                    <CodeBlock id={`req-${key}`} copy={copy} copied={copied} lang="bash">{ep.request}</CodeBlock>
                   </div>
-                )}
+
+                  <div>
+                    <p className="text-[10px] font-bold text-ink-soft uppercase tracking-widest mb-3">Response</p>
+                    <CodeBlock id={`res-${key}`} copy={copy} copied={copied} lang="json" light>{ep.response}</CodeBlock>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Order statuses */}
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={17} />} title="Order Statuses" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { status: 'awaiting_deposit', dot: 'bg-amber-400', desc: 'Created — waiting for the customer to send funds.' },
+            { status: 'processing',       dot: 'bg-forest/50', desc: 'Deposit detected — bridge / settlement in progress.' },
+            { status: 'completed',        dot: 'bg-forest',    desc: 'Funds delivered to your payout destination.' },
+            { status: 'failed',           dot: 'bg-red-400',   desc: 'Payment failed or expired. No funds moved.' },
+            { status: 'expired',          dot: 'bg-ink/25',    desc: 'No deposit received within the session window.' },
+          ].map(({ status, dot, desc }, i, arr) => (
+            <div key={status} className={`flex items-start gap-4 px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
+              <div>
+                <code className="text-[13px] font-mono font-semibold text-ink">{status}</code>
+                <p className="text-[13px] text-ink-muted mt-0.5">{desc}</p>
               </div>
-            );
-          })}
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          <div className="px-5 py-3 border-b border-hair-soft">
+            <p className="text-[11px] font-bold text-ink-soft uppercase tracking-widest">Route Step Statuses</p>
+          </div>
+          {[
+            { status: 'pending',          dot: 'bg-ink/20',    desc: 'Step queued — provider resource not yet created.' },
+            { status: 'awaiting_deposit', dot: 'bg-amber-400', desc: 'Provider created — waiting for deposit.' },
+            { status: 'in_flight',        dot: 'bg-forest/50', desc: 'Funds received — provider processing the hop.' },
+            { status: 'done',             dot: 'bg-forest',    desc: 'Hop completed — funds forwarded to next step.' },
+            { status: 'failed',           dot: 'bg-red-400',   desc: 'Hop failed. Triggers order-level failure.' },
+          ].map(({ status, dot, desc }, i, arr) => (
+            <div key={status} className={`flex items-start gap-4 px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
+              <div>
+                <code className="text-[13px] font-mono font-semibold text-ink">{status}</code>
+                <p className="text-[13px] text-ink-muted mt-0.5">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Webhooks
+// ─────────────────────────────────────────────────────────────────────────────
+
+function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Webhooks</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          Real-time signed notifications delivered to your server when order status changes.
+        </p>
+      </header>
+
+      {/* Setup */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Bell size={17} />} title="Setup" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Register your endpoint URL in <strong className="text-ink">Settings → Developer → Webhooks</strong>.
+          Weave signs every request with HMAC-SHA256 using your webhook secret and retries with exponential back-off if your endpoint does not return <IC>2xx</IC>.
+        </p>
+        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl px-5 py-4 flex gap-3">
+          <AlertTriangle size={16} className="text-amber-700 shrink-0 mt-0.5" strokeWidth={2} />
+          <p className="text-[13.5px] text-amber-900 leading-relaxed">
+            <strong>Always verify the signature</strong> before trusting webhook payloads. Never fulfil orders based on unverified requests.
+          </p>
         </div>
       </section>
 
-      {/* Webhooks */}
-      <section className="space-y-6 fade-up" style={{ animationDelay: '240ms' }}>
-        <div className="flex items-center gap-3">
-          <Bell className="text-forest" size={22} />
-          <h2 className="font-display text-[28px] font-semibold text-ink">Webhooks</h2>
-        </div>
-        <p className="text-[15px] text-ink-muted leading-relaxed -mt-2">
-          Register a webhook URL in <strong>Settings → Developer</strong>. Weave signs every request with HMAC-SHA256 using your webhook secret — always verify before fulfilling. Weave retries with exponential back-off if your endpoint does not return 2xx.
-        </p>
+      <div className="rule-dotted" />
 
-        <div className="bg-cream-soft rounded-[28px] p-7 border border-hair-soft shadow-leaf space-y-5">
-          <div>
-            <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-widest mb-3">Events</p>
-            <div className="space-y-2">
-              {[
-                { event: 'order.completed',  color: 'bg-forest',    desc: 'All route steps settled. Trigger fulfillment here.' },
-                { event: 'order.processing', color: 'bg-ink/30',    desc: 'Deposit confirmed — bridge/settlement in progress.' },
-                { event: 'order.failed',     color: 'bg-red-400',   desc: 'Payment failed or expired. No funds moved.' },
-              ].map(({ event, color, desc }) => (
-                <div key={event} className="flex items-center gap-3">
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} />
-                  <code className="bg-cream-deep px-1.5 py-0.5 rounded-md text-forest-deep font-mono text-[12px] shrink-0">{event}</code>
-                  <span className="text-[13px] text-ink-muted">{desc}</span>
-                </div>
-              ))}
+      {/* Events */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Zap size={17} />} title="Events" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { event: 'order.completed',  dot: 'bg-forest',  desc: 'All route steps settled. Funds delivered to your payout destination. Trigger fulfilment here.' },
+            { event: 'order.processing', dot: 'bg-forest/50',desc: 'Deposit confirmed — bridge / settlement in progress.' },
+            { event: 'order.failed',     dot: 'bg-red-400', desc: 'Payment failed or expired. No funds moved.' },
+            { event: 'order.created',    dot: 'bg-ink/25',  desc: 'A new order session was initialized.' },
+          ].map(({ event, dot, desc }, i, arr) => (
+            <div key={event} className={`flex items-start gap-4 px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
+              <div className="flex-1">
+                <code className="text-[13px] font-mono font-semibold text-ink">{event}</code>
+                <p className="text-[13px] text-ink-muted mt-0.5 leading-relaxed">{desc}</p>
+              </div>
             </div>
-          </div>
+          ))}
+        </div>
+      </section>
 
-          <div>
-            <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-widest mb-3">Payload</p>
-            <CodeBlock language="json" light>{`{
+      <div className="rule-dotted" />
+
+      {/* Payload */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Terminal size={17} />} title="Payload" />
+        <CodeBlock id="wh-payload" copy={copy} copied={copied} lang="json" light>
+{`{
   "event": "order.completed",
   "data": {
     "orderId":      "ord_abc123",
     "status":       "completed",
-    "sourceAsset":  "crypto:BASE:USDC",
+    "sourceAsset":  "crypto:ETHEREUM:USDC",
     "destAsset":    "fiat:NGN",
     "sourceAmount": 50.38,
-    "destAmount":   74800.00
+    "destAmount":   74250.00
   }
-}`}</CodeBlock>
-          </div>
-
-          <div>
-            <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-widest mb-3">Signature Verification — <code className="font-mono lowercase normal-case tracking-normal">x-weave-signature</code></p>
-            <p className="text-[13px] text-ink-muted mb-3 leading-relaxed">
-              The header contains the HMAC-SHA256 hex digest of the raw request body using your webhook secret.
-            </p>
-            <CodeBlock language="ts" light>{`import crypto from 'crypto';
-
-const sig  = req.headers['x-weave-signature'] as string;
-const hash = crypto
-  .createHmac('sha256', process.env.WEAVE_WEBHOOK_SECRET!)
-  .update(rawBody)   // raw Buffer — do not parse JSON first
-  .digest('hex');
-
-if (sig !== hash) return res.status(401).send('Invalid signature');
-// safe to fulfil order
-`}</CodeBlock>
-          </div>
-        </div>
+}`}
+        </CodeBlock>
       </section>
 
-      {/* Order Lifecycle */}
-      <section className="space-y-6 fade-up" style={{ animationDelay: '270ms' }}>
-        <h2 className="font-display text-[28px] font-semibold text-ink">Order Lifecycle</h2>
-        <p className="text-[15px] text-ink-muted leading-relaxed -mt-2">
-          Every payment follows the same pipeline regardless of provider or corridor.
+      <div className="rule-dotted" />
+
+      {/* Signature verification */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Lock size={17} />} title="Signature Verification" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          The <IC>x-weave-signature</IC> header contains the HMAC-SHA256 hex digest of the <strong className="text-ink">raw request body</strong>
+          signed with your webhook secret (<IC>whsec_…</IC>).
+          Do not parse the body as JSON before hashing — use the raw buffer.
         </p>
 
-        <div className="relative">
-          <div className="absolute left-[19px] top-8 bottom-8 w-px bg-hair-soft" />
-          <div className="space-y-4">
-            {[
-              {
-                n: 1,
-                title: 'Order Created',
-                color: 'bg-amber-400',
-                body: 'POST /v1/orders returns an order ID and a nextAction object. For Paystack (NGN→NGN) nextAction contains a Paystack access_code. For crypto flows it contains a depositAddress (and depositMemo for memo-based chains). For ChainRails (self flow) the depositAddress is the intent contract.',
-              },
-              {
-                n: 2,
-                title: 'Deposit Received',
-                color: 'bg-blue-400',
-                body: 'Paystack fires a charge.success webhook (fiat). For NEAR Intents and ChainRails, the provider fires their own signed webhook to Weave. Weave verifies the signature, checks idempotency, and enqueues the event via QStash for processing.',
-              },
-              {
-                n: 3,
-                title: 'Bridge / Settlement',
-                color: 'bg-tan-deep',
-                body: 'NEAR Intents and ChainRails bridge funds to USDC on Base (~30–90 s). Paycrest then converts USDC to NGN and pushes to your bank (30 s – 2 min). For Paystack NGN→NGN routes, settlement to your bank is T+1 business day.',
-              },
-              {
-                n: 4,
-                title: 'Order Completed',
-                color: 'bg-forest',
-                body: 'All route steps reach "done". The Order status transitions to completed. Weave fires your registered merchant webhook (event: "order.completed") with the full settlement detail, signed with HMAC-SHA256.',
-              },
-              {
-                n: 5,
-                title: 'Webhook Confirmed',
-                color: 'bg-ink/40',
-                body: 'Your server receives the signed POST, verifies the x-weave-signature header, and fulfils the order. Weave retries with exponential back-off if your endpoint does not return 2xx.',
-              },
-            ].map(({ n, title, color, body }) => (
-              <div key={n} className="flex gap-5">
-                <div className={`relative z-10 w-10 h-10 rounded-full ${color} flex items-center justify-center flex-shrink-0 text-white text-[13px] font-bold shadow-leaf`}>
-                  {n}
-                </div>
-                <div className="bg-cream-soft border border-hair-soft rounded-2xl px-5 py-4 flex-1">
-                  <p className="text-[14px] font-semibold text-ink mb-1">{title}</p>
-                  <p className="text-[13px] text-ink-muted leading-relaxed">{body}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <CodeBlock id="wh-verify-ts" copy={copy} copied={copied} lang="ts">
+{`import crypto from 'crypto';
+import express from 'express';
+
+const app = express();
+
+// Use raw body middleware — bodyParser.json() will discard the raw buffer.
+app.post('/webhooks/weave', express.raw({ type: 'application/json' }), (req, res) => {
+  const sig  = req.headers['x-weave-signature'] as string;
+  const hash = crypto
+    .createHmac('sha256', process.env.WEAVE_WEBHOOK_SECRET!)
+    .update(req.body)        // raw Buffer — not JSON.stringify(req.body)
+    .digest('hex');
+
+  if (!sig || sig !== hash) {
+    return res.status(401).send('Invalid signature');
+  }
+
+  const payload = JSON.parse(req.body.toString());
+  const { event, data } = payload;
+
+  if (event === 'order.completed') {
+    await fulfillOrder(data.orderId);
+  }
+
+  res.json({ received: true });
+});`}
+        </CodeBlock>
+
+        <CodeBlock id="wh-verify-py" copy={copy} copied={copied} lang="python">
+{`import hmac, hashlib, os
+from flask import Flask, request
+
+app = Flask(__name__)
+
+@app.route('/webhooks/weave', methods=['POST'])
+def weave_webhook():
+    sig  = request.headers.get('x-weave-signature', '')
+    body = request.get_data()           # raw bytes
+    secret = os.environ['WEAVE_WEBHOOK_SECRET'].encode()
+    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(sig, expected):
+        return 'Invalid signature', 401
+
+    payload = request.get_json(force=True)
+    if payload['event'] == 'order.completed':
+        fulfill_order(payload['data']['orderId'])
+
+    return {'received': True}`}
+        </CodeBlock>
       </section>
 
-      {/* Order statuses */}
-      <section className="space-y-5 fade-up" style={{ animationDelay: '300ms' }}>
-        <h2 className="font-display text-[28px] font-semibold text-ink">Order Statuses</h2>
-        <div className="bg-cream-soft rounded-[28px] border border-hair-soft overflow-hidden shadow-leaf">
+      <div className="rule-dotted" />
+
+      {/* Retries */}
+      <section className="space-y-5">
+        <SectionHeading icon={<ArrowRight size={17} />} title="Retry Behaviour" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
           {[
-            { status: 'awaiting_deposit', color: 'bg-amber-400', desc: 'Created — waiting for the customer to send funds.' },
-            { status: 'processing',       color: 'bg-blue-400',  desc: 'Deposit detected — bridge/settlement in progress.' },
-            { status: 'completed',        color: 'bg-forest',    desc: 'Funds delivered to your payout destination.' },
-            { status: 'failed',           color: 'bg-red-400',   desc: 'Payment failed or expired. No funds moved.' },
-            { status: 'expired',          color: 'bg-ink/30',    desc: 'No deposit received within the session window.' },
-          ].map(({ status, color, desc }, i, arr) => (
-            <div key={status} className={`flex items-start gap-4 px-6 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
-              <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1.5 ${color}`} />
-              <div>
-                <code className="text-[13px] font-mono font-semibold text-ink">{status}</code>
-                <p className="text-[13px] text-ink-muted mt-0.5">{desc}</p>
-              </div>
+            { label: 'Trigger',           value: 'Non-2xx response or network timeout' },
+            { label: 'Retry schedule',    value: '30 s → 2 min → 10 min → 1 hr (4 attempts)' },
+            { label: 'Idempotency key',   value: 'x-weave-event-id header on every delivery' },
+            { label: 'Timeout per try',   value: '30 seconds' },
+            { label: 'Sandbox retries',   value: 'Webhooks are suppressed in sandbox mode' },
+          ].map(({ label, value }, i, arr) => (
+            <div key={label} className={`flex justify-between items-start gap-6 px-5 py-3.5 text-[13px] ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <span className="text-ink-muted shrink-0">{label}</span>
+              <span className="text-ink font-medium text-right">{value}</span>
             </div>
           ))}
         </div>
-
-        <div className="bg-cream-soft rounded-[28px] border border-hair-soft overflow-hidden shadow-leaf">
-          <div className="px-6 py-3 border-b border-hair-soft">
-            <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-widest">Route Step Statuses</p>
-          </div>
-          {[
-            { status: 'pending',          color: 'bg-ink/20',    desc: 'Step queued but provider resource not yet created.' },
-            { status: 'awaiting_deposit', color: 'bg-amber-400', desc: 'Provider resource created — waiting for deposit.' },
-            { status: 'in_flight',        color: 'bg-blue-400',  desc: 'Funds received — provider processing the hop.' },
-            { status: 'done',             color: 'bg-forest',    desc: 'Hop completed — funds forwarded to next step.' },
-            { status: 'failed',           color: 'bg-red-400',   desc: 'Hop failed. Triggers order-level failure.' },
-          ].map(({ status, color, desc }, i, arr) => (
-            <div key={status} className={`flex items-start gap-4 px-6 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
-              <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1.5 ${color}`} />
-              <div>
-                <code className="text-[13px] font-mono font-semibold text-ink">{status}</code>
-                <p className="text-[13px] text-ink-muted mt-0.5">{desc}</p>
-              </div>
-            </div>
-          ))}
-        </div>
+        <p className="text-[13px] text-ink-muted leading-relaxed">
+          Use the <IC>x-weave-event-id</IC> header to deduplicate retried deliveries on your server. Store processed IDs in a fast lookup (Redis, DB unique index) and return <IC>200</IC> immediately for duplicates without re-processing.
+        </p>
       </section>
-
-      {/* Security */}
-      <section className="flex flex-col items-center bg-forest/5 rounded-[36px] p-10 md:p-14 border border-forest/10 text-center fade-up" style={{ animationDelay: '360ms' }}>
-        <Shield className="text-forest mb-5" size={40} strokeWidth={1.5} />
-        <h2 className="font-display text-[28px] font-semibold text-forest-deep mb-3">Security Model</h2>
-        <div className="text-ink-muted leading-relaxed max-w-xl text-[15px] space-y-3">
-          <p>
-            <strong className="text-ink">API keys are scoped.</strong> Your publishable key (<code>pk_</code>) is safe in the browser and the widget. Never use it for server-side mutations — use your secret key there and keep it out of client code.
-          </p>
-          <p>
-            <strong className="text-ink">All webhooks are signature-verified.</strong> Incoming provider webhooks (Paystack, Paycrest, ChainRails) are verified with HMAC-SHA256 before any state is mutated. Requests fail closed if the webhook secret is missing. Outgoing merchant webhooks are also signed so you can verify them.
-          </p>
-          <p>
-            <strong className="text-ink">Idempotent processing.</strong> Every webhook event is deduplicated by <code>(source, event, externalId)</code> before being enqueued. Duplicate deliveries from providers are ignored safely.
-          </p>
-        </div>
-      </section>
-
-      <footer className="pt-10 border-t border-hair-soft text-center text-ink-faint text-[11px] uppercase tracking-widest">
-        Weave · A product of <span className="font-bold text-ink-muted">Dewdrop Labs</span> · © 2026
-      </footer>
     </div>
   );
 }
 
-function DocCard({ icon, title, description, onClick }: { icon: React.ReactNode; title: string; description: string; onClick?: () => void }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared components
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Param = { name: string; type: string; req: boolean; desc: string };
+type EndpointDef = { method: string; path: string; summary: string; params: Param[]; request: string; response: string };
+
+function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} className="text-left group bg-cream-soft rounded-[24px] p-6 border border-hair-soft shadow-leaf hover:border-forest/30 hover:-translate-y-0.5 transition-all w-full">
-      <div className="mb-3">{icon}</div>
-      <h3 className="font-display text-[17px] font-semibold text-ink mb-1 group-hover:text-forest-deep transition-colors">{title}</h3>
-      <p className="text-[13px] text-ink-muted leading-relaxed">{description}</p>
-      <span className="block mt-3 text-[12px] text-forest-deep/60 group-hover:text-forest-deep transition-colors font-medium">View guide →</span>
+    <div>
+      <p className="px-3 pt-5 pb-1.5 text-[10px] font-bold text-ink-faint uppercase tracking-widest">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick?: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13.5px] transition-all ${
+        active
+          ? 'bg-forest text-cream-soft font-semibold shadow-leaf'
+          : 'text-ink-muted hover:bg-cream-deep/60 hover:text-ink'
+      }`}
+    >
+      <span className={active ? 'text-cream-soft' : 'text-ink-faint'}>{icon}</span>
+      {label}
     </button>
   );
 }
 
-function ProviderCard({ name, badge, badgeColor, flow, settlement, fee, description, trigger, assetKey }: {
-  name: string; badge: string; badgeColor: string; flow: string;
-  settlement: string; fee: string; description: string; trigger: string; assetKey: string;
+function SectionHeading({ icon, title }: { icon: React.ReactNode; title: string }) {
+  return (
+    <div className="flex items-center gap-2.5 text-forest-deep">
+      {icon}
+      <h2 className="font-display text-[24px] font-semibold text-ink">{title}</h2>
+    </div>
+  );
+}
+
+function IC({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="bg-cream-deep px-1.5 py-0.5 rounded-md text-forest-deep font-mono text-[12px]">
+      {children}
+    </code>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <span className="text-[11px] font-bold text-ink-soft uppercase tracking-widest">{children}</span>;
+}
+
+function MethodBadge({ method }: { method: string }) {
+  const styles: Record<string, string> = {
+    GET:    'bg-cream-deep text-ink-soft',
+    POST:   'bg-forest/10 text-forest-deep',
+    PATCH:  'bg-tan/15 text-tan-deep',
+    PUT:    'bg-tan/15 text-tan-deep',
+    DELETE: 'bg-red-50 text-red-600',
+  };
+  return (
+    <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded-md shrink-0 ${styles[method] ?? 'bg-cream-deep text-ink-soft'}`}>
+      {method}
+    </span>
+  );
+}
+
+function PropsTable({ title, rows }: { title: string; rows: Param[] }) {
+  return (
+    <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden shadow-leaf">
+      <div className="px-5 py-3 border-b border-hair-soft">
+        <code className="text-[13px] font-mono font-semibold text-ink">{title}</code>
+      </div>
+      {rows.map(({ name, type, req, desc }, i, arr) => (
+        <div key={name} className={`flex items-start gap-4 px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+          <div className="min-w-[160px] shrink-0">
+            <code className="text-[12.5px] font-mono font-semibold text-forest-deep">{name}</code>
+            {req
+              ? <span className="ml-2 text-[9.5px] font-bold text-tan-deep uppercase tracking-wide">required</span>
+              : <span className="ml-2 text-[9.5px] font-semibold text-ink-faint uppercase tracking-wide">optional</span>}
+          </div>
+          <div className="flex-1">
+            <p className="text-[11.5px] font-mono text-ink-muted mb-1">{type}</p>
+            <p className="text-[12.5px] text-ink-muted leading-relaxed">{desc}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CodeBlock({
+  children, lang, id, copy, copied, light = false,
+}: {
+  children: string;
+  lang: string;
+  id: string;
+  copy: (id: string, text: string) => void;
+  copied: string | null;
+  light?: boolean;
 }) {
   return (
-    <div className="bg-cream-soft rounded-[24px] border border-hair-soft shadow-leaf p-6 space-y-3">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3 flex-wrap">
-          <p className="font-display text-[18px] font-semibold text-ink">{name}</p>
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${badgeColor}`}>{badge}</span>
-        </div>
-        <div className="flex items-center gap-4 flex-wrap">
-          <span className="text-[12px] text-ink-muted"><span className="font-semibold text-ink">Flow:</span> <code className="font-mono text-[11px] bg-cream-deep px-1.5 py-0.5 rounded text-forest-deep">{flow}</code></span>
-          <span className="text-[12px] text-ink-muted"><span className="font-semibold text-ink">Settles in:</span> {settlement}</span>
-          <span className="text-[12px] text-ink-muted"><span className="font-semibold text-ink">Fee:</span> {fee}</span>
-        </div>
-      </div>
-      <p className="text-[13.5px] text-ink-muted leading-relaxed">{description}</p>
-      <div className="bg-cream-deep/70 rounded-xl px-3 py-2.5 flex items-start gap-3">
-        <code className="text-[11px] font-mono text-forest-deep shrink-0 mt-0.5 font-semibold">{assetKey}</code>
-        <span className="text-[12px] text-ink-muted leading-relaxed" dangerouslySetInnerHTML={{ __html: `— ${trigger}` }} />
-      </div>
-    </div>
-  );
-}
-
-function SectionLabel({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <div className="text-cream-faint text-[11px] font-semibold uppercase tracking-widest flex items-center gap-2">
-      {icon} {label}
-    </div>
-  );
-}
-
-function CodeBlock({ children, language, light = false }: { children: string; language: string; light?: boolean }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = () => {
-    navigator.clipboard.writeText(children.trim());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className={`relative rounded-2xl p-5 font-mono text-[12.5px] border overflow-x-auto ${
-      light
-        ? 'bg-cream-deep/40 text-ink-soft border-hair-soft'
-        : 'bg-ink-deep text-cream-soft/90 border-cream-soft/10'
-    }`}>
-      <div className="flex justify-between items-center mb-3">
-        <span className="text-[10px] uppercase tracking-widest font-bold opacity-40">{language}</span>
+    <div className={`relative rounded-[20px] border overflow-x-auto ${light ? 'bg-cream-deep/40 border-hair-soft' : 'bg-ink border-cream-soft/5'}`}>
+      <div className={`flex justify-between items-center px-5 py-3 border-b ${light ? 'border-hair-soft' : 'border-cream-soft/5'}`}>
+        <span className={`text-[10px] font-bold uppercase tracking-[0.18em] ${light ? 'text-ink-faint' : 'text-cream-soft/30'}`}>{lang}</span>
         <button
-          onClick={copy}
-          className={`flex items-center gap-1.5 text-[11px] font-medium transition-all px-2 py-1 rounded-lg ${
-            light ? 'hover:bg-cream-deep text-ink-muted' : 'hover:bg-cream-soft/10 text-cream-soft/50'
+          onClick={() => copy(id, children.trim())}
+          className={`flex items-center gap-1.5 text-[11px] font-medium transition-colors px-2 py-1 rounded-lg ${
+            light ? 'text-ink-muted hover:bg-cream-deep hover:text-ink' : 'text-cream-soft/40 hover:bg-cream-soft/8 hover:text-cream-soft'
           }`}
         >
-          {copied ? <><Check size={11} className="text-forest" /> Copied!</> : <><Copy size={11} /> Copy</>}
+          {copied === id
+            ? <><Check size={11} className="text-forest" /> Copied</>
+            : <><Copy size={11} /> Copy</>}
         </button>
       </div>
-      <pre className="whitespace-pre-wrap break-words"><code>{children.trim()}</code></pre>
+      <pre className={`p-5 text-[12.5px] font-mono leading-[1.65] whitespace-pre-wrap break-words ${light ? 'text-ink-soft' : 'text-tan-soft'}`}>
+        <code>{children.trim()}</code>
+      </pre>
     </div>
   );
 }
