@@ -161,23 +161,35 @@ router.post('/', requireAuth, async (req, res) => {
         } else if (srcP.kind === 'fiat' && dstP.kind === 'fiat') {
           // Fiat to Fiat: User pays fiat (sourceAmount), Merchant gets target fiat (body.amount)
           const targetFiat = new Decimal(body.amount);
-          const sr = new Decimal(sellRate);
-          const br = new Decimal(buyRate);
+          
+          const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
 
-          // 1. USDC needed for offramp
-          const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
-          const netUsdc = targetFiat.div(sr);
-          const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
+          if (isPurePaystack) {
+            // Paystack handles its own gross-up in the executor.
+            // We set sourceAmount = target, and the executor will turn 700 -> 714
+            sourceAmount = targetFiat.toNumber();
+            usdEquivalent = targetFiat.div(sellRate).toNumber(); // for reporting
+            appFeeBps = 0; // handled by paystack.grossUp
+            destAmountFiat = body.amount;
+          } else {
+            const sr = new Decimal(sellRate);
+            const br = new Decimal(buyRate);
 
-          // 2. Add bridge/slippage buffers if any (usually 0 for fiat-to-fiat via Paycrest)
-          const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
-          const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+            // 1. USDC needed for offramp
+            const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
+            const netUsdc = targetFiat.div(sr);
+            const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
 
-          // 3. Convert total USDC to source fiat
-          sourceAmount = totalUsdc.mul(br).toNumber();
-          usdEquivalent = totalUsdc.toNumber();
-          appFeeBps = APP_FEE_BPS;
-          destAmountFiat = body.amount;
+            // 2. Add bridge/slippage buffers if any
+            const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
+            const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct));
+
+            // 3. Convert total USDC to source fiat
+            sourceAmount = totalUsdc.mul(br).toNumber();
+            usdEquivalent = totalUsdc.toNumber();
+            appFeeBps = APP_FEE_BPS;
+            destAmountFiat = body.amount;
+          }
         }
       } else {
         // Standard 'amountIn === source' logic

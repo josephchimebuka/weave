@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { paycrest } from '../services/paycrest.service';
 import { chainRails } from '../services/chainrails.service';
 import { nearIntents } from '../services/nearintents.service';
+import { paystack } from '../services/paystack.service';
 import { requireApiKey } from '../middleware/auth';
 import { Decimal } from 'decimal.js';
 import { parseAsset } from '../lib/assets';
@@ -135,9 +136,22 @@ router.get('/', requireApiKey, async (req, res) => {
       }
     }
 
-    const senderFeeUsd = usdEquivalent * (SENDER_FEE_BPS / 10000);
-    const appFeeUsd    = usdEquivalent * (APP_FEE_BPS    / 10000);
-    const netUsd       = usdEquivalent - senderFeeUsd - appFeeUsd - bridgeFeeUsd;
+    const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
+
+    let senderFeeUsd = usdEquivalent * (SENDER_FEE_BPS / 10000);
+    let appFeeUsd    = usdEquivalent * (APP_FEE_BPS    / 10000);
+    let netUsd       = usdEquivalent - senderFeeUsd - appFeeUsd - bridgeFeeUsd;
+    let finalSourceAmount = usdEquivalent;
+
+    if (isPurePaystack) {
+      // Use the actual Paystack gross-up logic for accurate display
+      const { chargeAmountNgn, weaveFeeNgn, paystackFeeNgn } = paystack.grossUp(amountIn === 'dest' ? amount : amount, sellRate);
+      finalSourceAmount = chargeAmountNgn;
+      senderFeeUsd = paystackFeeNgn / sellRate;
+      appFeeUsd = weaveFeeNgn / sellRate;
+      bridgeFeeUsd = 0;
+      netUsd = (amountIn === 'dest' ? amount : (chargeAmountNgn - weaveFeeNgn - paystackFeeNgn)) / sellRate;
+    }
 
     // Final display figure in the destination asset.
     const estimatedDest = dst.kind === 'fiat' ? netUsd * sellRate : netUsd;
@@ -148,8 +162,9 @@ router.get('/', requireApiKey, async (req, res) => {
     // sources the live price ≈ $1 so this ≈ usdEquivalent; for SOL/ETH/etc
     // it's a meaningful conversion. Falls back to usdEquivalent when the
     // source isn't on NEAR Intents (e.g. direct USDC-on-Base same-asset).
-    let sourceAmount = usdEquivalent;
-    if (src.kind === 'crypto' && srcPrice > 0) {
+    // Source-asset-denominated deposit amount.
+    let sourceAmount = finalSourceAmount;
+    if (src.kind === 'crypto' && srcPrice > 0 && !isPurePaystack) {
       sourceAmount = usdEquivalent / srcPrice;
     }
 
