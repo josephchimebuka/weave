@@ -107,6 +107,8 @@ function SettingsContent() {
   const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
   const [showSecretModal, setShowSecretModal] = useState(false);
   const [rotatingSecret, setRotatingSecret] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; status: number } | null>(null);
 
   const SETTLEMENT_ASSETS = [
     { key: 'crypto:BASE:USDC', label: 'USDC (Base)', active: true },
@@ -299,6 +301,26 @@ function SettingsContent() {
       }
     } catch {}
     finally { setSavingWebhook(false); }
+  }
+
+  async function sendTestEvent() {
+    setSendingTest(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/merchant/webhook/test', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        setTestResult({ ok: false, status: res.status });
+      } else {
+        setTestResult({ ok: data.ok ?? res.ok, status: data.status ?? res.status });
+      }
+      setTimeout(() => setTestResult(null), 4000);
+    } catch {
+      setTestResult({ ok: false, status: 0 });
+      setTimeout(() => setTestResult(null), 4000);
+    } finally {
+      setSendingTest(false);
+    }
   }
 
   async function rotateSecret() {
@@ -916,22 +938,34 @@ export default function CheckoutPage() {
                 <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
                   Endpoint URL
                 </label>
-                <div className="mt-2 flex items-center gap-2">
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
                   <input
                     type="url"
                     value={webhookUrl}
                     onChange={(e) => setWebhookUrl(e.target.value)}
                     placeholder="https://your-api.com/webhooks/weave"
                     disabled={webhookUrlLoading}
-                    className="flex-1 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
+                    className="flex-1 min-w-0 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
                   />
                   <button
                     onClick={saveWebhook}
                     disabled={savingWebhook || webhookUrlLoading}
-                    className="h-11 px-5 rounded-xl bg-forest text-cream-soft hover:bg-forest-deep flex items-center justify-center transition-all disabled:opacity-40"
+                    className="h-11 px-5 rounded-xl bg-forest text-cream-soft hover:bg-forest-deep flex items-center justify-center transition-all disabled:opacity-40 text-[13px] font-medium"
                   >
                     {webhookSaved ? <Check size={16} strokeWidth={2.3} /> : (savingWebhook ? 'Saving...' : 'Save')}
                   </button>
+                  <button
+                    onClick={sendTestEvent}
+                    disabled={sendingTest || !webhookUrl || webhookUrlLoading}
+                    className="h-11 px-5 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-medium transition-all disabled:opacity-40 flex items-center gap-2"
+                  >
+                    {sendingTest ? 'Sending...' : 'Send Test'}
+                  </button>
+                  {testResult !== null && (
+                    <span className={`text-[12px] font-medium px-3 py-1.5 rounded-lg ${testResult.ok ? 'bg-forest-surface text-forest-deep' : 'bg-terracotta-soft text-terracotta'}`}>
+                      {testResult.ok ? `Delivered · ${testResult.status}` : `Failed · ${testResult.status || 'no response'}`}
+                    </span>
+                  )}
                 </div>
               </div>
 

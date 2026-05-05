@@ -31,9 +31,10 @@ router.get('/keys', requireSession, async (req, res) => {
     return res.json({
       success: true,
       data: {
-        merchantId:     merchant.id,
-        name:           merchant.name,
-        publishableKey: merchant.publishableKey,
+        merchantId:           merchant.id,
+        name:                 merchant.name,
+        publishableKey:       merchant.publishableKey,
+        sandboxPublishableKey: merchant.sandboxPublishableKey ?? null,
       },
     });
   } catch (err: any) {
@@ -330,6 +331,48 @@ router.patch('/webhook', requireSession, async (req, res) => {
     return res.json({ success: true, data: { url } });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/v1/merchant/webhook/test — send a signed test event to the configured endpoint
+router.post('/webhook/test', requireSession, async (req, res) => {
+  try {
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
+    if (!merchant.webhookUrl) return res.status(400).json({ success: false, error: 'no webhook URL configured' });
+
+    const payload = {
+      event: 'order.completed',
+      data: {
+        id:              'test_' + crypto.randomBytes(8).toString('hex'),
+        status:          'completed',
+        sourceAssetKey:  'crypto:BASE:USDC',
+        destAssetKey:    'fiat:NGN',
+        sourceAmount:    10,
+        destAmount:      16000,
+        createdAt:       new Date().toISOString(),
+      },
+    };
+    const body = JSON.stringify(payload);
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Weave-Timestamp': timestamp,
+    };
+
+    if (merchant.webhookSecret) {
+      const sig = crypto
+        .createHmac('sha256', merchant.webhookSecret)
+        .update(`${timestamp}.${body}`)
+        .digest('hex');
+      headers['X-Weave-Signature'] = `sha256=${sig}`;
+    }
+
+    const result = await fetch(merchant.webhookUrl, { method: 'POST', headers, body });
+    return res.json({ success: true, data: { status: result.status, ok: result.ok } });
+  } catch (err: any) {
+    return res.status(502).json({ success: false, error: err.message ?? 'delivery failed' });
   }
 });
 
