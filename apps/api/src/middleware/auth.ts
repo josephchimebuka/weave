@@ -6,6 +6,7 @@ declare global {
   namespace Express {
     interface Request {
       merchantId: string;
+      sandboxMode: boolean;
     }
   }
 }
@@ -20,12 +21,21 @@ export async function requireApiKey(req: Request, res: Response, next: NextFunct
   }
 
   try {
-    const merchant = await prisma.merchant.findUnique({ where: { publishableKey: key } });
-    if (!merchant) {
-      return res.status(401).json({ success: false, error: 'Invalid API key' });
+    const liveMerchant = await prisma.merchant.findUnique({ where: { publishableKey: key } });
+    if (liveMerchant) {
+      req.merchantId = liveMerchant.id;
+      req.sandboxMode = false;
+      return next();
     }
-    req.merchantId = merchant.id;
-    return next();
+
+    const sandboxMerchant = await prisma.merchant.findFirst({ where: { sandboxPublishableKey: key } });
+    if (sandboxMerchant) {
+      req.merchantId = sandboxMerchant.id;
+      req.sandboxMode = true;
+      return next();
+    }
+
+    return res.status(401).json({ success: false, error: 'Invalid API key' });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Auth service error' });
   }
@@ -63,6 +73,7 @@ export async function requireKeyPair(req: Request, res: Response, next: NextFunc
     }
 
     req.merchantId = keyPair.merchantId;
+    req.sandboxMode = false;
     return next();
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Auth service error' });
@@ -88,6 +99,7 @@ export async function requireSession(req: Request, res: Response, next: NextFunc
     }
 
     req.merchantId = session.merchantId;
+    req.sandboxMode = false;
     return next();
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Auth service error' });

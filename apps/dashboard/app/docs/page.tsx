@@ -43,7 +43,7 @@ export default function DocsPage() {
 
       {/* Settlement note */}
       <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed fade-up" style={{ animationDelay: '120ms' }}>
-        <strong>Settlement times:</strong> NGN bank payments via Paystack settle <strong>T+1 business day</strong>. Crypto-sourced NGN payments (customer pays ETH/USDC → you receive NGN) settle in <strong>30 s – 2 min</strong> via Paycrest. Crypto wallet payouts are near-instant.
+        <strong>Settlement times:</strong> NGN bank payments via Paystack settle <strong>T+1 business day</strong>. Crypto-to-fiat settlements (customer pays crypto → you receive NGN) settle in <strong>30 s – 2 min</strong> via Paycrest. Crypto wallet payouts (USDC/USDT) are near-instant.
       </div>
 
       {/* Asset Key primer */}
@@ -121,7 +121,10 @@ export default function DocsPage() {
     onError:   (err) => console.error(err.message),
     onClose:   ()    => console.log('Widget closed'),
   });
-</script>`}</CodeBlock>
+</script>
+
+<!-- Tip: Use Sandbox Keys during development -->
+<!-- pk_test_... orders complete instantly with mock funds -->`}</CodeBlock>
               </div>
             )}
 
@@ -143,9 +146,6 @@ export default function CheckoutPage() {
         amount:      5000,
         currency:    'NGN',
         description: 'Order #1042',
-        // amountIn: 'dest' — exact NGN the merchant receives; customer pays the crypto equivalent
-        // sourceAssetKey: 'crypto:ETH:USDC' — pre-lock the payer's asset
-        // destAssetKey:   'fiat:NGN'         — pre-lock the settlement asset
       }}
       onSuccess={(txn) => fulfillOrder(txn.orderId)}
       onError={(err)   => showError(err.message)}
@@ -285,14 +285,17 @@ export default function CheckoutPage() {
 }`}</CodeBlock>
 
                 <p className="text-[11px] font-semibold text-cream-soft/40 uppercase tracking-widest">Step 3 — Poll Order Status</p>
+                <p className="text-[13px] text-cream-soft/60 leading-relaxed">Direct transfers to merchant wallets (P2P) are automatically verified on-chain via Base RPC.</p>
                 <CodeBlock language="bash">{`curl https://api.paywithweave.com/api/v1/orders/ord_abc123 \\
   -H "x-api-key: pk_live_..."`}</CodeBlock>
                 <CodeBlock language="json">{`{
   "data": {
-    "id":     "ord_abc123",
-    "status": "completed",
+    "id":             "ord_abc123",
+    "status":         "completed",   // awaiting_deposit | processing | completed | failed | expired
+    "sourceAmount":   50.38,
+    "destAmount":     74250.00,
     "steps": [
-      { "sequence": 0, "provider": "nearintents", "status": "done", "depositAddress": "0x..." },
+      { "sequence": 0, "provider": "direct",      "status": "done", "externalId": "direct:..." },
       { "sequence": 1, "provider": "paycrest",    "status": "done" }
     ]
   }

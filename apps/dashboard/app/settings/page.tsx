@@ -6,7 +6,8 @@ import Link from 'next/link';
 import {
   KeyRound, Copy, Eye, EyeOff, Webhook, Plus, Palette,
   FileText, ShoppingBag, Pencil, Check, User, Mail, Building2, Save,
-  Wallet, Landmark, AlertTriangle, X, Trash2
+  Wallet, Landmark, AlertTriangle, X, Trash2,
+  Shield
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
@@ -72,7 +73,7 @@ function SettingsContent() {
   const [regenerating, setRegenerating]   = useState(false);
 
   // Profile tab state
-  const [profile, setProfile]       = useState<{ id: string; name: string; email: string; publishableKey: string; kycLevel: string; createdAt: string } | null>(null);
+  const [profile, setProfile]       = useState<{ id: string; name: string; email: string; publishableKey: string | null; sandboxPublishableKey: string | null; kycLevel: string; createdAt: string } | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
   const [editName, setEditName]     = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -97,6 +98,15 @@ function SettingsContent() {
   const [banks, setBanks] = useState<{name: string; code: string}[]>([]);
   const [resolvingName, setResolvingName] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
+
+  // Webhooks state
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookUrlLoading, setWebhookUrlLoading] = useState(true);
+  const [savingWebhook, setSavingWebhook] = useState(false);
+  const [webhookSaved, setWebhookSaved] = useState(false);
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [showSecretModal, setShowSecretModal] = useState(false);
+  const [rotatingSecret, setRotatingSecret] = useState(false);
 
   const SETTLEMENT_ASSETS = [
     { key: 'crypto:BASE:USDC', label: 'USDC (Base)', active: true },
@@ -159,6 +169,19 @@ function SettingsContent() {
       .then((r) => r.ok ? r.json() : [])
       .then((d) => setBanks(Array.isArray(d) ? d : []))
       .catch(() => {});
+  }, []);
+
+  // Fetch webhooks
+  useEffect(() => {
+    fetch('/api/merchant/webhook')
+      .then(r => r.ok ? r.json() : null)
+      .then(resp => {
+        if (resp?.success && resp.data) {
+          setWebhookUrl(resp.data.url || '');
+        }
+      })
+      .catch(() => {})
+      .finally(() => setWebhookUrlLoading(false));
   }, []);
 
   // Auto-resolve account name via Paystack — same chain used when syncing the subaccount,
@@ -260,6 +283,35 @@ function SettingsContent() {
       }
     } catch {}
     finally { setDeletingAccount(false); }
+  }
+
+  async function saveWebhook() {
+    setSavingWebhook(true);
+    try {
+      const res = await fetch('/api/merchant/webhook', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: webhookUrl.trim() || null }),
+      });
+      if (res.ok) {
+        setWebhookSaved(true);
+        setTimeout(() => setWebhookSaved(false), 2000);
+      }
+    } catch {}
+    finally { setSavingWebhook(false); }
+  }
+
+  async function rotateSecret() {
+    setRotatingSecret(true);
+    try {
+      const res = await fetch('/api/merchant/webhook/secret', { method: 'POST' });
+      const resp = await res.json();
+      if (resp.success && resp.data) {
+        setWebhookSecret(resp.data.secret);
+        setShowSecretModal(true);
+      }
+    } catch {}
+    finally { setRotatingSecret(false); }
   }
 
   const accentHex = ACCENT_OPTIONS.find((o) => o.key === accent)!.hex;
@@ -731,6 +783,40 @@ export default function CheckoutPage() {
             </div>
           </Card>
 
+          {/* Test Keys */}
+          <Card delay={100}>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2.5 text-amber-700">
+                <KeyRound size={18} strokeWidth={1.9} />
+                <h2 className="font-display text-[22px] font-semibold text-ink">Test Keys</h2>
+              </div>
+              <span className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-[11px] font-semibold tracking-wider uppercase">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                Sandbox
+              </span>
+            </div>
+
+            <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
+              Use the sandbox key during development. Orders created with this key never trigger real payments — they auto-complete instantly with mock amounts.
+            </p>
+
+            <div className="space-y-4">
+              <KeyField
+                label="Sandbox Publishable Key"
+                value={profileLoading ? 'Loading…' : profile?.sandboxPublishableKey ?? 'Not available'}
+                canCopy={!!profile?.sandboxPublishableKey}
+                onCopy={() => profile?.sandboxPublishableKey && copy('sandbox-pub', profile.sandboxPublishableKey)}
+                copied={copied === 'sandbox-pub'}
+              />
+            </div>
+
+            <div className="mt-5 p-4 bg-amber-50/70 border border-amber-200/60 rounded-2xl">
+              <p className="text-[12px] text-amber-800 leading-relaxed">
+                <strong>Sandbox orders</strong> are isolated — they appear in your dashboard with a sandbox badge and are excluded from revenue metrics.
+              </p>
+            </div>
+          </Card>
+
           {/* Checkout UI + Preview */}
           <Card delay={120} className="flex flex-col lg:flex-row gap-0 !p-0 overflow-hidden">
             <div className="flex-1 p-7">
@@ -814,33 +900,59 @@ export default function CheckoutPage() {
 
           {/* Webhooks */}
           <Card delay={160}>
-            <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2.5 text-forest-deep">
                 <Webhook size={18} strokeWidth={1.9} />
                 <h2 className="font-display text-[22px] font-semibold text-ink">Webhooks</h2>
               </div>
-              <button className="w-9 h-9 rounded-full bg-forest-surface text-forest-deep hover:bg-forest hover:text-cream-soft flex items-center justify-center transition-all" aria-label="Add webhook">
-                <Plus size={16} strokeWidth={2.2} />
-              </button>
             </div>
-            <div className="space-y-3">
-              {[
-                { name: 'Payment Success', url: 'https://api.merchant.co/hooks/success', status: 'live' as const },
-                { name: 'Dispute Created', url: 'https://api.merchant.co/hooks/dispute', status: 'paused' as const },
-              ].map((hook) => (
-                <div key={hook.name} className="flex items-center justify-between gap-4 bg-cream-deep/40 border border-hair-soft rounded-2xl px-5 py-3.5">
-                  <div className="min-w-0">
-                    <p className="font-medium text-[14px] text-ink">{hook.name}</p>
-                    <p className="text-[12px] text-ink-muted font-mono truncate">{hook.url}</p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className={`w-2 h-2 rounded-full ${hook.status === 'live' ? 'bg-forest' : 'bg-ink-faint'}`} />
-                    <button className="text-ink-muted hover:text-forest-deep transition-colors" aria-label="Edit webhook">
-                      <Pencil size={14} strokeWidth={1.9} />
-                    </button>
-                  </div>
+
+            <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
+              Weave will send a POST request with HMAC-SHA256 signature to this URL whenever an order status changes.
+            </p>
+
+            <div className="space-y-6">
+              <div>
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Endpoint URL
+                </label>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="url"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://your-api.com/webhooks/weave"
+                    disabled={webhookUrlLoading}
+                    className="flex-1 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
+                  />
+                  <button
+                    onClick={saveWebhook}
+                    disabled={savingWebhook || webhookUrlLoading}
+                    className="h-11 px-5 rounded-xl bg-forest text-cream-soft hover:bg-forest-deep flex items-center justify-center transition-all disabled:opacity-40"
+                  >
+                    {webhookSaved ? <Check size={16} strokeWidth={2.3} /> : (savingWebhook ? 'Saving...' : 'Save')}
+                  </button>
                 </div>
-              ))}
+              </div>
+
+              <div className="pt-5 border-t border-hair-soft">
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Signing Secret
+                </label>
+                <div className="mt-2 flex flex-col sm:flex-row items-center gap-3">
+                  <div className="flex-1 w-full bg-cream-deep/30 border border-hair-soft border-dashed rounded-xl px-4 py-3 text-[13px] text-ink-muted flex items-center gap-2">
+                    <Shield size={14} />
+                    <span>HMAC-SHA256 signature active</span>
+                  </div>
+                  <button
+                    onClick={rotateSecret}
+                    disabled={rotatingSecret}
+                    className="w-full sm:w-auto px-5 py-3 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-semibold transition-all"
+                  >
+                    {rotatingSecret ? 'Rotating...' : 'Rotate Secret'}
+                  </button>
+                </div>
+              </div>
             </div>
           </Card>
 
@@ -970,6 +1082,64 @@ export default function CheckoutPage() {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Webhook Secret Modal (Portal) */}
+      {showSecretModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-ink/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div 
+            className="bg-cream-soft border border-hair-soft rounded-[24px] w-full max-w-md shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-hair-soft bg-white/50 shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3 text-forest-deep">
+                  <div className="w-10 h-10 rounded-full bg-forest/10 flex items-center justify-center">
+                    <Shield size={20} strokeWidth={2} />
+                  </div>
+                  <h3 className="font-display text-lg font-semibold text-ink">Webhook Secret</h3>
+                </div>
+                <button 
+                  onClick={() => setShowSecretModal(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-ink-muted hover:text-ink hover:bg-hair transition-colors"
+                >
+                  <X size={18} strokeWidth={2.5} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <p className="text-[14px] text-ink-muted leading-relaxed">
+                Copy your new webhook signing secret now. For security, we won&apos;t show it again. Use this secret to verify <code>x-weave-signature</code> headers.
+              </p>
+
+              <div className="bg-ink rounded-xl p-4 font-mono text-[13px] text-cream-soft break-all flex items-start gap-3 relative group">
+                <div className="flex-1">{webhookSecret}</div>
+                <button 
+                  onClick={() => webhookSecret && copy('wh-secret', webhookSecret)}
+                  className="shrink-0 p-1.5 rounded-lg bg-cream-soft/10 text-cream-soft/60 hover:text-cream-soft hover:bg-cream-soft/20 transition-all"
+                >
+                  {copied === 'wh-secret' ? <Check size={14} /> : <Copy size={14} />}
+                </button>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-[12px] text-amber-800 flex items-start gap-2 leading-relaxed">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  Existing secrets are invalidated immediately. Update your server code before closing this modal.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setShowSecretModal(false)}
+                className="w-full py-3 bg-forest text-cream-soft rounded-xl font-semibold text-[14px] hover:bg-forest-deep transition-colors"
+              >
+                Done
+              </button>
             </div>
           </div>
         </div>,

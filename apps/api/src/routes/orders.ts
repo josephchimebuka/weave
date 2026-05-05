@@ -212,6 +212,7 @@ router.post('/', requireAuth, async (req, res) => {
         where: {
           merchantId: merchant.id,
           reference: body.reference,
+          sandboxMode: req.sandboxMode ?? false,
           // Only reuse if it's the same amount and asset to avoid collisions
           sourceAmount,
           sourceAssetKey: sourceInstrument.assetKey,
@@ -234,6 +235,7 @@ router.post('/', requireAuth, async (req, res) => {
             routePlan: plan as any,
             quoteRate,
             reference: body.reference,
+            sandboxMode: req.sandboxMode ?? false,
           },
         });
         console.log(`[orders] created new order: ${order.id}`);
@@ -284,6 +286,7 @@ router.post('/', requireAuth, async (req, res) => {
       refundAccount,
       destBank,
       destWallet,
+      sandboxMode: req.sandboxMode ?? false,
     });
 
     // 6. Roll final fee + destAmount snapshot onto the Order.
@@ -371,7 +374,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.get('/', requireAuth, async (req, res) => {
   try {
     const orders = await prisma.order.findMany({
-      where: { merchantId: req.merchantId },
+      where: { merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
       orderBy: { createdAt: 'desc' },
       take: 50,
       include: { steps: { orderBy: { sequence: 'asc' } } },

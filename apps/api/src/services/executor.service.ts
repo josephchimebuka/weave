@@ -14,10 +14,12 @@ import { paystack } from './paystack.service';
 import { sendMerchantPaymentNotification } from './email.service';
 import { parseAsset } from '../lib/assets';
 import type { RoutePlan, RoutePlanStep } from './router.service';
+import { sandboxDispatch } from './sandbox-executor';
 
 export interface ExecutorInput {
   orderId: string;
   merchantId: string;
+  sandboxMode?: boolean;
   plan: RoutePlan;
   sourceAmount: number;
   // USD-equivalent of sourceAmount. Used as the amountIn for every step past
@@ -379,7 +381,9 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
     console.log(`[executor] step ${i}: provider=${step.provider}, amountIn=${amountIn}`);
 
-    if (step.provider === 'paystack') {
+    if (input.sandboxMode) {
+      exec = sandboxDispatch(step, amountIn, orderId, i) as any;
+    } else if (step.provider === 'paystack') {
       // Guard: merchant must have a SYNCED subaccount so funds route to their bank
       const merchant = await prisma.merchant.findUniqueOrThrow({
         where: { id: input.merchantId },
@@ -499,6 +503,16 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     })
   ));
 
+  // Sandbox: auto-complete all steps instantly — no real money moves.
+  if (input.sandboxMode) {
+    for (let i = 0; i < plan.steps.length; i++) {
+      const eId = executions[i].externalId;
+      if (eId) {
+        await markStepDone({ provider: plan.steps[i].provider, externalId: eId, amountOut: executions[i].amountOut });
+      }
+    }
+  }
+
   // Build the nextAction from step 0 (the user-facing step).
   const firstExec = executions[0];
   const firstStep = plan.steps[0];
@@ -590,7 +604,7 @@ export async function markStepDone(params: {
   await prisma.order.update({ where: { id: step.orderId }, data: orderUpdate });
 
   // ── Notify Merchant ───────────────────────────────────────────────────────
-  if (nextOrderStatus === 'completed') {
+  if (nextOrderStatus === 'completed' && !step.order.sandboxMode) {
     const { webhookService } = await import('./webhook.service');
     // Fire and forget so we don't block the webhook worker
     Promise.all([

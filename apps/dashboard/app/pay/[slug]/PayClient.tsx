@@ -85,8 +85,8 @@ export default function PayClient({ link }: { link: LinkData }) {
               amount: link.amount,
               currency: token,
               description: link.title,
-              amountIn: isP2P ? 'source' : 'dest',
-              sourceAssetKey: isP2P ? link.asset : undefined,
+              amountIn: 'dest',
+              destAssetKey: link.asset,
             }}
             theme="organic"
             accentColor="forest"

@@ -98,11 +98,13 @@ router.get('/profile', requireSession, async (req, res) => {
     return res.json({
       success: true,
       data: {
-        id:        merchant.id,
-        email:     merchant.email,
-        name:      merchant.name,
-        kycLevel:  merchant.kycLevel,
-        createdAt: merchant.createdAt,
+        id:                   merchant.id,
+        email:                merchant.email,
+        name:                 merchant.name,
+        kycLevel:             merchant.kycLevel,
+        createdAt:            merchant.createdAt,
+        publishableKey:       merchant.publishableKey ?? null,
+        sandboxPublishableKey: merchant.sandboxPublishableKey ?? null,
       },
     });
   } catch (err: any) {
@@ -284,6 +286,61 @@ router.put('/payouts', requireSession, async (req, res) => {
         bankAccountName:       newInst.bankAccountName,
         walletAddress:         newInst.walletAddress,
       },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/v1/merchant/webhook
+router.get('/webhook', requireSession, async (req, res) => {
+  try {
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
+    return res.json({
+      success: true,
+      data: {
+        url:       merchant.webhookUrl ?? null,
+        hasSecret: !!merchant.webhookSecret,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PATCH /api/v1/merchant/webhook — update the endpoint URL
+router.patch('/webhook', requireSession, async (req, res) => {
+  const raw = req.body?.url;
+  const url  = raw === '' || raw === null ? null : String(raw ?? '').trim();
+
+  if (url !== null) {
+    // Basic URL validation — must be https or http
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
+    } catch {
+      return res.status(400).json({ success: false, error: 'url must be a valid http/https URL' });
+    }
+    if (url.length > 512) return res.status(400).json({ success: false, error: 'url too long' });
+  }
+
+  try {
+    await prisma.merchant.update({ where: { id: req.merchantId }, data: { webhookUrl: url } });
+    return res.json({ success: true, data: { url } });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/v1/merchant/webhook/secret — rotate the signing secret (shown exactly once)
+router.post('/webhook/secret', requireSession, async (req, res) => {
+  try {
+    const secret = 'whsec_' + crypto.randomBytes(32).toString('hex');
+    await prisma.merchant.update({ where: { id: req.merchantId }, data: { webhookSecret: secret } });
+    return res.json({
+      success: true,
+      data: { secret, warning: 'Store this secret now — it will not be shown again.' },
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
