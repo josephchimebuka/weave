@@ -23,6 +23,7 @@ model Merchant {
   // Publishable key (pk_live_...) — safe to ship in browser JS.
   // Secret keys are stored hashed in the KeyPair table and never kept plaintext.
   publishableKey            String       @unique
+  sandboxPublishableKey     String?      @unique
   defaultPayoutInstrumentId String?      // FK-ish (not enforced to avoid cycle with Instrument)
   
   // Outgoing Notifications
@@ -171,6 +172,7 @@ model Order {
   destAmount         Decimal?     @db.Decimal(36, 18)  // confirmed settled amount, updated on completion
   quoteRate          Decimal?     @db.Decimal(36, 18)  // source→dest rate snapshot at creation
 
+  sandboxMode        Boolean      @default(false)
   status             String       // "awaiting_deposit" | "processing" | "completed" | "failed" | "refunded"
   routePlan          Json?        // RoutePlan snapshot from the router
   reference          String?      // merchant-supplied reference

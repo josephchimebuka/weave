@@ -53,18 +53,23 @@ function generatePublishableKey(): string {
   return 'pk_live_' + crypto.randomBytes(24).toString('hex');
 }
 
+function generateSandboxKey(): string {
+  return 'pk_test_' + crypto.randomBytes(24).toString('hex');
+}
+
 function generateSecretKey(): string {
   return 'sk_live_' + crypto.randomBytes(32).toString('hex');
 }
 
-function pickPublicMerchant(m: { id: string; email: string; name: string; publishableKey: string; createdAt: Date; updatedAt: Date }) {
+function pickPublicMerchant(m: { id: string; email: string; name: string; publishableKey: string; sandboxPublishableKey?: string | null; createdAt: Date; updatedAt: Date }) {
   return {
-    id:             m.id,
-    email:          m.email,
-    name:           m.name,
-    publishableKey: m.publishableKey,
-    createdAt:      m.createdAt,
-    updatedAt:      m.updatedAt,
+    id:                    m.id,
+    email:                 m.email,
+    name:                  m.name,
+    publishableKey:        m.publishableKey,
+    sandboxPublishableKey: m.sandboxPublishableKey ?? null,
+    createdAt:             m.createdAt,
+    updatedAt:             m.updatedAt,
   };
 }
 
@@ -96,9 +101,10 @@ router.post('/signup', authLimiter, async (req, res) => {
       return res.status(409).json({ success: false, error: 'account already exists' });
     }
 
-    const publishableKey = generatePublishableKey();
-    const secretKey      = generateSecretKey();
-    const hashedSecret   = hashCode(secretKey);
+    const publishableKey        = generatePublishableKey();
+    const sandboxPublishableKey = generateSandboxKey();
+    const secretKey             = generateSecretKey();
+    const hashedSecret          = hashCode(secretKey);
 
     // Create Merchant + KeyPair in one transaction so signup is atomic.
     const { merchant, session } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -106,9 +112,10 @@ router.post('/signup', authLimiter, async (req, res) => {
         data: {
           email,
           name,
-          kycLevel:      'none',
-          passwordHash:  hashPassword(password),
+          kycLevel:             'none',
+          passwordHash:         hashPassword(password),
           publishableKey,
+          sandboxPublishableKey,
         },
       });
       await tx.keyPair.create({
@@ -141,6 +148,7 @@ router.post('/signup', authLimiter, async (req, res) => {
         session:  { token: session.token, expiresAt: session.expiresAt },
         // Secret key is shown exactly once — merchant must store it.
         secretKey,
+        sandboxPublishableKey,
       },
     });
   } catch (err: any) {
