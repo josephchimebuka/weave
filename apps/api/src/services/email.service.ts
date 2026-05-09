@@ -80,14 +80,13 @@ export async function sendAdminKYBNotification(verificationId: string) {
 
     if (!v) return;
 
-    // Generate secure tokens for the buttons
-    // These expire in 48 hours for security
+    // Single review token. The review page (re-)mints fresh, short-lived
+    // approve/reject tokens itself — keeps the email surface minimal so
+    // forwarded mail / cached snapshots can't trigger actions or leak doc URLs.
     const secret = getAdminSecret();
-    const approveToken = jwt.sign({ sub: v.id, action: 'approve' }, secret, { expiresIn: '48h' });
-    const rejectToken = jwt.sign({ sub: v.id, action: 'reject' }, secret, { expiresIn: '48h' });
-
-    const approveUrl = `${API_URL}/admin/verify?id=${v.id}&action=approve&token=${approveToken}`;
-    const rejectUrl = `${API_URL}/admin/verify?id=${v.id}&action=reject&token=${rejectToken}`;
+    const reviewToken = jwt.sign({ sub: v.id, action: 'review' }, secret, { expiresIn: '24h' });
+    const reviewUrl   = `${API_URL}/admin/verify/review?id=${v.id}&token=${reviewToken}`;
+    const docCount    = Array.isArray(v.documentUrls) ? v.documentUrls.length : 0;
 
     const { data, error } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || 'Weave System <system@weave.com>',
@@ -107,37 +106,15 @@ export async function sendAdminKYBNotification(verificationId: string) {
               <tr><td style="color: #6B7572; padding: 6px 0;">Address</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.businessAddress)}, ${escHtml(v.city)}</td></tr>
               <tr><td style="color: #6B7572; padding: 6px 0;">State/Postal</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.state)} ${escHtml(v.postalCode)}</td></tr>
               <tr><td style="color: #6B7572; padding: 6px 0;">Merchant Email</td><td style="font-weight: 600; padding: 6px 0;">${escHtml(v.merchant.email)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 6px 0;">Documents</td><td style="font-weight: 600; padding: 6px 0;">${docCount} attached — viewable in the review page</td></tr>
             </table>
-
-            <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 20px 0;" />
-
-            <h3 style="margin-top: 0; font-size: 16px;">Documents</h3>
-            <div style="margin-top: 10px;">
-              ${(v.documentUrls as any[])?.map(doc => {
-        // Only render URLs that are safe Cloudinary origins
-        const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '';
-        const isSafeUrl = typeof doc.url === 'string' &&
-          (doc.url.startsWith(`https://res.cloudinary.com/${cloudName}/`) ||
-            doc.url.startsWith('https://res.cloudinary.com/'));
-        if (!isSafeUrl) return '';
-        return `
-                <div style="margin-bottom: 8px;">
-                  <a href="${escHtml(doc.url)}" target="_blank" rel="noopener noreferrer" style="color: #0F5D4C; font-weight: 600; text-decoration: none;">
-                    View ${escHtml(doc.type.replace(/_/g, ' '))} →
-                  </a>
-                </div>`;
-      }).join('') || '<p style="color: #9B9FA1;">No documents attached</p>'}
-            </div>
           </div>
 
-          <p>Review the application and take action below. These links are secure and expire in 48 hours.</p>
-          
+          <p>Documents are not embedded in this email. Open the review page to inspect them and take action; the link expires in 24 hours.</p>
+
           <div style="margin-top: 32px;">
-            <a href="${approveUrl}" style="background: #0F5D4C; color: white; padding: 12px 24px; border-radius: 99px; text-decoration: none; font-weight: 600;">
-              Approve Merchant
-            </a>
-            <a href="${rejectUrl}" style="background: #FFF0F0; color: #d94e4e; padding: 12px 24px; border-radius: 99px; border: 1px solid #FFD1D1; text-decoration: none; font-weight: 600; margin-left: 10px;">
-              Reject Application
+            <a href="${escHtml(reviewUrl)}" style="background: #0F5D4C; color: white; padding: 12px 24px; border-radius: 99px; text-decoration: none; font-weight: 600;">
+              Review application →
             </a>
           </div>
           <p style="font-size: 11px; color: #9B9FA1; margin-top: 48px; border-top: 1px solid #E8EAE6; padding-top: 24px;">

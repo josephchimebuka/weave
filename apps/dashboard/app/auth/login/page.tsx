@@ -14,7 +14,6 @@ export default function LoginPage() {
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState('');
 
-  // Check for existing session and redirect if found
   useEffect(() => {
     const token = readSessionToken();
     if (token) {

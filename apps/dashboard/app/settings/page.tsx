@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
 type ThemePreset = 'organic' | 'minimal';
 type AccentKey   = 'forest' | 'tan' | 'ink';
 type CodeTab     = 'html' | 'react';
@@ -41,9 +40,8 @@ const REACT_SNIPPET = `<script src="https://unpkg.com/@weave/widget/dist/umd.js"
       currency: 'NGN'
     }
   });
-</script>`; // Placeholder un-interpolated snippet if the component unmounts
+</script>`;
 
-// ── Main page ─────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   return (
     <Suspense fallback={<div className="animate-pulse bg-cream-deep/20 h-96 rounded-3xl" />}>
@@ -258,9 +256,6 @@ function SettingsContent() {
       if (res.ok) {
         setPayoutSaved(true);
         setTimeout(() => setPayoutSaved(false), 2000);
-        // The Paystack subaccount sync runs async after the PUT returns, so the
-        // PUT response body won't have the updated status. Re-fetch after a short
-        // delay to pick up the sync result and show the correct badge.
         setTimeout(() => {
           fetch('/api/merchant/payouts')
             .then(r => r.ok ? r.json() : null)

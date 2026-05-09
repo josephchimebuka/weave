@@ -139,7 +139,7 @@ export default function KybPage() {
   const uploadToCloudinary = async (file: File): Promise<string> => {
     const signRes = await fetch('/api/cloudinary-sign', { method: 'POST' });
     if (!signRes.ok) throw new Error('Failed to get upload signature');
-    const { timestamp, signature, apiKey, cloudName, folder } = await signRes.json();
+    const { timestamp, signature, apiKey, cloudName, folder, type } = await signRes.json();
 
     const data = new FormData();
     data.append('file', file);
@@ -147,7 +147,10 @@ export default function KybPage() {
     data.append('signature', signature);
     data.append('api_key', apiKey);
     data.append('folder', folder);
+    if (type) data.append('type', type);
 
+    // type=authenticated tells Cloudinary to gate delivery behind signed URLs.
+    // The /image/<type>/... segment in the returned secure_url reflects this.
     const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
       method: 'POST',
       body: data,

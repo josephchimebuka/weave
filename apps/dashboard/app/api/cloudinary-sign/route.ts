@@ -18,10 +18,14 @@ export async function POST() {
 
   const timestamp = Math.round(Date.now() / 1000);
   const folder    = 'kyb_documents';
+  const type      = 'authenticated';
 
-  // Cloudinary signed upload: SHA-1 of sorted param string + apiSecret
-  const paramsToSign = `folder=${folder}&timestamp=${timestamp}`;
+  // Cloudinary signed upload: SHA-1 of sorted param string + apiSecret.
+  // Params must be sorted alphabetically and 'type=authenticated' marks the asset
+  // as access-controlled — direct res.cloudinary.com URLs return 401 without a
+  // valid s--<sig>-- segment, which we mint server-side in the review proxy.
+  const paramsToSign = `folder=${folder}&timestamp=${timestamp}&type=${type}`;
   const signature = crypto.createHash('sha1').update(paramsToSign + apiSecret).digest('hex');
 
-  return NextResponse.json({ timestamp, signature, apiKey, cloudName, folder });
+  return NextResponse.json({ timestamp, signature, apiKey, cloudName, folder, type });
 }
