@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { FormEvent, useState } from 'react';
 import { forgotPassword } from '../../lib/auth-client';
+import { toast } from '../../components/Toaster';
 
 const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
 
@@ -17,14 +18,24 @@ export default function ForgotPasswordPage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(''); setSuccess(''); setDevToken(''); setDevOtp('');
-    if (!email.trim()) return setError('Enter the email tied to your account.');
+    if (!email.trim()) {
+      const msg = 'Enter the email tied to your account.';
+      setError(msg);
+      toast.error(msg);
+      return;
+    }
 
     setLoading(true);
     const result = await forgotPassword(email);
     setLoading(false);
-    if (!result.success) return setError(result.error);
+    if (!result.success) {
+      setError(result.error);
+      toast.error(result.error);
+      return;
+    }
 
     setSuccess(result.data.message);
+    toast.success('Reset instructions sent.');
     if (result.data.resetToken) setDevToken(result.data.resetToken);
     if (result.data.otpCode)    setDevOtp(result.data.otpCode);
   }

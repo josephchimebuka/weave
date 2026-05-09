@@ -17,6 +17,8 @@ type CodeTab     = 'html' | 'react';
 type SettingsTab = 'developer' | 'profile' | 'payouts';
 
 import { WeaveCheckout } from '@weave/widget';
+import { apiFetch } from '../lib/api-fetch';
+import { toast } from '../components/Toaster';
 
 const ACCENT_OPTIONS: { key: AccentKey; hex: string; swatchClass: string }[] = [
   { key: 'forest', hex: '#3D6B50', swatchClass: 'bg-forest' },
@@ -209,126 +211,126 @@ function SettingsContent() {
 
   async function regenerateKeys() {
     setRegenerating(true);
-    try {
-      const res  = await fetch('/api/merchant/api-key', { method: 'POST' });
-      const data = await res.json();
-      setPublicKey(data.publishableKey ?? data.publicKey ?? null);
-      setSecretKey(data.secretKey ?? null);
-      setCopied(null);
-    } catch {}
-    finally { setRegenerating(false); }
+    const result = await apiFetch<{ publishableKey?: string; publicKey?: string; secretKey?: string }>('/api/merchant/api-key', { method: 'POST' });
+    setRegenerating(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    setPublicKey(result.data.publishableKey ?? result.data.publicKey ?? null);
+    setSecretKey(result.data.secretKey ?? null);
+    setCopied(null);
+    toast.success('New API keys generated. Copy your secret key now — it won’t be shown again.');
   }
 
   async function saveName() {
     if (!editName.trim()) return;
     setSavingName(true);
-    try {
-      const res = await fetch('/api/merchant/profile', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editName.trim() }),
-      });
-      if (res.ok) {
-        const d = await res.json();
-        setProfile((p) => p ? { ...p, name: d.name ?? editName.trim() } : p);
-        setNameSaved(true);
-        setTimeout(() => setNameSaved(false), 2000);
-      }
-    } catch {}
-    finally { setSavingName(false); }
+    const result = await apiFetch<{ name?: string }>('/api/merchant/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: editName.trim() }),
+    });
+    setSavingName(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    setProfile((p) => p ? { ...p, name: result.data.name ?? editName.trim() } : p);
+    setNameSaved(true);
+    setTimeout(() => setNameSaved(false), 2000);
+    toast.success('Business name updated.');
   }
 
   async function savePayout() {
     setSavingPayout(true);
-    try {
-      const res = await fetch('/api/merchant/payouts', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: payoutKind,
-          assetKey: payoutAssetKey,
-          bankInstitution,
-          bankAccountIdentifier,
-          bankAccountName,
-          walletAddress
-        }),
-      });
-      if (res.ok) {
-        setPayoutSaved(true);
-        setTimeout(() => setPayoutSaved(false), 2000);
-        setTimeout(() => {
-          fetch('/api/merchant/payouts')
-            .then(r => r.ok ? r.json() : null)
-            .then(d => { if (d) setActivePayout(d); })
-            .catch(() => {});
-        }, 1200);
-      }
-    } catch {}
-    finally { setSavingPayout(false); }
+    const result = await apiFetch('/api/merchant/payouts', {
+      method: 'PUT',
+      body: JSON.stringify({
+        kind: payoutKind,
+        assetKey: payoutAssetKey,
+        bankInstitution,
+        bankAccountIdentifier,
+        bankAccountName,
+        walletAddress,
+      }),
+    });
+    setSavingPayout(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    setPayoutSaved(true);
+    setTimeout(() => setPayoutSaved(false), 2000);
+    toast.success('Payout destination saved.');
+    setTimeout(() => {
+      fetch('/api/merchant/payouts')
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setActivePayout(d); })
+        .catch(() => {});
+    }, 1200);
   }
 
   async function submitDeletionRequest() {
     setDeletingAccount(true);
-    try {
-      const res = await fetch('/api/merchant/request-deletion', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: deleteReason }),
-      });
-      if (res.ok) {
-        setDeleteSuccess(true);
-      }
-    } catch {}
-    finally { setDeletingAccount(false); }
+    const result = await apiFetch('/api/merchant/request-deletion', {
+      method: 'POST',
+      body: JSON.stringify({ reason: deleteReason }),
+    });
+    setDeletingAccount(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    setDeleteSuccess(true);
+    toast.success('Deletion request submitted. Our team will be in touch.');
   }
 
   async function saveWebhook() {
     setSavingWebhook(true);
-    try {
-      const res = await fetch('/api/merchant/webhook', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: webhookUrl.trim() || null }),
-      });
-      if (res.ok) {
-        setWebhookSaved(true);
-        setTimeout(() => setWebhookSaved(false), 2000);
-      }
-    } catch {}
-    finally { setSavingWebhook(false); }
+    const result = await apiFetch('/api/merchant/webhook', {
+      method: 'PATCH',
+      body: JSON.stringify({ url: webhookUrl.trim() || null }),
+    });
+    setSavingWebhook(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    setWebhookSaved(true);
+    setTimeout(() => setWebhookSaved(false), 2000);
+    toast.success(webhookUrl.trim() ? 'Webhook endpoint saved.' : 'Webhook endpoint cleared.');
   }
 
   async function sendTestEvent() {
     setSendingTest(true);
     setTestResult(null);
-    try {
-      const res = await fetch('/api/merchant/webhook/test', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) {
-        setTestResult({ ok: false, status: res.status });
-      } else {
-        setTestResult({ ok: data.ok ?? res.ok, status: data.status ?? res.status });
-      }
+    const result = await apiFetch<{ ok?: boolean; status?: number }>('/api/merchant/webhook/test', { method: 'POST' });
+    setSendingTest(false);
+    if (!result.ok) {
+      setTestResult({ ok: false, status: result.status });
+      toast.error(`Test webhook failed: ${result.error}`);
       setTimeout(() => setTestResult(null), 4000);
-    } catch {
-      setTestResult({ ok: false, status: 0 });
-      setTimeout(() => setTestResult(null), 4000);
-    } finally {
-      setSendingTest(false);
+      return;
     }
+    const ok = result.data.ok ?? true;
+    const status = result.data.status ?? 200;
+    setTestResult({ ok, status });
+    if (ok) toast.success(`Test event delivered · ${status}`);
+    else    toast.error(`Endpoint responded ${status}.`);
+    setTimeout(() => setTestResult(null), 4000);
   }
 
   async function rotateSecret() {
     setRotatingSecret(true);
-    try {
-      const res = await fetch('/api/merchant/webhook/secret', { method: 'POST' });
-      const resp = await res.json();
-      if (resp.success && resp.data) {
-        setWebhookSecret(resp.data.secret);
-        setShowSecretModal(true);
-      }
-    } catch {}
-    finally { setRotatingSecret(false); }
+    const result = await apiFetch<{ secret: string }>('/api/merchant/webhook/secret', { method: 'POST' });
+    setRotatingSecret(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    setWebhookSecret(result.data.secret);
+    setShowSecretModal(true);
+    toast.success('Webhook secret rotated. Update your server before closing.');
   }
 
   const accentHex = ACCENT_OPTIONS.find((o) => o.key === accent)!.hex;

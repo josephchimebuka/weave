@@ -3,6 +3,7 @@ import { Fraunces, Figtree } from 'next/font/google';
 import { headers } from 'next/headers';
 import { SidebarLayout } from '../components/SidebarLayout';
 import { Analytics } from '@vercel/analytics/next';
+import { Toaster } from './components/Toaster';
 
 const fraunces = Fraunces({
   subsets: ['latin'],
@@ -27,6 +28,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html lang="en" className={`h-full ${fraunces.variable} ${figtree.variable}`}>
       <body className="h-full antialiased text-ink bg-cream font-body">
         <SidebarLayout>{children}</SidebarLayout>
+        <Toaster />
         <Analytics />
       </body>
     </html>

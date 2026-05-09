@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { FormEvent, useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { resetPassword, storeSessionToken } from '../../lib/auth-client';
+import { toast } from '../../components/Toaster';
 
 const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
 
@@ -29,16 +30,18 @@ function ResetPasswordForm() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
-    if (!resetToken.trim() || !otp.trim()) return setError('Reset token and OTP code are required.');
-    if (password.length < 8)               return setError('Use at least 8 characters for your new password.');
-    if (password !== confirmPassword)      return setError('Passwords do not match.');
+    const fail = (msg: string) => { setError(msg); toast.error(msg); };
+    if (!resetToken.trim() || !otp.trim()) return fail('Reset token and OTP code are required.');
+    if (password.length < 8)               return fail('Use at least 8 characters for your new password.');
+    if (password !== confirmPassword)      return fail('Passwords do not match.');
 
     setLoading(true);
     const result = await resetPassword(resetToken, otp, password);
     setLoading(false);
-    if (!result.success) return setError(result.error);
+    if (!result.success) return fail(result.error);
 
     storeSessionToken(result.data.session.token);
+    toast.success('Password reset. Welcome back.');
     router.push('/');
   }
 

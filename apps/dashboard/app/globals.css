@@ -15,3 +15,74 @@ body {
     var(--color-cream);
   background-attachment: fixed;
 }
+
+/* Branded sonner toasts — keyed off classNames in <Toaster> */
+.weave-toast {
+  background: var(--color-cream-soft) !important;
+  color: var(--color-ink) !important;
+  border: 1px solid var(--color-hair) !important;
+  border-radius: 14px !important;
+  box-shadow:
+    0 1px 0 rgba(28, 27, 23, 0.04),
+    0 6px 18px -8px rgba(28, 27, 23, 0.18),
+    0 14px 32px -16px rgba(28, 27, 23, 0.12) !important;
+  padding: 12px 14px !important;
+  backdrop-filter: blur(6px);
+}
+.weave-toast-title {
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+}
+.weave-toast-desc {
+  color: var(--color-ink-muted) !important;
+  font-size: 12.5px !important;
+  margin-top: 2px !important;
+}
+.weave-toast-success {
+  background: var(--color-forest-mist) !important;
+  border-color: var(--color-forest-light) !important;
+  color: var(--color-forest-deep) !important;
+}
+.weave-toast-success .weave-toast-desc { color: color-mix(in srgb, var(--color-forest-deep) 75%, transparent) !important; }
+.weave-toast-success [data-icon] { color: var(--color-forest) !important; }
+
+.weave-toast-error {
+  background: var(--color-terracotta-soft) !important;
+  border-color: color-mix(in srgb, var(--color-terracotta) 35%, transparent) !important;
+  color: #6E2A24 !important;
+}
+.weave-toast-error .weave-toast-desc { color: color-mix(in srgb, #6E2A24 78%, transparent) !important; }
+.weave-toast-error [data-icon] { color: var(--color-terracotta) !important; }
+
+.weave-toast-warning {
+  background: var(--color-tan-mist) !important;
+  border-color: color-mix(in srgb, var(--color-tan) 40%, transparent) !important;
+  color: var(--color-tan-deep) !important;
+}
+.weave-toast-warning [data-icon] { color: var(--color-tan-deep) !important; }
+
+.weave-toast-info {
+  background: var(--color-cream-soft) !important;
+  border-color: var(--color-hair) !important;
+  color: var(--color-ink) !important;
+}
+.weave-toast-info [data-icon] { color: var(--color-forest) !important; }
+
+.weave-toast-action {
+  background: var(--color-forest) !important;
+  color: var(--color-cream-soft) !important;
+  border-radius: 999px !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  padding: 6px 12px !important;
+}
+.weave-toast-cancel {
+  background: transparent !important;
+  color: var(--color-ink-muted) !important;
+  font-size: 12px !important;
+}
+.weave-toast-close {
+  background: transparent !important;
+  color: var(--color-ink-muted) !important;
+  border: 1px solid var(--color-hair) !important;
+}

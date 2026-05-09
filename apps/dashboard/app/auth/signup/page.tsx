@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { signup, storeSessionToken } from '../../lib/auth-client';
+import { toast } from '../../components/Toaster';
 
 const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
 
@@ -18,16 +19,18 @@ export default function SignupPage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
-    if (!email.trim())                 return setError('A valid work email is required.');
-    if (password.length < 8)           return setError('Use at least 8 characters for your password.');
-    if (password !== confirmPassword)  return setError('Passwords do not match.');
+    const fail = (msg: string) => { setError(msg); toast.error(msg); };
+    if (!email.trim())                 return fail('A valid work email is required.');
+    if (password.length < 8)           return fail('Use at least 8 characters for your password.');
+    if (password !== confirmPassword)  return fail('Passwords do not match.');
 
     setLoading(true);
     const result = await signup(email, password);
     setLoading(false);
-    if (!result.success) return setError(result.error);
+    if (!result.success) return fail(result.error);
 
     storeSessionToken(result.data.session.token);
+    toast.success('Account created.');
     router.push('/');
   }
 

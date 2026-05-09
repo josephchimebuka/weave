@@ -13,6 +13,8 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
+import { apiFetch } from '../lib/api-fetch';
+import { toast } from '../components/Toaster';
 
 type FAQCategory = {
   title: string;
@@ -232,22 +234,21 @@ function SupportForm() {
     setSuccess(false);
     setError(null);
 
-    try {
-      const res = await fetch('/api/support/contact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
+    const result = await apiFetch('/api/support/contact', {
+      method: 'POST',
+      body: JSON.stringify(formData),
+    });
+    setLoading(false);
 
-      if (!res.ok) throw new Error('Failed to send message. Please try again.');
-      
-      setSuccess(true);
-      setFormData({ name: '', email: '', topic: 'payments', message: '' });
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    if (!result.ok) {
+      setError(result.error);
+      toast.error(result.error);
+      return;
     }
+
+    setSuccess(true);
+    toast.success('Message sent. Our team will reply within 24 hours.');
+    setFormData({ name: '', email: '', topic: 'payments', message: '' });
   };
 
   if (success) {

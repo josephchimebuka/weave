@@ -1,4 +1,8 @@
-import CyclingWidget from '../components/CyclingWidget'
+'use client';
+
+import { useState, useEffect } from 'react';
+import CyclingWidget from '../components/CyclingWidget';
+import { RequestAccessModal } from '../components/RequestAccessModal';
 
 function Wordmark({ size = 26 }: { size?: number }) {
   return (
@@ -55,6 +59,29 @@ function WovenBackground() {
 }
 
 export default function Home() {
+  const [isRequestAccessOpen, setIsRequestAccessOpen] = useState(false);
+
+  // Load Calendly script on page load
+  useEffect(() => {
+    // Check if script already exists
+    const existingScript = document.querySelector('script[src*="calendly"]');
+    if (existingScript) {
+      return;
+    }
+
+    // Add preconnect for faster DNS resolution
+    const preconnect = document.createElement('link');
+    preconnect.rel = 'preconnect';
+    preconnect.href = 'https://assets.calendly.com';
+    document.head.appendChild(preconnect);
+
+    // Load the Calendly script
+    const script = document.createElement('script');
+    script.src = 'https://assets.calendly.com/assets/external/widget.js';
+    script.async = true;
+    document.head.appendChild(script);
+  }, []);
+
   return (
     <div className='w-full h-full 3xl:h-screen' style={{
       background: '#F5F4EF',
@@ -62,6 +89,7 @@ export default function Home() {
       color: '#0B0F0E', overflow: 'hidden',
       display: 'flex', flexDirection: 'column',
     }}>
+      <RequestAccessModal isOpen={isRequestAccessOpen} onClose={() => setIsRequestAccessOpen(false)} />
       <WovenBackground />
 
       {/* Nav */}
@@ -108,7 +136,9 @@ export default function Home() {
           dollars or local currency — without seeing the seam.
         </p>
         <div style={{ display: 'flex', gap: 10, marginTop: 24 }} className="flex-col sm:flex-row w-full sm:w-auto px-6 sm:px-0">
-          <button style={{
+          <button 
+            onClick={() => setIsRequestAccessOpen(true)}
+            style={{
             height: 44, padding: '0 22px', borderRadius: 10, color: '#fff',
             border: 'none', fontFamily: 'inherit', fontSize: 14, fontWeight: 500, cursor: 'pointer',
           }} className="w-full sm:w-auto bg-ink hover:bg-forest transition-all active:scale-95 shadow-leaf">

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { FormEvent, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { login, storeSessionToken, readSessionToken } from '../../lib/auth-client';
+import { toast } from '../../components/Toaster';
 
 const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
 
@@ -25,14 +26,21 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     if (!email.trim() || !password) {
-      setError('Enter your email and password to continue.');
+      const msg = 'Enter your email and password to continue.';
+      setError(msg);
+      toast.error(msg);
       return;
     }
     setLoading(true);
     const result = await login(email, password);
     setLoading(false);
-    if (!result.success) { setError(result.error); return; }
+    if (!result.success) {
+      setError(result.error);
+      toast.error(result.error);
+      return;
+    }
     storeSessionToken(result.data.session.token);
+    toast.success('Welcome back.');
     router.push('/');
   }
 
