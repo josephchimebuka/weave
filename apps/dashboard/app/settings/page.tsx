@@ -392,7 +392,7 @@ export default function CheckoutPage() {
 
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 scale-90">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-5 fade-up">
         <div className="max-w-2xl">
