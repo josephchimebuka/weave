@@ -23,29 +23,35 @@ function isSafeWebhookUrl(urlStr: string): boolean {
   return true;
 }
 
+export type WebhookEventType =
+  | 'order.completed'
+  | 'order.failed'
+  | 'order.processing'
+  | 'order.created';
+
 export interface WebhookEvent {
-  id:        string;
-  type:      'payment.succeeded' | 'payment.failed';
-  timestamp: string;
-  data:      any;
+  event: WebhookEventType;
+  data: {
+    id: string;
+    reference?: string | null;
+    status: string;
+    sourceAssetKey: string;
+    destAssetKey: string;
+    sourceAmount: number;
+    destAmount: number | null;
+    createdAt: string;
+  };
 }
 
 /**
  * Service for dispatching cryptographically signed webhooks to merchant servers.
+ *
+ * Wire format (matches dashboard /webhook/test endpoint and public docs):
+ *   X-Weave-Signature:  sha256=<hex>      // HMAC-SHA256 of `${timestamp}.${rawBody}`
+ *   X-Weave-Timestamp:  <epoch seconds>   // Replay protection
+ *   X-Weave-Event:      <event type>      // e.g. order.completed
  */
 class WebhookService {
-  /**
-   * Signs a payload using the merchant's webhook secret.
-   * Signature is sent in the 'x-weave-signature' header.
-   */
-  private sign(payload: string, secret: string): string {
-    return crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  }
-
-  /**
-   * Dispatches an event to a merchant.
-   * In production, this should be called through a QStash worker to handle retries.
-   */
   async dispatch(merchantId: string, event: WebhookEvent) {
     const merchant = await prisma.merchant.findUnique({
       where: { id: merchantId },
@@ -61,23 +67,28 @@ class WebhookService {
       throw new Error('Merchant webhook URL is not a safe public HTTPS address');
     }
 
-    const payload = JSON.stringify(event);
-    const signature = this.sign(payload, merchant.webhookSecret);
+    const body = JSON.stringify(event);
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const sig = crypto
+      .createHmac('sha256', merchant.webhookSecret)
+      .update(`${timestamp}.${body}`)
+      .digest('hex');
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
       const res = await fetch(merchant.webhookUrl, {
         method: 'POST',
         headers: {
           'Content-Type':      'application/json',
-          'X-Weave-Signature': signature,
-          'X-Weave-Event':     event.type,
+          'X-Weave-Signature': `sha256=${sig}`,
+          'X-Weave-Timestamp': timestamp,
+          'X-Weave-Event':     event.event,
           'User-Agent':        'Weave-Webhook-Dispatcher/1.0',
         },
-        body:    payload,
-        signal:  controller.signal,
+        body,
+        signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
@@ -86,61 +97,60 @@ class WebhookService {
         throw new Error(`Merchant webhook responded with ${res.status}`);
       }
 
-      console.log(`[webhook] dispatched ${event.type} to merchant ${merchantId}`);
+      console.log(`[webhook] dispatched ${event.event} to merchant ${merchantId}`);
     } catch (err: any) {
       console.error(`[webhook] failed to dispatch to merchant ${merchantId}:`, err.message);
-      // Re-throw so the QStash worker knows to retry
       throw err;
     }
   }
 
-  /**
-   * Enqueues an event for background dispatch.
-   */
   async enqueue(merchantId: string, orderId: string | undefined, event: WebhookEvent) {
     const { qstash } = await import('../lib/qstash');
-    
-    // Fallback to local dev host if API_BASE is missing
     const baseUrl = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
     await qstash.publishJSON({
       url: `${baseUrl}/jobs/dispatch-outgoing`,
-      body: {
-        merchantId,
-        orderId,
-        event
-      }
+      body: { merchantId, orderId, event },
     });
   }
 
-  /**
-   * Convenience method to trigger a payment.succeeded event.
-   */
-  async triggerPaymentSucceeded(orderId: string) {
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      include: { merchant: true },
-    });
+  private async buildEvent(orderId: string, eventType: WebhookEventType): Promise<{ merchantId: string; event: WebhookEvent } | null> {
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) return null;
 
-    if (!order) return;
-
-    const event: WebhookEvent = {
-      id:        crypto.randomUUID(),
-      type:      'payment.succeeded',
-      timestamp: new Date().toISOString(),
-      data: {
-        id:             order.id,
-        reference:      order.reference,
-        status:         order.status,
-        sourceAsset:    order.sourceAssetKey,
-        sourceAmount:   order.sourceAmount,
-        destAsset:      order.destAssetKey,
-        destAmount:     order.destAmount,
-        completedAt:    order.updatedAt,
-      }
+    return {
+      merchantId: order.merchantId,
+      event: {
+        event: eventType,
+        data: {
+          id:             order.id,
+          reference:      order.reference,
+          status:         order.status,
+          sourceAssetKey: order.sourceAssetKey,
+          destAssetKey:   order.destAssetKey,
+          sourceAmount:   Number(order.sourceAmount),
+          destAmount:     order.destAmount == null ? null : Number(order.destAmount),
+          createdAt:      order.createdAt.toISOString(),
+        },
+      },
     };
+  }
 
-    return this.enqueue(order.merchantId, order.id, event);
+  async triggerOrderCompleted(orderId: string) {
+    const built = await this.buildEvent(orderId, 'order.completed');
+    if (!built) return;
+    return this.enqueue(built.merchantId, orderId, built.event);
+  }
+
+  async triggerOrderFailed(orderId: string) {
+    const built = await this.buildEvent(orderId, 'order.failed');
+    if (!built) return;
+    return this.enqueue(built.merchantId, orderId, built.event);
+  }
+
+  /** @deprecated use triggerOrderCompleted */
+  async triggerPaymentSucceeded(orderId: string) {
+    return this.triggerOrderCompleted(orderId);
   }
 }
 

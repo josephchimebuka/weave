@@ -1,9 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { login, storeSessionToken } from '../../lib/auth-client';
+import { login, storeSessionToken, readSessionToken } from '../../lib/auth-client';
 
 const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
 
@@ -13,6 +13,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState('');
+
+  // Check for existing session and redirect if found
+  useEffect(() => {
+    const token = readSessionToken();
+    if (token) {
+      router.push('/');
+    }
+  }, [router]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();

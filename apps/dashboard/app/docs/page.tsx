@@ -14,7 +14,7 @@ const WeaveCheckout = dynamic(
   { ssr: false }
 );
 
-type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'webhooks';
+type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'webhooks' | 'security' | 'support';
 type CodeTab  = 'html' | 'react' | 'nextjs';
 
 export default function DocsPage() {
@@ -50,8 +50,8 @@ export default function DocsPage() {
             <NavItem icon={<Bell size={14} />}       label="Webhooks"         active={activePage === 'webhooks'}   onClick={() => setActivePage('webhooks')} />
           </NavGroup>
           <NavGroup label="More">
-            <NavItem icon={<Shield size={14} />}  label="Security"           onClick={() => setActivePage('introduction')} />
-            <NavItem icon={<MessageSquare size={14} />} label="Support"      onClick={() => {}} />
+            <NavItem icon={<Shield size={14} />}        label="Security" active={activePage === 'security'} onClick={() => setActivePage('security')} />
+            <NavItem icon={<MessageSquare size={14} />} label="Support"  active={activePage === 'support'}  onClick={() => setActivePage('support')} />
           </NavGroup>
         </nav>
 
@@ -73,6 +73,8 @@ export default function DocsPage() {
           {activePage === 'api'          && <ApiReferencePage copy={copy} copied={copied} />}
           {activePage === 'playground'   && <ApiPlayground />}
           {activePage === 'webhooks'     && <WebhooksPage copy={copy} copied={copied} />}
+          {activePage === 'security'     && <SecurityPage copy={copy} copied={copied} />}
+          {activePage === 'support'      && <SupportPage />}
         </div>
       </main>
     </div>
@@ -361,9 +363,15 @@ curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:N
         </div>
         <div className="space-y-3 text-[13.5px] text-forest-deep/80 leading-relaxed">
           <p><strong className="text-forest-deep">API keys are scoped.</strong> Publishable keys (<IC>pk_</IC>) are browser-safe. Secret keys (<IC>sk_</IC>) must never leave your server.</p>
-          <p><strong className="text-forest-deep">All webhooks are signature-verified.</strong> Incoming provider webhooks (Paystack, Paycrest, ChainRails) are HMAC-SHA256 verified before any state is mutated. Outgoing merchant webhooks are also signed.</p>
-          <p><strong className="text-forest-deep">Idempotent processing.</strong> Every webhook event is deduplicated by <IC>{'(source, event, externalId)'}</IC> — duplicate deliveries are safely ignored.</p>
+          <p><strong className="text-forest-deep">All webhooks are signature-verified.</strong> Incoming provider webhooks (Paystack, Paycrest, ChainRails) are HMAC-verified before any state is mutated. Outgoing merchant webhooks are signed with HMAC-SHA256 over <IC>{`${'`${timestamp}.${rawBody}`'}`}</IC>.</p>
+          <p><strong className="text-forest-deep">Idempotent processing.</strong> Every incoming webhook event is deduplicated by <IC>{'(source, event, externalId)'}</IC>; outgoing events ship with a stable <IC>data.id</IC> for your handler to dedupe on.</p>
         </div>
+        <button
+          onClick={() => setActivePage('security')}
+          className="text-[12.5px] font-semibold text-forest-deep hover:underline underline-offset-2 inline-flex items-center gap-1.5 mt-1"
+        >
+          Read the full Security guide <ArrowRight size={13} strokeWidth={2.2} />
+        </button>
       </section>
     </div>
   );
@@ -838,7 +846,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
           { name: 'currency',       type: 'string',                             req: true,  desc: 'ISO 4217 settlement currency, e.g. "NGN".' },
           { name: 'description',    type: 'string',                             req: false, desc: 'Order description shown in the widget and on the receipt.' },
           { name: 'amountIn',       type: '"source" | "dest"',                 req: false, desc: '"source" (default) — customer deposits exactly this. "dest" — you receive exactly this; customer pays the crypto equivalent including fees.' },
-          { name: 'sourceAssetKey', type: 'string',                             req: false, desc: 'Lock payer to a specific asset, e.g. "crypto:ETH:USDC". Widget lets customer choose when omitted.' },
+          { name: 'sourceAssetKey', type: 'string',                             req: false, desc: 'Lock payer to a specific asset, e.g. "crypto:ETHEREUM:USDC". Widget lets customer choose when omitted.' },
           { name: 'destAssetKey',   type: 'string',                             req: false, desc: 'Lock settlement destination asset, e.g. "fiat:NGN". Overrides your configured default payout.' },
           { name: 'destInstrument', type: 'InlineBankInstrument | InlineWalletInstrument', req: false, desc: 'Explicit payout instrument for this order. Overrides both destAssetKey and the merchant default.' },
         ]} />
@@ -855,12 +863,12 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
             method: 'GET', path: '/quotes',
             summary: 'Live exchange rate and full fee breakdown for any asset pair.',
             params: [
-              { name: 'from',     type: 'string',            req: true,  desc: 'Source asset key — e.g. crypto:ETH:USDC' },
+              { name: 'from',     type: 'string',            req: true,  desc: 'Source asset key — e.g. crypto:ETHEREUM:USDC' },
               { name: 'to',       type: 'string',            req: true,  desc: 'Destination asset key — e.g. fiat:NGN' },
               { name: 'amount',   type: 'number',            req: true,  desc: 'Amount in source asset (or dest when amountIn=dest)' },
               { name: 'amountIn', type: '"source" | "dest"', req: false, desc: 'Whether amount is source- or dest-denominated. Default: source' },
             ],
-            request: `curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:ETH:USDC&to=fiat:NGN&amount=50" \\
+            request: `curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:ETHEREUM:USDC&to=fiat:NGN&amount=50" \\
   -H "x-api-key: pk_live_..."`,
             response: `{
   "data": {
@@ -876,7 +884,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
     },
     "route": {
       "steps": [
-        { "provider": "nearintents", "fromAsset": "crypto:ETH:USDC",  "toAsset": "crypto:BASE:USDC", "expectedFeeBps": 25, "expectedSecs": 90 },
+        { "provider": "nearintents", "fromAsset": "crypto:ETHEREUM:USDC",  "toAsset": "crypto:BASE:USDC", "expectedFeeBps": 25, "expectedSecs": 90 },
         { "provider": "paycrest",    "fromAsset": "crypto:BASE:USDC", "toAsset": "fiat:NGN",          "expectedFeeBps": 85, "expectedSecs": 90 }
       ],
       "totalExpectedFeeBps": 110,
@@ -890,7 +898,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
             summary: 'Create a payment order and receive nextAction for the widget.',
             params: [
               { name: 'source.inline.kind',         type: '"crypto_wallet" | "bank_account"', req: true,  desc: 'Type of source instrument' },
-              { name: 'source.inline.assetKey',     type: 'string',             req: true,  desc: 'Source asset key, e.g. crypto:ETH:USDC' },
+              { name: 'source.inline.assetKey',     type: 'string',             req: true,  desc: 'Source asset key, e.g. crypto:ETHEREUM:USDC' },
               { name: 'source.inline.walletAddress',type: 'string',             req: false, desc: 'Customer wallet address (crypto sources)' },
               { name: 'amount',                     type: 'number',             req: true,  desc: 'Payment amount in source units (unless amountIn=dest)' },
               { name: 'amountIn',                   type: '"source" | "dest"',  req: false, desc: 'Whether amount is source- or dest-denominated. Default: source' },
@@ -1153,10 +1161,8 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
         <SectionHeading icon={<Zap size={17} />} title="Events" />
         <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
           {[
-            { event: 'order.completed',  dot: 'bg-forest',  desc: 'All route steps settled. Funds delivered to your payout destination. Trigger fulfilment here.' },
-            { event: 'order.processing', dot: 'bg-forest/50',desc: 'Deposit confirmed — bridge / settlement in progress.' },
-            { event: 'order.failed',     dot: 'bg-red-400', desc: 'Payment failed or expired. No funds moved.' },
-            { event: 'order.created',    dot: 'bg-ink/25',  desc: 'A new order session was initialized.' },
+            { event: 'order.completed', dot: 'bg-forest',    desc: 'All route steps settled. Funds delivered to your payout destination. Trigger fulfilment here.' },
+            { event: 'order.failed',    dot: 'bg-red-400',   desc: 'Payment failed, expired, or refunded. No funds delivered.' },
           ].map(({ event, dot, desc }, i, arr) => (
             <div key={event} className={`flex items-start gap-4 px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
               <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
@@ -1164,6 +1170,32 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
                 <code className="text-[13px] font-mono font-semibold text-ink">{event}</code>
                 <p className="text-[13px] text-ink-muted mt-0.5 leading-relaxed">{desc}</p>
               </div>
+            </div>
+          ))}
+        </div>
+        <p className="text-[13px] text-ink-muted leading-relaxed">
+          Two more event types are reserved for future use — <IC>order.created</IC> and <IC>order.processing</IC> — but are not yet emitted.
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Headers */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Lock size={17} />} title="Delivery Headers" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { header: 'X-Weave-Signature', value: 'sha256=<hex>',        desc: 'HMAC-SHA256 of "{timestamp}.{rawBody}", signed with your webhook secret.' },
+            { header: 'X-Weave-Timestamp', value: '<epoch seconds>',     desc: 'Unix timestamp used in the signature payload. Reject deliveries older than your tolerance window (we recommend 5 minutes).' },
+            { header: 'X-Weave-Event',     value: 'order.completed',     desc: 'Convenience header — the event type, also present in the body.' },
+            { header: 'User-Agent',        value: 'Weave-Webhook-Dispatcher/1.0', desc: 'Identifies traffic from Weave.' },
+          ].map(({ header, value, desc }, i, arr) => (
+            <div key={header} className={`flex flex-col gap-1 px-5 py-3.5 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <div className="flex items-baseline justify-between gap-4">
+                <code className="text-[12.5px] font-mono font-semibold text-forest-deep">{header}</code>
+                <code className="text-[11.5px] font-mono text-ink-muted">{value}</code>
+              </div>
+              <p className="text-[12px] text-ink-muted leading-relaxed">{desc}</p>
             </div>
           ))}
         </div>
@@ -1178,15 +1210,21 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
 {`{
   "event": "order.completed",
   "data": {
-    "orderId":      "ord_abc123",
-    "status":       "completed",
-    "sourceAsset":  "crypto:ETHEREUM:USDC",
-    "destAsset":    "fiat:NGN",
-    "sourceAmount": 50.38,
-    "destAmount":   74250.00
+    "id":             "clxq8a4...",
+    "reference":      "your-internal-id",
+    "status":         "completed",
+    "sourceAssetKey": "crypto:ETHEREUM:USDC",
+    "destAssetKey":   "fiat:NGN",
+    "sourceAmount":   50.38,
+    "destAmount":     74250,
+    "createdAt":      "2026-05-01T10:00:00.000Z"
   }
 }`}
         </CodeBlock>
+        <p className="text-[13px] text-ink-muted leading-relaxed">
+          Use <IC>data.id</IC> as the idempotency key — store processed order IDs and short-circuit duplicate deliveries with a <IC>200</IC>.
+          <IC>reference</IC> is the value you supplied on <IC>POST /orders</IC> (or <IC>null</IC> when omitted).
+        </p>
       </section>
 
       <div className="rule-dotted" />
@@ -1195,9 +1233,8 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
       <section className="space-y-5">
         <SectionHeading icon={<Lock size={17} />} title="Signature Verification" />
         <p className="text-[14px] text-ink-muted leading-relaxed">
-          The <IC>x-weave-signature</IC> header contains the HMAC-SHA256 hex digest of the <strong className="text-ink">raw request body</strong>
-          signed with your webhook secret (<IC>whsec_…</IC>).
-          Do not parse the body as JSON before hashing — use the raw buffer.
+          The signature is computed from <strong className="text-ink"><IC>{`${'`${timestamp}.${rawBody}`'}`}</IC></strong> — concatenated with a literal dot — and signed with your webhook secret (<IC>whsec_…</IC>).
+          The header value is <IC>sha256=&lt;hex&gt;</IC>; strip the prefix before comparing. Always hash the <strong className="text-ink">raw request body</strong>, not a re-serialized JSON object.
         </p>
 
         <CodeBlock id="wh-verify-ts" copy={copy} copied={copied} lang="ts">
@@ -1205,24 +1242,32 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
 import express from 'express';
 
 const app = express();
+const TOLERANCE_SECONDS = 5 * 60;
 
-// Use raw body middleware — bodyParser.json() will discard the raw buffer.
+// Raw body middleware — bodyParser.json() will discard the raw buffer.
 app.post('/webhooks/weave', express.raw({ type: 'application/json' }), (req, res) => {
-  const sig  = req.headers['x-weave-signature'] as string;
-  const hash = crypto
+  const header    = (req.headers['x-weave-signature'] as string | undefined) ?? '';
+  const timestamp = (req.headers['x-weave-timestamp'] as string | undefined) ?? '';
+  const sig       = header.startsWith('sha256=') ? header.slice(7) : header;
+
+  // Replay protection
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > TOLERANCE_SECONDS) {
+    return res.status(401).send('Stale timestamp');
+  }
+
+  const expected = crypto
     .createHmac('sha256', process.env.WEAVE_WEBHOOK_SECRET!)
-    .update(req.body)        // raw Buffer — not JSON.stringify(req.body)
+    .update(\`\${timestamp}.\${req.body.toString()}\`)
     .digest('hex');
 
-  if (!sig || sig !== hash) {
+  if (!sig || !crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) {
     return res.status(401).send('Invalid signature');
   }
 
-  const payload = JSON.parse(req.body.toString());
-  const { event, data } = payload;
+  const { event, data } = JSON.parse(req.body.toString());
 
   if (event === 'order.completed') {
-    await fulfillOrder(data.orderId);
+    await fulfillOrder(data.id);  // dedupe on data.id
   }
 
   res.json({ received: true });
@@ -1230,24 +1275,32 @@ app.post('/webhooks/weave', express.raw({ type: 'application/json' }), (req, res
         </CodeBlock>
 
         <CodeBlock id="wh-verify-py" copy={copy} copied={copied} lang="python">
-{`import hmac, hashlib, os
+{`import hmac, hashlib, os, time
 from flask import Flask, request
 
 app = Flask(__name__)
+TOLERANCE_SECONDS = 5 * 60
 
 @app.route('/webhooks/weave', methods=['POST'])
 def weave_webhook():
-    sig  = request.headers.get('x-weave-signature', '')
-    body = request.get_data()           # raw bytes
-    secret = os.environ['WEAVE_WEBHOOK_SECRET'].encode()
-    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    header    = request.headers.get('x-weave-signature', '')
+    timestamp = request.headers.get('x-weave-timestamp', '')
+    sig       = header[7:] if header.startswith('sha256=') else header
+
+    if abs(time.time() - int(timestamp)) > TOLERANCE_SECONDS:
+        return 'Stale timestamp', 401
+
+    body     = request.get_data()
+    secret   = os.environ['WEAVE_WEBHOOK_SECRET'].encode()
+    signed   = f'{timestamp}.'.encode() + body
+    expected = hmac.new(secret, signed, hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(sig, expected):
         return 'Invalid signature', 401
 
     payload = request.get_json(force=True)
     if payload['event'] == 'order.completed':
-        fulfill_order(payload['data']['orderId'])
+        fulfill_order(payload['data']['id'])  # dedupe on data.id
 
     return {'received': True}`}
         </CodeBlock>
@@ -1260,11 +1313,11 @@ def weave_webhook():
         <SectionHeading icon={<ArrowRight size={17} />} title="Retry Behaviour" />
         <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
           {[
+            { label: 'Transport',         value: 'QStash background queue' },
             { label: 'Trigger',           value: 'Non-2xx response or network timeout' },
-            { label: 'Retry schedule',    value: '30 s → 2 min → 10 min → 1 hr (4 attempts)' },
-            { label: 'Idempotency key',   value: 'x-weave-event-id header on every delivery' },
-            { label: 'Timeout per try',   value: '30 seconds' },
-            { label: 'Sandbox retries',   value: 'Webhooks are suppressed in sandbox mode' },
+            { label: 'Timeout per try',   value: '10 seconds' },
+            { label: 'Idempotency key',   value: 'data.id (in body)' },
+            { label: 'Sandbox',           value: 'Webhooks suppressed for sandbox orders' },
           ].map(({ label, value }, i, arr) => (
             <div key={label} className={`flex justify-between items-start gap-6 px-5 py-3.5 text-[13px] ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
               <span className="text-ink-muted shrink-0">{label}</span>
@@ -1273,8 +1326,210 @@ def weave_webhook():
           ))}
         </div>
         <p className="text-[13px] text-ink-muted leading-relaxed">
-          Use the <IC>x-weave-event-id</IC> header to deduplicate retried deliveries on your server. Store processed IDs in a fast lookup (Redis, DB unique index) and return <IC>200</IC> immediately for duplicates without re-processing.
+          QStash retries failed deliveries with exponential back-off until the configured retry count is exhausted. Dedupe with <IC>data.id</IC> on your side and return <IC>200</IC> immediately for repeats.
         </p>
+        <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13px] text-forest-deep leading-relaxed">
+          Use <strong className="text-forest-deep">Settings → Developer → Webhooks → Send test event</strong> to fire a real signed delivery against your endpoint with sample data.
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Security
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SecurityPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Security</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          How Weave authenticates requests, signs webhooks, and isolates sandbox traffic. Designed for direct integration without a server-side SDK.
+        </p>
+      </header>
+
+      <section className="space-y-5">
+        <SectionHeading icon={<KeyRound size={18} />} title="API Key Types" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { tag: 'pk_live_…',  label: 'Publishable (live)',  hdr: 'x-api-key',                       use: 'Browser widget, public payment pages. Scoped to creating orders + reading your own resources. Never grants account read access.' },
+            { tag: 'pk_test_…',  label: 'Publishable (test)',  hdr: 'x-api-key',                       use: 'Sandbox traffic. Orders auto-complete instantly, real providers are not called, and outgoing webhooks are suppressed.' },
+            { tag: 'sk_live_…',  label: 'Secret',              hdr: 'x-public-key + x-secret-key',     use: 'Server-to-server only. Required for any flow that should not be possible from the browser. Sent alongside the matching publishable key as a pair; the server compares a hash, never the plaintext.' },
+            { tag: 'whsec_…',    label: 'Webhook secret',      hdr: '— (used to sign deliveries)',     use: 'HMAC key for verifying incoming webhook deliveries. Rotate from Settings → Developer → Webhooks; the new value is shown exactly once.' },
+          ].map(({ tag, label, hdr, use }, i, arr) => (
+            <div key={tag} className={`px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''} space-y-1.5`}>
+              <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                <code className="text-[13px] font-mono font-semibold text-forest-deep">{tag}</code>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">{label}</span>
+              </div>
+              <p className="text-[12px] text-ink-muted"><span className="font-mono text-forest-deep">{hdr}</span></p>
+              <p className="text-[13px] text-ink-muted leading-relaxed">{use}</p>
+            </div>
+          ))}
+        </div>
+        <CodeBlock id="sec-keypair" copy={copy} copied={copied} lang="bash">
+{`# Server-only — uses the secret keypair (never expose either header in the browser).
+curl https://api.paywithweave.com/api/v1/orders \\
+  -H "x-public-key: pk_live_..." \\
+  -H "x-secret-key: sk_live_..." \\
+  -H "Content-Type: application/json"`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Shield size={18} />} title="Webhook Verification" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Outgoing webhooks are signed with HMAC-SHA256 over <IC>{`${'`${timestamp}.${rawBody}`'}`}</IC>. Always verify the signature
+          <strong className="text-ink"> before mutating any state</strong>, and reject deliveries whose timestamp is outside your tolerance window.
+          See the full spec under <strong className="text-ink">Webhooks → Signature Verification</strong>.
+        </p>
+        <ul className="bg-cream-soft rounded-[20px] border border-hair-soft p-5 space-y-2.5 text-[13px] text-ink-muted">
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Hash the <strong className="text-ink">raw body bytes</strong> — not a re-stringified JSON object. Any reformatting breaks the signature.</span></li>
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Strip the <IC>sha256=</IC> prefix from <IC>X-Weave-Signature</IC> before comparing.</span></li>
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Use <IC>crypto.timingSafeEqual</IC> (or equivalent) for the comparison to avoid timing leaks.</span></li>
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Reject deliveries where <IC>X-Weave-Timestamp</IC> is older than ~5 minutes — protects against replay.</span></li>
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Dedupe on <IC>data.id</IC> in your handler and return <IC>200</IC> for repeats.</span></li>
+        </ul>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Lock size={18} />} title="Provider Webhook Hardening" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Inbound provider webhooks (Paystack, Paycrest, ChainRails) are HMAC-verified at the edge before any database write. The corresponding secret is required —
+          if it is missing the route fails closed with a 401 rather than accepting unverified payloads.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { name: 'Paycrest',    sig: 'HMAC-SHA256(secret, rawBody)' },
+            { name: 'ChainRails',  sig: 'HMAC-SHA256(secret, "${ts}.${rawBody}")' },
+            { name: 'Paystack',    sig: 'HMAC-SHA512(secret, rawBody)' },
+          ].map(({ name, sig }) => (
+            <div key={name} className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
+              <p className="text-[13px] font-semibold text-ink">{name}</p>
+              <code className="text-[11px] font-mono text-ink-muted break-all">{sig}</code>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<FlaskConical size={18} />} title="Sandbox Isolation" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Sandbox keys (<IC>pk_test_…</IC>) live in a separate auth path. Sandbox orders are flagged on the order row and excluded from revenue metrics, list endpoints filter them by default, and outgoing merchant webhooks are suppressed for them.
+          No real funds move under any circumstance.
+        </p>
+        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl px-5 py-4 flex gap-3">
+          <AlertTriangle size={16} className="text-amber-700 shrink-0 mt-0.5" strokeWidth={2} />
+          <p className="text-[13.5px] text-amber-900 leading-relaxed">
+            Any request authenticated with <IC>pk_test_</IC> implicitly enables sandbox mode for that request. Mixing test and live keys in the same flow will produce mismatched orders that cannot be reconciled — pick one and stay there.
+          </p>
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<AlertTriangle size={18} />} title="Reporting a Vulnerability" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Suspected security issues should be reported privately to <a href="mailto:security@paywithweave.com" className="text-forest-deep underline underline-offset-2 font-semibold">security@paywithweave.com</a>.
+          Please include reproduction steps and any proof-of-concept artefacts. We acknowledge within one business day and will not pursue good-faith research that respects the boundaries above.
+        </p>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Support
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SupportPage() {
+  const channels = [
+    { icon: <MessageSquare size={18} className="text-forest" strokeWidth={1.9} />, title: 'Open a support ticket', desc: 'Integration help, account issues, billing questions. Responses within one business day.', cta: 'Contact form', href: '/support' },
+    { icon: <Bell size={18} className="text-forest" strokeWidth={1.9} />,           title: 'Status & incidents',    desc: 'Subscribe to provider incidents that affect Paystack, Paycrest, ChainRails, and NEAR Intents corridors.', cta: 'status@paywithweave.com', href: 'mailto:status@paywithweave.com' },
+    { icon: <Shield size={18} className="text-forest" strokeWidth={1.9} />,         title: 'Security disclosures',  desc: 'Private channel for vulnerability reports. Do not file these as regular tickets.', cta: 'security@paywithweave.com', href: 'mailto:security@paywithweave.com' },
+    { icon: <KeyRound size={18} className="text-forest" strokeWidth={1.9} />,       title: 'Custom corridor',       desc: 'Need a chain, token, or fiat rail Weave does not currently route? Tell us about your volume and we will scope it.', cta: 'partners@paywithweave.com', href: 'mailto:partners@paywithweave.com' },
+  ];
+
+  const faqs = [
+    {
+      q: 'My webhook signature does not match — what changed?',
+      a: 'Most often: middleware re-serialised the JSON body before you hashed it. Hash the raw bytes. Also confirm you are concatenating "{timestamp}.{rawBody}" (with a literal dot) and stripping the "sha256=" prefix from the header.',
+    },
+    {
+      q: 'Order is stuck in awaiting_deposit',
+      a: 'GET /orders/:id forces a live sync against the active provider — call it once before raising a ticket. If the order is still stuck after 10 minutes past the corridor SLA, file a support ticket with the order ID.',
+    },
+    {
+      q: 'I rotated my secret key — old integrations stopped working',
+      a: 'That is expected. Rotation invalidates the previous secret immediately. Update every server that signs requests, then re-deploy. The publishable key is unaffected.',
+    },
+    {
+      q: 'Can I change a settled order?',
+      a: 'No. Once an order reaches completed the route is finalised and the funds have left Weave. Refunds must be issued out-of-band by you to the customer.',
+    },
+    {
+      q: 'Why is my sandbox order missing from /orders?',
+      a: 'List endpoints filter on the auth context. Sandbox orders only show when the same /orders call is authenticated with pk_test_ — switch keys (or pass the sandbox key) to see them.',
+    },
+  ];
+
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Support</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          The fastest path to an answer depends on the question. Pick the right channel below — and check the FAQ first; most integration issues are covered there.
+        </p>
+      </header>
+
+      <section className="space-y-5">
+        <SectionHeading icon={<MessageSquare size={18} />} title="Channels" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {channels.map(({ icon, title, desc, cta, href }) => (
+            <a key={title} href={href} className="group bg-cream-soft border border-hair-soft hover:border-forest/25 rounded-[20px] p-5 transition-all flex flex-col gap-3">
+              <div className="flex items-center gap-2.5">{icon}<p className="font-display text-[15px] font-semibold text-ink">{title}</p></div>
+              <p className="text-[13px] text-ink-muted leading-relaxed flex-1">{desc}</p>
+              <span className="text-[12.5px] font-semibold text-forest-deep group-hover:underline underline-offset-2 inline-flex items-center gap-1.5">
+                {cta} <ArrowRight size={13} strokeWidth={2.2} />
+              </span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Info size={18} />} title="FAQ" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {faqs.map(({ q, a }, i, arr) => (
+            <div key={q} className={`px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''} space-y-1.5`}>
+              <p className="text-[13.5px] font-semibold text-ink">{q}</p>
+              <p className="text-[13px] text-ink-muted leading-relaxed">{a}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-3">
+        <SectionHeading icon={<Terminal size={18} />} title="Before you file a ticket" />
+        <ul className="bg-cream-soft rounded-[20px] border border-hair-soft p-5 space-y-2.5 text-[13px] text-ink-muted">
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Include the <strong className="text-ink">order ID</strong> (and reference if you set one).</span></li>
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Note whether you are on <IC>pk_live_</IC> or <IC>pk_test_</IC>.</span></li>
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Try <IC>GET /orders/:id</IC> once — it forces a live sync and may resolve the issue.</span></li>
+          <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>For webhook problems, attach the request headers and raw body received by your endpoint.</span></li>
+        </ul>
       </section>
     </div>
   );

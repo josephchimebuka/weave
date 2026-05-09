@@ -342,9 +342,10 @@ router.post('/webhook/test', requireSession, async (req, res) => {
     if (!merchant.webhookUrl) return res.status(400).json({ success: false, error: 'no webhook URL configured' });
 
     const payload = {
-      event: 'order.completed',
+      event: 'order.completed' as const,
       data: {
         id:              'test_' + crypto.randomBytes(8).toString('hex'),
+        reference:       null,
         status:          'completed',
         sourceAssetKey:  'crypto:BASE:USDC',
         destAssetKey:    'fiat:NGN',
@@ -357,8 +358,9 @@ router.post('/webhook/test', requireSession, async (req, res) => {
     const timestamp = Math.floor(Date.now() / 1000).toString();
 
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      'Content-Type':      'application/json',
       'X-Weave-Timestamp': timestamp,
+      'X-Weave-Event':     payload.event,
     };
 
     if (merchant.webhookSecret) {

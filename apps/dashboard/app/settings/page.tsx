@@ -392,7 +392,7 @@ export default function CheckoutPage() {
 
 
   return (
-    <div className="space-y-8 scale-90">
+    <div className="space-y-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-5 fade-up">
         <div className="max-w-2xl">
@@ -992,7 +992,7 @@ export default function CheckoutPage() {
 
           {/* Code snippet */}
           <div className="relative rounded-[24px] bg-ink text-cream-soft overflow-hidden fade-up shadow-leaf-lg" style={{ animationDelay: '200ms' }}>
-            <div className="flex items-center justify-between px-6 pt-5 pb-2 border-b border-cream-soft/10">
+            <div className="scale-95 flex items-center justify-between px-6 pt-5 pb-2 border-b border-cream-soft/10">
               <div className="flex gap-1">
                 {(['html', 'react'] as CodeTab[]).map((t) => (
                   <button
