@@ -1080,9 +1080,13 @@ function ScreenSuccess({
     ? order.sourceAssetKey.split(':').pop()
     : undefined);
 
+  // Prefer order.sourceAmount (what was actually transacted) over merchant.amount,
+  // which is a live prop that can drift if the merchant page mutates it mid-flow
+  // or if we're resuming a stored order whose merchant context has since changed.
+  const onrampPaidAmount = order ? Number(order.sourceAmount) : merchant.amount;
   const paidWith = direction === 'offramp' && order
     ? `${fmtCrypto(Number(order.sourceAmount), 4)} ${sourceToken ?? (asset as any).token}`
-    : `${fmtCur(merchant.amount, merchant.currency)}`;
+    : `${fmtCur(onrampPaidAmount, merchant.currency)}`;
 
   const destBank = order?.destInstrument?.bankInstitution;
   const settledTo = direction === 'offramp'
@@ -1123,7 +1127,7 @@ function ScreenSuccess({
             {direction === 'offramp' ? (
               <>{fmtCur(merchant.amount, merchant.currency)} is on its way to <span style={{ color: WEAVE.ink }}>{merchant.name}</span>.</>
             ) : (
-              <>Your payment of {fmtCur(merchant.amount, merchant.currency)} has been sent to <span style={{ color: WEAVE.ink }}>{merchant.name}</span>.</>
+              <>Your payment of {fmtCur(onrampPaidAmount, merchant.currency)} has been sent to <span style={{ color: WEAVE.ink }}>{merchant.name}</span>.</>
             )}
           </div>
         </Stack>
@@ -1148,7 +1152,7 @@ function ScreenSuccess({
           ) : (
             <Row gap={6}>
               <div style={{ width: 16, height: 16, borderRadius: 8, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>{currencies[merchant.currency]?.flag || '🇳🇬'}</div>
-              <span style={{ fontWeight: 500 }}>{fmtCur(merchant.amount, merchant.currency)}</span>
+              <span style={{ fontWeight: 500 }}>{fmtCur(onrampPaidAmount, merchant.currency)}</span>
             </Row>
           )}
         </Row>
