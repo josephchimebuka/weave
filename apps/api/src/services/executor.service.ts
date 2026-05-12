@@ -706,7 +706,16 @@ export async function syncOrder(orderId: string) {
         const isRefund = ['refunded', 'refunding'].includes(status);
 
         if (isDone) {
-          await markStepDone({ provider: 'paycrest', externalId: step.externalId, amountOut: Number(pc.amount) });
+          // For offramp (crypto → fiat): pc.amount is the crypto input, need to calculate fiat output
+          // For onramp (fiat → crypto): pc.amount is the crypto output, use directly
+          let finalAmount = Number(pc.amount);
+          if (direction === 'offramp') {
+            // Offramp: Calculate fiat settled amount from crypto input
+            // pc.amount = gross crypto in, pc.senderFee = sender fee in crypto
+            const netCrypto = Number(pc.amount) - (Number(pc.senderFee) || 0);
+            finalAmount = netCrypto * Number(pc.rate);
+          }
+          await markStepDone({ provider: 'paycrest', externalId: step.externalId, amountOut: finalAmount });
         } else if (isFailed || isRefund) {
           await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund });
         }
