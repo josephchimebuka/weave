@@ -721,7 +721,7 @@ function ScreenQuote({
         <div style={{ fontSize: 11, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>You pay</div>
         <Row align="baseline" gap={8}>
           <div style={{ fontSize: 30, fontWeight: 600, letterSpacing: -0.6 }}>
-            {fmtCrypto(cryptoAmount, 4)}
+            {fmtCrypto(cryptoAmount, 5)}
           </div>
           <div style={{ fontSize: 16, color: WEAVE.ink2, fontWeight: 500 }}>{balance.token}</div>
         </Row>
