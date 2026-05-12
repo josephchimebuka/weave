@@ -134,11 +134,10 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
     if (source === 'paycrest') {
       const payload = data?.data ?? data;
       const direction = payload?.direction || '';
-      // For offramp (crypto → fiat): calculate fiat output from crypto input
+      // For offramp (crypto → fiat): pc.amount is already net of fees, multiply by rate to get fiat
       // For onramp (fiat → crypto): use the crypto amount directly
       if (direction === 'offramp') {
-        const netCrypto = Number(payload?.amount) - (Number(payload?.senderFee) || 0);
-        amountOut = netCrypto * Number(payload?.rate);
+        amountOut = Number(payload?.amount) * Number(payload?.rate);
       } else {
         amountOut = Number(payload?.amount);
       }
