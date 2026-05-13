@@ -1,6 +1,6 @@
 {
   "name": "weave-checkout",
-  "version": "3.0.0",
+  "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@10.32.1",
   "scripts": {
