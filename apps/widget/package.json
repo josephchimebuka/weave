@@ -6,7 +6,8 @@
   "module": "./src/index.tsx",
   "types": "./src/index.tsx",
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "exports": {
     ".": {
