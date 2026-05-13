@@ -1,5 +1,5 @@
 {
-  "name": "@weave/widget",
+  "name": "@weave-sdk/widget",
   "version": "1.0.0",
   "description": "The official Weave payment widget for React and plain HTML.",
   "main": "./dist/index.umd.js",

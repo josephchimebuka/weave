@@ -75,7 +75,7 @@ Weave is distributed as an NPM package for framework users and a UMD bundle for 
 ### Step A: Building the Bundle
 From the root directory:
 ```bash
-pnpm --filter @weave/widget build
+pnpm --filter @weave-sdk/widget build
 ```
 This generates `dist/index.mjs` (ESM) and `dist/index.umd.js` (UMD).
 
@@ -87,14 +87,14 @@ This generates `dist/index.mjs` (ESM) and `dist/index.umd.js` (UMD).
    ```
 3. Publish with public access:
    ```bash
-   pnpm --filter @weave/widget publish --access public
+   pnpm --filter @weave-sdk/widget publish --access public
    ```
 
 ### Step C: CDN Distribution (unpkg/jsdelivr)
 Once published to NPM, the widget is automatically available on CDNs. 
 Recommended URLs for your Documentation:
-- **JS**: `https://unpkg.com/@weave/widget@latest/dist/index.umd.js`
-- **CSS**: `https://unpkg.com/@weave/widget@latest/dist/style.css`
+- **JS**: `https://unpkg.com/@weave-sdk/widget@latest/dist/index.umd.js`
+- **CSS**: `https://unpkg.com/@weave-sdk/widget@latest/dist/style.css`
 
 ---
 

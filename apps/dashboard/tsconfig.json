@@ -23,7 +23,7 @@
     ],
     "paths": {
       "@/*": ["./*"],
-      "@weave/widget": ["../widget/src"],
+      "@weave-sdk/widget": ["../widget/src"],
       "@weave/shared": ["../shared/src"]
     },
     "target": "ES2017"

@@ -11,7 +11,7 @@ The fastest way to accept payments is using our **Hosted Widget**. You don't nee
 <div id="weave-checkout"></div>
 
 <!-- 2. The script -->
-<script src="https://unpkg.com/@weave/widget/dist/umd.js"></script>
+<script src="https://unpkg.com/@weave-sdk/widget/dist/umd.js"></script>
 
 <!-- 3. The magic -->
 <script>

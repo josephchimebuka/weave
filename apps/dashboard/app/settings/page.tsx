@@ -16,7 +16,7 @@ type AccentKey   = 'forest' | 'tan' | 'ink';
 type CodeTab     = 'html' | 'react';
 type SettingsTab = 'developer' | 'profile' | 'payouts';
 
-import { WeaveCheckout } from '@weave/widget';
+import { WeaveCheckout } from '@weave-sdk/widget';
 import { apiFetch } from '../lib/api-fetch';
 import { toast } from '../components/Toaster';
 
@@ -26,7 +26,7 @@ const ACCENT_OPTIONS: { key: AccentKey; hex: string; swatchClass: string }[] = [
   { key: 'ink',    hex: '#1C1B17', swatchClass: 'bg-ink' },
 ];
 
-const REACT_SNIPPET = `<script src="https://unpkg.com/@weave/widget/dist/umd.js"></script>
+const REACT_SNIPPET = `<script src="https://unpkg.com/@weave-sdk/widget/dist/umd.js"></script>
 
 <div id="weave-checkout"></div>
 
@@ -342,7 +342,7 @@ function SettingsContent() {
     .join('')
     .toUpperCase();
 
-  const snippetReact = `import { WeaveCheckout } from '@weave/widget';
+  const snippetReact = `import { WeaveCheckout } from '@weave-sdk/widget';
 
 export default function CheckoutPage() {
   return (
@@ -363,7 +363,7 @@ export default function CheckoutPage() {
   const snippetHtml = `<!-- Drop this into your HTML page -->
 <div id="weave-checkout"></div>
 
-<script src="https://unpkg.com/@weave/widget/dist/umd.js"></script>
+<script src="https://unpkg.com/@weave-sdk/widget/dist/umd.js"></script>
 <script>
   Weave.mount('#weave-checkout', {
     apiKey: '${publicKey ?? 'pk_live_...'}',

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { WeaveCheckout } from '@weave/widget';
+import { WeaveCheckout } from '@weave-sdk/widget';
 
 // Reusing design elements from landing page
 function Wordmark({ size = 26 }: { size?: number }) {

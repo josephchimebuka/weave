@@ -13,7 +13,7 @@ Weave is a **universal crypto ↔ fiat checkout** for merchants. An end-user can
 apps/
   api/        Express + Prisma + QStash orchestration layer (port 4000)
   dashboard/  Next.js 15 / React 19 merchant portal (port 3001)
-  widget/     Vite-built React 18 embeddable checkout (published as @weave/widget)
+  widget/     Vite-built React 18 embeddable checkout (published as @weave-sdk/widget)
 packages/
   shared/     Thin shared types (currently stub)
 ```
@@ -94,7 +94,7 @@ Vite-built library. Publishes `WeaveCheckout` + `MerchantBackdrop` from `src/ind
 
 Transport in `src/api/client.ts` — no cookies, API-key auth. Base URL resolution order: `window.__WEAVE_API_BASE__` → `VITE_API_BASE` → `http://localhost:4000/api/v1`. Exposes `fetchQuote`, `createOrder`, `fetchOrder`, `fetchCountries`, plus `fiatKey`/`cryptoKey` helpers that mirror the API's canonical format.
 
-`src/dev.tsx` is the local playground rendered by `pnpm --filter @weave/widget dev` — overlays `WeaveCheckout` on a mocked `MerchantBackdrop` merchant page.
+`src/dev.tsx` is the local playground rendered by `pnpm --filter @weave-sdk/widget dev` — overlays `WeaveCheckout` on a mocked `MerchantBackdrop` merchant page.
 
 ## `apps/dashboard` — merchant portal (Next.js 15)
 

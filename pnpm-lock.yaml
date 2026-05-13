@@ -97,7 +97,7 @@ importers:
       '@weave/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@weave/widget':
+      '@weave-sdk/widget':
         specifier: workspace:*
         version: link:../widget
       clsx:
@@ -222,7 +222,7 @@ importers:
       '@weave/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@weave/widget':
+      '@weave-sdk/widget':
         specifier: workspace:*
         version: link:../widget
       clsx:

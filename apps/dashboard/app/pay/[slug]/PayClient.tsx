@@ -1,6 +1,6 @@
 'use client';
 
-import { WeaveCheckout } from '@weave/widget';
+import { WeaveCheckout } from '@weave-sdk/widget';
 
 // Point the widget to our internal safe public proxy
 if (typeof window !== 'undefined') {

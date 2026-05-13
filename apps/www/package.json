@@ -11,7 +11,7 @@
   "dependencies": {
     "@weave/ui": "workspace:*",
     "@weave/shared": "workspace:*",
-    "@weave/widget": "workspace:*",
+    "@weave-sdk/widget": "workspace:*",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -10,7 +10,7 @@ import {
 import dynamic from 'next/dynamic';
 
 const WeaveCheckout = dynamic(
-  () => import('@weave/widget').then(m => m.WeaveCheckout),
+  () => import('@weave-sdk/widget').then(m => m.WeaveCheckout),
   { ssr: false }
 );
 
@@ -91,7 +91,7 @@ function IntroductionPage({ setActivePage, copy, copied }: { setActivePage: (p: 
   const SNIPPETS: Record<CodeTab, string> = {
     html: `<div id="weave-checkout"></div>
 
-<script src="https://unpkg.com/@weave/widget/dist/umd.js"></script>
+<script src="https://unpkg.com/@weave-sdk/widget/dist/umd.js"></script>
 <script>
   Weave.mount('#weave-checkout', {
     apiKey:       'pk_live_...',
@@ -109,8 +109,8 @@ function IntroductionPage({ setActivePage, copy, copied }: { setActivePage: (p: 
     onClose:   ()    => console.log('closed'),
   });
 </script>`,
-    react: `import { WeaveCheckout } from '@weave/widget';
-// npm install @weave/widget
+    react: `import { WeaveCheckout } from '@weave-sdk/widget';
+// npm install @weave-sdk/widget
 
 export default function CheckoutPage() {
   return (
@@ -136,7 +136,7 @@ export default function CheckoutPage() {
 import dynamic from 'next/dynamic';
 
 const WeaveCheckout = dynamic(
-  () => import('@weave/widget').then(m => m.WeaveCheckout),
+  () => import('@weave-sdk/widget').then(m => m.WeaveCheckout),
   { ssr: false }
 );
 
