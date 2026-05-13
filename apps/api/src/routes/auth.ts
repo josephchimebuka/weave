@@ -7,7 +7,8 @@ import {
   sendWelcomeEmail, 
   sendOtpEmail, 
   sendPasswordResetEmail,
-  sendAdminKYBNotification 
+  sendAdminKYBNotification,
+  sendAdminSignupNotification
 } from '../services/email.service';
 import { authLimiter } from '../middleware/rate-limit';
 
@@ -139,6 +140,13 @@ router.post('/signup', authLimiter, async (req, res) => {
       console.log(`[signup] welcome email sent to ${email}`);
     } catch (err: any) {
       console.error('[signup] welcome email error:', err.message);
+    }
+
+    try {
+      await sendAdminSignupNotification(merchant.id, email, name);
+      console.log(`[signup] admin notification sent for ${email}`);
+    } catch (err: any) {
+      console.error('[signup] admin notification error:', err.message);
     }
 
     return res.json({

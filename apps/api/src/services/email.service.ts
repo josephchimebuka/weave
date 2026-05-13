@@ -68,6 +68,55 @@ export async function sendWelcomeEmail(email: string, name: string) {
 }
 
 /**
+ * Notifies the company admin when a new merchant signs up.
+ */
+export async function sendAdminSignupNotification(merchantId: string, email: string, name: string) {
+  try {
+    const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
+
+    const { data, error } = await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL || 'Weave System <system@weave.com>',
+      to: [COMPANY_ADMIN_EMAIL],
+      subject: `🎉 New Merchant Signup: ${escHtml(name || email)}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; color: #0B0F0E;">
+          <h2 style="color: #0F5D4C;">New Merchant Registration</h2>
+          <p>A new merchant has successfully signed up to the Weave platform.</p>
+
+          <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
+            <h3 style="margin-top: 0;">Merchant Details</h3>
+            <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
+              <tr><td style="color: #6B7572; padding: 8px 0;">Merchant ID</td><td style="font-weight: 600; padding: 8px 0;">${merchantId}</td></tr>
+              <tr><td style="color: #6B7572; padding: 8px 0;">Name</td><td style="font-weight: 600; padding: 8px 0;">${escHtml(name)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 8px 0;">Email</td><td style="font-weight: 600; padding: 8px 0;">${escHtml(email)}</td></tr>
+              <tr><td style="color: #6B7572; padding: 8px 0;">Signup Time</td><td style="font-weight: 600; padding: 8px 0;">${new Date().toISOString()}</td></tr>
+            </table>
+          </div>
+
+          <p>They will receive a welcome email and can begin setting up their account immediately.</p>
+
+          <p style="font-size: 12px; color: #6B7572; margin-top: 32px;">
+            Track their onboarding progress and KYB status in the <a href="${dashboardUrl}" style="color: #0F5D4C; text-decoration: none;">admin dashboard</a>.
+          </p>
+
+          <p style="font-size: 11px; color: #9B9FA1; text-align: center; margin-top: 48px; border-top: 1px solid #E8EAE6; padding-top: 24px;">
+            Weave is a product of <strong>Dewdrop Labs</strong>.
+          </p>
+        </div>
+      `
+    });
+
+    if (error) {
+      console.error(`[admin-notify-signup] Resend Error:`, error);
+    } else {
+      console.log(`[admin-notify-signup] sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
+    }
+  } catch (err: any) {
+    console.error(`[admin-notify-signup] fatal error:`, err.message);
+  }
+}
+
+/**
  * Sends a notification to the company admin when a merchant submits KYB.
  * Includes "Magic Link" buttons for immediate approval/rejection.
  */
