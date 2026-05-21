@@ -61,7 +61,7 @@ export class PaystackService {
    */
   async createSubaccount(params: {
     businessName:  string;
-    bankCode:      string;
+    settlementBank: string;
     accountNumber: string;
   }): Promise<string> {
     const res = await fetch(`${BASE}/subaccount`, {
@@ -69,7 +69,7 @@ export class PaystackService {
       headers: getHeaders(),
       body: JSON.stringify({
         business_name:     params.businessName,
-        settlement_bank:   params.bankCode,
+        settlement_bank:   params.settlementBank,
         account_number:    params.accountNumber,
         percentage_charge: 0, // Weave absorbs all fees; gross-up handles this on the charge side
         active:            true,
@@ -84,13 +84,14 @@ export class PaystackService {
 
   async updateSubaccount(
     subaccountCode: string,
-    params: { bankCode: string; accountNumber: string }
+    params: { businessName: string; settlementBank: string; accountNumber: string }
   ): Promise<void> {
     const res = await fetch(`${BASE}/subaccount/${subaccountCode}`, {
       method: 'PUT',
       headers: getHeaders(),
       body: JSON.stringify({
-        settlement_bank: params.bankCode,
+        business_name:   params.businessName,
+        settlement_bank: params.settlementBank,
         account_number:  params.accountNumber,
         active:          true,
       }),

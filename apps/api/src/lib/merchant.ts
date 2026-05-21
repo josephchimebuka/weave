@@ -40,18 +40,30 @@ export async function syncPaystackSubaccount(merchantId: string): Promise<void> 
 
     if (merchant.paystackSubaccountCode) {
       try {
-        await paystack.updateSubaccount(merchant.paystackSubaccountCode, { bankCode, accountNumber });
+        await paystack.updateSubaccount(merchant.paystackSubaccountCode, { 
+          businessName, 
+          settlementBank: bankCode, 
+          accountNumber 
+        });
         subaccountCode = merchant.paystackSubaccountCode;
       } catch (updateErr: any) {
         // Stale code (e.g. test vs live key switch) — create a fresh one
         if (/not found/i.test(updateErr.message)) {
-          subaccountCode = await paystack.createSubaccount({ businessName, bankCode, accountNumber });
+          subaccountCode = await paystack.createSubaccount({ 
+            businessName, 
+            settlementBank: bankCode, 
+            accountNumber 
+          });
         } else {
           throw updateErr;
         }
       }
     } else {
-      subaccountCode = await paystack.createSubaccount({ businessName, bankCode, accountNumber });
+      subaccountCode = await paystack.createSubaccount({ 
+        businessName, 
+        settlementBank: bankCode, 
+        accountNumber 
+      });
     }
 
     await prisma.merchant.update({

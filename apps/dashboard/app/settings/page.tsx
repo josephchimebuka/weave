@@ -150,7 +150,8 @@ function SettingsContent() {
   useEffect(() => {
     fetch('/api/merchant/payouts')
       .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
+      .then((resp) => {
+        const d = resp?.data;
         if (d) {
           setActivePayout(d);
           setPayoutKind(d.kind || 'bank_account');
