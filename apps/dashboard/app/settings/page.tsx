@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -98,6 +98,7 @@ function SettingsContent() {
   const [banks, setBanks] = useState<{name: string; code: string}[]>([]);
   const [resolvingName, setResolvingName] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const userEditedBankFields = useRef(false);
 
   // Webhooks state
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -151,7 +152,7 @@ function SettingsContent() {
     fetch('/api/merchant/payouts')
       .then((r) => r.ok ? r.json() : null)
       .then((resp) => {
-        const d = resp?.data;
+        const d = resp;
         if (d) {
           setActivePayout(d);
           setPayoutKind(d.kind || 'bank_account');
@@ -187,9 +188,10 @@ function SettingsContent() {
       .finally(() => setWebhookUrlLoading(false));
   }, []);
 
-  // Auto-resolve account name via Paystack — same chain used when syncing the subaccount,
-  // so the name shown here is exactly what gets stored on the Paystack subaccount.
+  // Auto-resolve account name via Paystack — only when the user manually edits the fields,
+  // not on initial load (which already has the name from the server).
   useEffect(() => {
+    if (!userEditedBankFields.current) return;
     if (bankAccountIdentifier.length !== 10 || !bankInstitution) return;
     setResolvingName(true);
     setResolutionError(null);
@@ -610,7 +612,7 @@ export default function CheckoutPage() {
                        <div className="relative">
                          <select 
                            value={bankInstitution}
-                           onChange={(e) => setBankInstitution(e.target.value)}
+                           onChange={(e) => { userEditedBankFields.current = true; setBankInstitution(e.target.value); }}
                            className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl pl-4 pr-10 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 appearance-none"
                          >
                            <option value="" disabled>Select a bank</option>
@@ -631,7 +633,7 @@ export default function CheckoutPage() {
                        <input 
                          type="text"
                          value={bankAccountIdentifier}
-                         onChange={(e) => setBankAccountIdentifier(e.target.value)}
+                         onChange={(e) => { userEditedBankFields.current = true; setBankAccountIdentifier(e.target.value); }}
                          placeholder="e.g. 0000000000"
                          className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40"
                        />
