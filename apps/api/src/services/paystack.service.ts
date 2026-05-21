@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { INSTITUTIONS_BY_CUR } from '@weave/shared';
 
 const BASE = 'https://api.paystack.co';
 
@@ -9,40 +10,6 @@ const getHeaders = () => {
     'Authorization': `Bearer ${secret}`,
     'Content-Type': 'application/json',
   };
-};
-
-// Maps Paycrest SWIFT/BIC institution codes → Paystack bank slugs for NGN banks.
-// Paycrest returns standard SWIFT codes from its /institutions endpoint; Paystack
-// uses their own slugs in /bank. Keys verified against the SWIFT registry where possible.
-const SWIFT_TO_PAYSTACK_SLUG: Record<string, string> = {
-  // Tier-1
-  GTBINGLA:  'guaranty-trust-bank',
-  ABNGNGLA:  'access-bank',
-  ZEIBNGLA:  'zenith-bank',
-  ZENITHBA:  'zenith-bank',          // alternate BIC seen in some Paycrest responses
-  UBANNGLA:  'united-bank-for-africa',
-  FBNINGLA:  'first-bank-of-nigeria',
-  // Tier-2
-  FCMBNGLA:  'fcmb',
-  FIDTNGLA:  'fidelity-bank',
-  FIDBLAGE:  'fidelity-bank',        // alternate
-  SBICNGLE:  'stanbic-ibtc-bank',
-  SBICNGLA:  'stanbic-ibtc-bank',    // alternate
-  UBNINGLA:  'union-bank-of-nigeria',
-  NAMBLGOS:  'sterling-bank',
-  STRLNGLA:  'sterling-bank',        // alternate
-  WEMANGLA:  'wema-bank',
-  WEMABNG:   'wema-bank',            // alternate
-  KESTMYLA:  'keystone-bank',
-  ECOCNGLA:  'ecobank-nigeria',
-  // Others
-  HBCLNGLA:  'heritage-bank',
-  PROVNGLA:  'providus-bank',
-  PLRISNGLA: 'polaris-bank',
-  SKYYENGLA: 'polaris-bank',         // Polaris was formerly Skye Bank
-  CITINGLA:  'citibank-nigeria',
-  SUNDTNGLA: 'suntrust-bank',
-  TAPLNGLA:  'taj-bank',
 };
 
 interface PaystackBank { name: string; code: string; slug: string; }
@@ -172,7 +139,9 @@ export class PaystackService {
       headers: getHeaders(),
     });
     const body = await res.json();
-    if (!res.ok) throw new Error(`Paystack /bank error: ${body.message || res.statusText}`);
+    if (!res.ok || !Array.isArray(body.data)) {
+      throw new Error(`Paystack /bank error: ${body.message || res.statusText}`);
+    }
     bankListCache = body.data as PaystackBank[];
     bankListCachedAt = Date.now();
     return bankListCache;
@@ -182,20 +151,27 @@ export class PaystackService {
    * Resolves a Paystack numeric bank code from whatever format we have stored:
    *   1. Already a Paystack numeric code   → direct match on `code`
    *   2. Paystack slug (e.g. "wema-bank")  → match on `slug`
-   *   3. SWIFT/BIC code (e.g. "GTBINGLA")  → map via SWIFT_TO_PAYSTACK_SLUG then match on `slug`
+   *   3. Alias lookup (SWIFT or Paycrest)  → map via shared config
    */
   async resolveBankCode(institutionCode: string): Promise<string> {
     const banks = await this.getBanks();
+    if (!banks) return '';
 
+    // 1. Direct match on code
     const byCode = banks.find(b => b.code === institutionCode);
     if (byCode) return byCode.code;
 
+    // 2. Direct match on slug
     const bySlug = banks.find(b => b.slug === institutionCode.toLowerCase());
     if (bySlug) return bySlug.code;
 
-    const slug = SWIFT_TO_PAYSTACK_SLUG[institutionCode.toUpperCase()];
-    if (slug) {
-      const mapped = banks.find(b => b.slug === slug);
+    // 3. Lookup via shared asset registry (handles SWIFT and Paycrest codes)
+    const normalized = institutionCode.toUpperCase();
+    const registry = INSTITUTIONS_BY_CUR.NGN || [];
+    const inst = registry.find((i: any) => i.code === normalized);
+    
+    if (inst?.paystack) {
+      const mapped = banks.find(b => b.slug === inst.paystack);
       if (mapped) return mapped.code;
     }
 

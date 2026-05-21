@@ -170,32 +170,34 @@ export function directionOf(sourceKey: string, destKey: string): OrderDirection 
 }
 
 /**
- * Mapping of institution codes to human-friendly names.
+ * Mapping of institution codes to metadata, indexed by currency.
+ * This is the single source of truth for both the UI and settlement logic.
  */
-export const INSTITUTIONS_BY_CUR: Record<string, Array<{ code: string; name: string }>> = {
+export const INSTITUTIONS_BY_CUR = {
   NGN: [
-    { code: 'GTBINGLA', name: 'Guaranty Trust Bank' },
-    { code: 'FBNINGLA', name: 'First Bank of Nigeria' },
-    { code: 'ZEIBNGLA', name: 'Zenith Bank' },
-    { code: 'ABNGNGLA', name: 'Access Bank' },
-    { code: 'UBNINGLA', name: 'Union Bank' },
-    { code: 'STBKNGLA', name: 'Stanbic IBTC Bank' },
-    { code: 'FCMBNGLA', name: 'First City Monument Bank' },
-    { code: 'FIDTNGLA', name: 'Fidelity Bank' },
-    { code: 'ECOBNGLA', name: 'Ecobank Nigeria' },
-    { code: 'WEMANGLA', name: 'Wema Bank' },
-    { code: 'KUDANGPC', name: 'Kuda Bank' },
-    { code: 'OPAYNGPC', name: 'OPay' },
-    { code: 'MONINGPC', name: 'Moniepoint' },
-    { code: 'PALMNGPC', name: 'PalmPay' },
+    { code: 'GTBINGLA', name: 'Guaranty Trust Bank', paystack: 'guaranty-trust-bank' },
+    { code: 'ABNGNGLA', name: 'Access Bank', paystack: 'access-bank' },
+    { code: 'ZEIBNGLA', name: 'Zenith Bank', paystack: 'zenith-bank' },
+    { code: 'UBANNGLA', name: 'United Bank for Africa', paystack: 'united-bank-for-africa' },
+    { code: 'FBNINGLA', name: 'First Bank of Nigeria', paystack: 'first-bank-of-nigeria' },
+    { code: 'FCMBNGLA', name: 'First City Monument Bank', paystack: 'first-city-monument-bank' },
+    { code: 'FIDTNGLA', name: 'Fidelity Bank', paystack: 'fidelity-bank' },
+    { code: 'STBKNGLA', name: 'Stanbic IBTC Bank', paystack: 'stanbic-ibtc-bank' },
+    { code: 'UBNINGLA', name: 'Union Bank of Nigeria', paystack: 'union-bank-of-nigeria' },
+    { code: 'WEMANGLA', name: 'Wema Bank', paystack: 'wema-bank' },
+    { code: 'ECOBNGLA', name: 'Ecobank Nigeria', paystack: 'ecobank-nigeria' },
+    { code: 'KUDANGPC', name: 'Kuda Bank', paystack: 'kuda-bank' },
+    { code: 'OPAYNGPC', name: 'OPay', paystack: 'paycom' },
+    { code: 'MONINGPC', name: 'Moniepoint', paystack: 'moniepoint-mfb-ng' },
+    { code: 'PALMNGPC', name: 'PalmPay', paystack: 'palmpay' },
   ],
-};
+} as const;
 
 /**
  * Resolves an institution code to its human-friendly name.
  */
 export function institutionName(currency: string, code: string): string {
-  const list = INSTITUTIONS_BY_CUR[currency.toUpperCase()] || [];
-  const found = list.find(i => i.code.toUpperCase() === code.toUpperCase());
+  const list = (INSTITUTIONS_BY_CUR as any)[currency.toUpperCase()] || [];
+  const found = list.find((i: any) => i.code.toUpperCase() === code.toUpperCase());
   return found ? found.name : code;
 }

@@ -192,6 +192,8 @@ function SettingsContent() {
     if (bankAccountIdentifier.length !== 10 || !bankInstitution) return;
     setResolvingName(true);
     setResolutionError(null);
+    setBankAccountName(''); // Clear previous name while resolving new one
+
     fetch('/api/merchant/payouts/resolve-account', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -638,14 +640,15 @@ export default function CheckoutPage() {
                        <input
                          type="text"
                          value={resolvingName ? '' : bankAccountName}
-                         readOnly
+                         onChange={(e) => setBankAccountName(e.target.value)}
+                         readOnly={resolvingName || (!resolutionError && !!bankAccountName)}
                          placeholder={resolvingName ? 'Resolving…' : 'Auto-filled when account number is entered'}
-                         className={`w-full border rounded-xl px-4 py-3 text-[14px] focus:outline-none transition-colors cursor-default select-none ${
+                         className={`w-full border rounded-xl px-4 py-3 text-[14px] focus:outline-none transition-colors ${
                            resolvingName
-                             ? 'bg-cream-deep/30 border-hair-soft text-ink-muted animate-pulse'
-                             : bankAccountName
-                             ? 'bg-forest/5 border-forest/20 text-forest-deep font-medium'
-                             : 'bg-cream-deep/30 border-hair-soft text-ink-muted'
+                             ? 'bg-cream-deep/30 border-hair-soft text-ink-muted animate-pulse cursor-default select-none'
+                             : (resolutionError || !bankAccountName)
+                             ? 'bg-cream-deep/50 border-hair-soft text-ink focus:border-forest/40'
+                             : 'bg-forest/5 border-forest/20 text-forest-deep font-medium cursor-default select-none'
                          }`}
                        />
                        {resolutionError && (
