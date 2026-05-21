@@ -173,7 +173,7 @@ export function directionOf(sourceKey: string, destKey: string): OrderDirection 
  * Mapping of institution codes to metadata, indexed by currency.
  * This is the single source of truth for both the UI and settlement logic.
  */
-export const INSTITUTIONS_BY_CUR = {
+export const INSTITUTIONS_BY_CUR: Record<string, { code: string; name: string; paystack: string }[]> = {
   NGN: [
     { code: 'GTBINGLA', name: 'Guaranty Trust Bank', paystack: 'guaranty-trust-bank' },
     { code: 'ABNGNGLA', name: 'Access Bank', paystack: 'access-bank' },
@@ -191,7 +191,7 @@ export const INSTITUTIONS_BY_CUR = {
     { code: 'MONINGPC', name: 'Moniepoint', paystack: 'moniepoint-mfb-ng' },
     { code: 'PALMNGPC', name: 'PalmPay', paystack: 'palmpay' },
   ],
-} as const;
+};
 
 /**
  * Resolves an institution code to its human-friendly name.

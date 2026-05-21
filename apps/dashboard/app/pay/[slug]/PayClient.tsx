@@ -83,10 +83,15 @@ export default function PayClient({ link }: { link: LinkData }) {
             merchant={{
               name: link.merchantName,
               amount: link.amount,
-              currency: token,
+              // For crypto links: link.asset is what the customer pays (source).
+              // For fiat links: link.asset is what the merchant receives (dest).
+              currency: isP2P ? 'NGN' : token,
               description: link.title,
-              amountIn: 'dest',
-              destAssetKey: link.asset,
+              amountIn: isP2P ? 'source' : 'dest',
+              ...(isP2P
+                ? { sourceAssetKey: link.asset }  // pre-select the chain/token
+                : {}
+              ),
             }}
             theme="organic"
             accentColor="forest"
