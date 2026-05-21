@@ -15,6 +15,10 @@ import { CHAIN_ENUM, TOKENS } from '../lib/registry';
 // Our canonical chain name (uppercase) → NEAR Intents `blockchain` enum.
 // Source: GET /v0/tokens response + OpenAPI blockchain enum.
 
+// Chains that route via memo rather than a plain deposit address. NEAR Intents
+// requires depositMode:'MEMO' for these; all others use 'SIMPLE'.
+const MEMO_CHAINS = new Set(['STELLAR', 'XRP', 'TON', 'NEAR']);
+
 const CHAIN_TO_NEAR: Record<string, string> = {
   NEAR:      'near',
   ETHEREUM:  'eth',
@@ -248,12 +252,15 @@ export class NearIntentsService {
   }): Promise<NearQuoteResponse> {
     const src = await this.resolveAssetId(params.sourceAssetKey);
     const dst = await this.resolveAssetId(params.destAssetKey);
-    
+
     // If EXACT_OUTPUT, the amount parameter specifies the output token amount.
     const isExactOutput = params.swapType === 'EXACT_OUTPUT';
     const amountRaw = toSmallestUnit(params.amount, isExactOutput ? dst.decimals : src.decimals);
-    
+
     const deadline  = new Date(Date.now() + (params.deadlineSecs ?? 30 * 60) * 1000).toISOString();
+
+    const srcParsed  = parseAsset(params.sourceAssetKey);
+    const depositMode: NearDepositMode = MEMO_CHAINS.has(srcParsed.kind === 'crypto' ? srcParsed.chain.toUpperCase() : '') ? 'MEMO' : 'SIMPLE';
 
     const body: NearQuoteRequest = {
       dry:               params.dry ?? false,
@@ -263,6 +270,7 @@ export class NearIntentsService {
       destinationAsset:  dst.assetId,
       amount:            amountRaw,
       depositType:       'ORIGIN_CHAIN',
+      depositMode,
       refundType:        'ORIGIN_CHAIN',
       refundTo:          params.refundTo,
       recipient:         params.recipient,
