@@ -31,7 +31,7 @@ export default function SignupPage() {
 
     storeSessionToken(result.data.session.token);
     toast.success('Account created.');
-    router.push('/');
+    router.push('/verify-email');
   }
 
   return (

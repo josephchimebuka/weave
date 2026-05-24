@@ -6,12 +6,14 @@ export const DASHBOARD_SESSION_COOKIE = 'weave_session';
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
 export type SessionUser = {
-  id:             string;
-  email:          string;
-  name:           string;
-  publishableKey: string;
-  createdAt:      string;
-  updatedAt:      string;
+  id:              string;
+  email:           string;
+  name:            string;
+  publishableKey:  string;
+  kycLevel:        string;
+  emailVerifiedAt: string | null;
+  createdAt:       string;
+  updatedAt:       string;
 };
 
 export type ServerSession = {

@@ -17,6 +17,7 @@ import assetsRouter       from './routes/assets';
 import supportRouter      from './routes/support';
 import jobsRouter         from './routes/jobs';
 import accessRequestsRouter from './routes/access-requests';
+import kycRouter            from './routes/kyc';
 
 import { ensureMerchantDefaultInstruments } from './lib/merchant';
 import { prisma } from './lib/prisma';
@@ -111,6 +112,7 @@ app.use('/api/v1/assets',         assetsRouter);
 app.use('/api/v1/support',        supportRouter);
 app.use('/api/v1/jobs',           jobsRouter);
 app.use('/api/v1/access-requests', accessRequestsRouter);
+app.use('/api/v1/kyc',             kycRouter);
 
 app.get('/',       (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));

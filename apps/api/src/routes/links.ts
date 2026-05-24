@@ -34,6 +34,14 @@ router.post('/', requireSession, linkCreationLimiter, async (req, res) => {
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(404).json({ success: false, error: 'Merchant not found' });
 
+    if (!merchant.emailVerifiedAt && merchant.kycLevel === 'none') {
+      return res.status(403).json({
+        success: false,
+        error:   'Email verification required to create payment links.',
+        code:    'EMAIL_VERIFICATION_REQUIRED',
+      });
+    }
+
     const link = await prisma.paymentLink.create({
       data: {
         merchantId: merchant.id,

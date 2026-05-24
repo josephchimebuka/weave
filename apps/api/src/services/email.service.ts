@@ -414,6 +414,40 @@ export async function sendMerchantPaymentNotification(orderId: string) {
 }
 
 /**
+ * Sends a 6-digit OTP code to verify a merchant's email address.
+ */
+export async function sendEmailVerificationEmail(email: string, code: string) {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL || 'Weave <auth@weave.com>',
+      to: [email],
+      subject: `${code} — Verify your Weave email`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 500px; padding: 40px; margin: 0 auto; color: #0B0F0E; background: #FDFDFB; border-radius: 24px; border: 1px solid #E8EAE6;">
+          <h2 style="font-size: 24px; font-weight: 700; margin-bottom: 8px; color: #0F5D4C;">Verify your email</h2>
+          <p style="color: #6B7572; font-size: 15px; margin-bottom: 32px;">Enter this code in the Weave dashboard to unlock payment links and start accepting payments.</p>
+
+          <div style="background: #0F5D4C; color: white; font-size: 36px; font-weight: 800; letter-spacing: 8px; padding: 24px; border-radius: 16px; text-align: center; font-family: monospace;">
+            ${code}
+          </div>
+
+          <p style="color: #6B7572; font-size: 13px; margin-top: 32px; border-top: 1px solid #E8EAE6; padding-top: 24px;">
+            This code expires in 10 minutes. If you didn't sign up for Weave, you can safely ignore this email.
+          </p>
+          <p style="font-size: 11px; color: #9B9FA1; text-align: center; margin-top: 24px;">
+            Weave is a product of <strong>Dewdrop Labs</strong>.
+          </p>
+        </div>
+      `,
+    });
+    if (error) console.error(`[email-verify] Resend Error:`, error);
+    else console.log(`[email-verify] code sent to ${email} (id: ${data?.id})`);
+  } catch (err: any) {
+    console.error(`[email-verify] fatal error:`, err.message);
+  }
+}
+
+/**
  * Sends a 6-digit OTP code for login or security verification.
  */
 export async function sendOtpEmail(email: string, code: string) {

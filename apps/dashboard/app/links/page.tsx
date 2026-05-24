@@ -1,13 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Link as LinkIcon, ExternalLink, Copy, Check, Info, Search, X } from 'lucide-react';
+import { Plus, Link as LinkIcon, ExternalLink, Copy, Check, Info, Search, X, Mail, ArrowRight, ShieldCheck } from 'lucide-react';
 import { isFiat } from '@weave/shared';
 import { createPortal } from 'react-dom';
+import { useRouter } from 'next/navigation';
 
 export default function LinksPage() {
-  const [links, setLinks] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+  const [links,     setLinks]     = useState<any[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [kycLevel,  setKycLevel]  = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   
   const [title, setTitle] = useState('');
@@ -24,7 +27,17 @@ export default function LinksPage() {
   useEffect(() => {
     fetchLinks();
     fetchSupportedAssets();
+    fetchKycLevel();
   }, []);
+
+  async function fetchKycLevel() {
+    try {
+      const res  = await fetch('/api/merchant/profile');
+      const json = await res.json();
+      if (json.kycLevel !== undefined) setKycLevel(json.kycLevel);
+      else if (json.data?.kycLevel) setKycLevel(json.data.kycLevel);
+    } catch {}
+  }
 
   async function fetchSupportedAssets() {
     try {
@@ -108,14 +121,56 @@ export default function LinksPage() {
             Create reusable hosted checkout pages. Share the link with customers to let them pay you directly via Weave.
           </p>
         </div>
-        <button
-          onClick={() => setIsCreating(true)}
-          className="inline-flex items-center gap-2 self-start bg-forest text-cream-soft hover:bg-forest-deep px-5 py-3 rounded-full text-[14px] font-medium transition-all shadow-leaf shrink-0"
-        >
-          <Plus size={16} strokeWidth={2.2} />
-          Create Link
-        </button>
+        {kycLevel === 'none' ? (
+          <button
+            onClick={() => router.push('/verify-email')}
+            className="inline-flex items-center gap-2 self-start bg-tan text-white hover:bg-tan-deep px-5 py-3 rounded-full text-[14px] font-medium transition-all shadow-sm shrink-0"
+          >
+            <Mail size={16} strokeWidth={2.2} />
+            Verify email to unlock
+          </button>
+        ) : (
+          <button
+            onClick={() => setIsCreating(true)}
+            className="inline-flex items-center gap-2 self-start bg-forest text-cream-soft hover:bg-forest-deep px-5 py-3 rounded-full text-[14px] font-medium transition-all shadow-leaf shrink-0"
+          >
+            <Plus size={16} strokeWidth={2.2} />
+            Create Link
+          </button>
+        )}
       </div>
+
+      {/* Verification gate banner */}
+      {kycLevel === 'none' && (
+        <div className="rounded-[28px] bg-tan-mist/40 border border-tan-mist p-6 flex flex-col sm:flex-row items-start sm:items-center gap-5 fade-up">
+          <div className="w-12 h-12 rounded-full bg-tan/20 flex items-center justify-center shrink-0">
+            <Mail size={22} className="text-tan-deep" strokeWidth={1.75} />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-display text-[17px] font-semibold text-ink">Email verification required</h3>
+            <p className="text-[13px] text-ink-muted mt-1 leading-relaxed">
+              Verify your email address to start creating payment links. It takes under 2 minutes and unlocks your account immediately.
+            </p>
+          </div>
+          <button
+            onClick={() => router.push('/verify-email')}
+            className="inline-flex items-center gap-2 bg-tan text-white hover:bg-tan-deep px-5 py-2.5 rounded-full text-[13px] font-semibold transition-all whitespace-nowrap shrink-0"
+          >
+            Verify now
+            <ArrowRight size={14} strokeWidth={2.2} />
+          </button>
+        </div>
+      )}
+
+      {/* KYB upgrade nudge for basic tier */}
+      {kycLevel === 'basic' && (
+        <div className="rounded-[28px] bg-forest/5 border border-forest/10 p-5 flex items-center gap-4 fade-up">
+          <ShieldCheck size={18} className="text-forest shrink-0" strokeWidth={1.75} />
+          <p className="text-[13px] text-forest-deep flex-1">
+            <strong>Basic account</strong> — up to 30 orders/month. <a href="/onboarding/kyb" className="underline font-semibold hover:text-forest transition-colors">Complete KYB</a> to remove all limits.
+          </p>
+        </div>
+      )}
 
       {isCreating && (
         <Card delay={0}>
