@@ -601,10 +601,20 @@ export async function markStepDone(params: {
       orderUpdate.destAmount = lastStep.amountOut;
     }
   }
-  await prisma.order.update({ where: { id: step.orderId }, data: orderUpdate });
+
+  // Use updateMany with a terminal-state guard so this function is idempotent.
+  // If two concurrent callers (e.g. an inbound webhook + the GET /orders poll
+  // fallback) both race to complete the same step, only the one that actually
+  // transitions the order from a non-terminal state fires notifications.
+  // The loser gets count=0 and skips the email/webhook entirely.
+  const TERMINAL_STATUSES = ['completed', 'failed', 'refunded', 'expired'];
+  const { count: transitioned } = await prisma.order.updateMany({
+    where: { id: step.orderId, status: { notIn: TERMINAL_STATUSES } },
+    data: orderUpdate,
+  });
 
   // ── Notify Merchant ───────────────────────────────────────────────────────
-  if (nextOrderStatus === 'completed' && !step.order.sandboxMode) {
+  if (transitioned > 0 && nextOrderStatus === 'completed' && !step.order.sandboxMode) {
     const { webhookService } = await import('./webhook.service');
     // Fire and forget so we don't block the webhook worker
     Promise.all([
