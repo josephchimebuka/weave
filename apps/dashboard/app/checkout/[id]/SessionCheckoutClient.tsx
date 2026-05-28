@@ -23,6 +23,7 @@ export type SessionData = {
 };
 
 const API_BASE =
+  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) ||
   (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_BASE) ||
   'http://localhost:4000/api/v1';
 
@@ -148,6 +149,7 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
           <WeaveCheckout
             apiKey={session.publishableKey}
             apiBase={API_BASE}
+            sessionId={session.id}
             merchant={{
               name: session.merchantName,
               amount: session.amount,

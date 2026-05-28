@@ -2301,6 +2301,7 @@ function ScreenWalletSign({ onRetry }: { onRetry: () => void }) {
 export interface WeaveCheckoutProps {
   merchant?: Merchant;
   apiKey?: string;
+  sessionId?: string;
   userAddress?: string;
   theme?: 'organic' | 'minimal';
   borderRadius?: number;
@@ -2331,6 +2332,7 @@ const _queryClient = new QueryClient();
 function WeaveCheckoutInner({
   merchant = DEFAULT_MERCHANT,
   apiKey: propApiKey,
+  sessionId,
   userAddress: propUserAddress,
   theme = 'organic',
   borderRadius = 16,
@@ -2634,6 +2636,7 @@ function WeaveCheckoutInner({
         amountIn: finalAmountIn,
         refundAddress: refundAddr,
         reference: pendingOrderRef.current,
+        sessionId,
         dest: merchant.destInstrument ? {
           inline: {
             ...merchant.destInstrument,
@@ -2760,6 +2763,7 @@ function WeaveCheckoutInner({
         source,
         amount: merchant.amount,
         reference: pendingOrderRef.current,
+        sessionId,
         dest: merchant.destInstrument ? {
           inline: {
             ...merchant.destInstrument,
@@ -2820,6 +2824,7 @@ function WeaveCheckoutInner({
           amountIn: 'dest',
           flow: isWalletFlow ? 'self' : undefined,
           reference: pendingOrderRef.current,
+          sessionId,
           dest: merchant.destInstrument ? {
             inline: {
               ...merchant.destInstrument,

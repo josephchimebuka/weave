@@ -44,6 +44,7 @@ interface CreateOrderBody {
   // a refund wallet from the user and sends it here. Takes precedence over the
   // source instrument's walletAddress when both are set.
   refundAddress?: string;
+  sessionId?: string;
 }
 
 // POST /api/v1/orders — direction-agnostic order creation.
@@ -224,6 +225,15 @@ router.post('/', requireAuth, async (req, res) => {
     // 4. Create or Reuse the Order row (Idempotency)
     // If the merchant provided a reference, check for an existing order first.
     let order: any;
+
+    // Auto-link to Checkout Session if provided
+    let checkoutSession = null;
+    if (body.sessionId) {
+      checkoutSession = await prisma.checkoutSession.findUnique({
+        where: { id: body.sessionId, merchantId: merchant.id }
+      });
+    }
+
     if (body.reference) {
       order = await prisma.order.findFirst({
         where: {
@@ -251,11 +261,23 @@ router.post('/', requireAuth, async (req, res) => {
             status: 'awaiting_deposit',
             routePlan: plan as any,
             quoteRate,
-            reference: body.reference,
+            reference: body.reference || (checkoutSession ? checkoutSession.reference : null),
             sandboxMode: req.sandboxMode ?? false,
           },
         });
         console.log(`[orders] created new order: ${order.id}`);
+
+        // Link to checkout session if it exists and isn't already linked
+        if (checkoutSession && !checkoutSession.orderId) {
+          await prisma.checkoutSession.update({
+            where: { id: checkoutSession.id },
+            data: { 
+              orderId: order.id,
+              status: 'processing' 
+            }
+          });
+          console.log(`[orders] linked session ${checkoutSession.id} to order ${order.id}`);
+        }
       } catch (createErr: any) {
         // P2002 = unique constraint violation — concurrent request with the same reference
         if (createErr?.code === 'P2002' && body.reference) {
