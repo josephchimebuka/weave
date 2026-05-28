@@ -131,28 +131,20 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
 
   return (
     <div className="min-h-screen bg-cream flex flex-col font-body text-ink selection:bg-forest/10">
-      <header className="px-6 md:px-10 py-5 flex items-center justify-between border-b border-hair/10">
+      <header className="px-4 md:px-10 py-5 flex items-center justify-between border-b border-hair/10">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-forest text-cream flex items-center justify-center font-bold text-[15px] shadow-leaf">
+          <div className="w-8 h-8 md:w-9 md:h-9 rounded-full bg-forest text-cream flex items-center justify-center font-bold text-[14px] md:text-[15px] shadow-leaf">
             {session.merchantName.charAt(0).toUpperCase()}
           </div>
-          <span className="text-[15px] font-semibold tracking-tight">{session.merchantName}</span>
+          <span className="text-[14px] md:text-[15px] font-semibold tracking-tight">{session.merchantName}</span>
         </div>
-        <div className="text-[11px] font-mono text-ink-muted tabular-nums">
+        <div className="text-[10px] md:text-[11px] font-mono text-ink-muted tabular-nums">
           Expires in {formatRemaining(remaining)}
         </div>
       </header>
 
-      <main className="flex-1 flex items-center justify-center py-10 px-4 sm:px-6 lg:px-12">
+      <main className="flex-1 flex items-start md:items-center justify-center py-6 md:py-10 px-4 sm:px-6 lg:px-12">
         <div className="w-full max-w-[440px] fade-up">
-          <div className="mb-6 text-center">
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink-muted mb-2">Amount Due</p>
-            <p className="font-display text-[40px] font-bold tabular-nums tracking-tight text-ink">
-              {currency === 'NGN' ? '₦' : ''}{session.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-              {currency !== 'NGN' && <span className="ml-2 text-[18px] text-ink-muted font-semibold">{currency}</span>}
-            </p>
-          </div>
-
           <WeaveCheckout
             apiKey={session.publishableKey}
             apiBase={API_BASE}
@@ -175,10 +167,6 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
           />
         </div>
       </main>
-
-      <footer className="px-6 py-5 text-center text-[11px] text-ink-muted/70">
-        Secured by <span className="font-semibold text-forest tracking-tight">Weave.</span>
-      </footer>
     </div>
   );
 }
