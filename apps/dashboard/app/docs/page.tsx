@@ -6,6 +6,7 @@ import {
   MessageSquare, Zap, Network, GitBranch, Terminal,
   Check, Copy, ChevronDown, KeyRound, Play,
   AlertTriangle, FlaskConical, Lock, ArrowRight,
+  Link2, ExternalLink,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -14,7 +15,7 @@ const WeaveCheckout = dynamic(
   { ssr: false }
 );
 
-type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'webhooks' | 'security' | 'support';
+type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'checkout' | 'webhooks' | 'security' | 'support';
 type CodeTab  = 'html' | 'react' | 'nextjs';
 
 export default function DocsPage() {
@@ -47,6 +48,7 @@ export default function DocsPage() {
           <NavGroup label="Reference">
             <NavItem icon={<Cpu size={14} />}        label="API Reference"    active={activePage === 'api'}        onClick={() => setActivePage('api')} />
             <NavItem icon={<Terminal size={14} />}   label="API Playground"   active={activePage === 'playground'} onClick={() => setActivePage('playground')} />
+            <NavItem icon={<Link2 size={14} />}      label="Checkout Sessions" active={activePage === 'checkout'}  onClick={() => setActivePage('checkout')} />
             <NavItem icon={<Bell size={14} />}       label="Webhooks"         active={activePage === 'webhooks'}   onClick={() => setActivePage('webhooks')} />
           </NavGroup>
           <NavGroup label="More">
@@ -72,6 +74,7 @@ export default function DocsPage() {
           {activePage === 'widget'       && <WidgetPlayground />}
           {activePage === 'api'          && <ApiReferencePage copy={copy} copied={copied} />}
           {activePage === 'playground'   && <ApiPlayground />}
+          {activePage === 'checkout'     && <CheckoutSessionsPage copy={copy} copied={copied} />}
           {activePage === 'webhooks'     && <WebhooksPage copy={copy} copied={copied} />}
           {activePage === 'security'     && <SecurityPage copy={copy} copied={copied} />}
           {activePage === 'support'      && <SupportPage />}
@@ -182,9 +185,9 @@ export default function CheckoutPage() {
       {/* Quick-nav cards */}
       <div className="grid grid-cols-2 gap-4">
         {[
-          { icon: <Zap size={17} className="text-forest" />, title: '2-min setup', desc: 'One script tag. No build step.', action: () => {} },
+          { icon: <Zap size={17} className="text-forest" />, title: '2-min setup', desc: 'One script tag. No build step.', action: () => setActivePage('widget') },
           { icon: <Terminal size={17} className="text-forest" />, title: 'REST API', desc: 'Server-side, programmatic control.', action: () => setActivePage('api') },
-          { icon: <Network size={17} className="text-forest" />, title: 'Corridors', desc: 'ChainRails, NEAR Intents, Paycrest.', action: () => {} },
+          { icon: <Link2 size={17} className="text-forest" />, title: 'Checkout URLs', desc: 'Redirect users to a hosted page.', action: () => setActivePage('checkout') },
           { icon: <Bell size={17} className="text-forest" />, title: 'Webhooks', desc: 'HMAC-signed async notifications.', action: () => setActivePage('webhooks') },
         ].map(({ icon, title, desc, action }) => (
           <button key={title} onClick={action} className="group text-left bg-cream-deep/30 hover:bg-cream-deep/60 border border-hair-soft hover:border-forest/25 rounded-[20px] p-5 transition-all">
@@ -224,6 +227,50 @@ export default function CheckoutPage() {
 curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:NGN&amount=50" \\
   -H "x-api-key: pk_live_..."`}
         </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Integration paths */}
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={18} />} title="Integration Paths" />
+        <p className="text-[14.5px] text-ink-muted leading-relaxed">
+          Pick the path that matches your development stack and how much control you need over the customer experience.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {[
+            {
+              tag: 'Path A',
+              title: 'The Widget',
+              desc: 'Best for React/Next.js/HTML apps. Drop in our pre-built UI that handles wallet connections, network switching, and real-time status tracking. Zero frontend logic required.',
+              cta: 'Widget playground',
+              action: () => setActivePage('widget')
+            },
+            {
+              tag: 'Path B',
+              title: 'Direct API',
+              desc: 'Best for custom checkout flows or server-side automation. Build your own UI on top of our REST endpoints. You get raw deposit instructions and handle the rendering yourself.',
+              cta: 'API reference',
+              action: () => setActivePage('api')
+            },
+            {
+              tag: 'Path C',
+              title: 'Checkout Sessions',
+              desc: 'Best for low-code setups or "Stripe-style" redirects. Generate a hosted payment link on your server and redirect the user. We handle the rest and send them back when done.',
+              cta: 'Checkout sessions',
+              action: () => setActivePage('checkout')
+            },
+          ].map(({ tag, title, desc, cta, action }) => (
+            <button key={title} onClick={action} className="group text-left bg-cream-soft border border-hair-soft hover:border-forest/25 rounded-[20px] p-5 transition-all flex flex-col gap-3 h-full">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-ink-faint">{tag}</span>
+              <p className="font-display text-[16px] font-semibold text-ink">{title}</p>
+              <p className="text-[12.5px] text-ink-muted leading-relaxed flex-1">{desc}</p>
+              <span className="text-[12px] font-semibold text-forest-deep group-hover:underline underline-offset-2 inline-flex items-center gap-1.5">
+                {cta} <ArrowRight size={12} strokeWidth={2.2} />
+              </span>
+            </button>
+          ))}
+        </div>
       </section>
 
       <div className="rule-dotted" />
@@ -593,6 +640,28 @@ const PLAYGROUND_ENDPOINTS: PlaygroundEndpoint[] = [
       { key: 'currency', label: 'Currency', placeholder: 'NGN', required: true },
     ],
   },
+  {
+    method: 'GET', path: '/assets',
+    desc: 'List every supported fiat and crypto asset.',
+    params: [],
+  },
+  {
+    method: 'POST', path: '/checkout/sessions',
+    desc: 'Create a hosted checkout session. Returns a checkoutUrl to redirect your user to.',
+    params: [
+      { key: 'amount',      label: 'Amount',       placeholder: '5000',                          required: true,  inBody: true },
+      { key: 'destAsset',   label: 'Dest Asset',   placeholder: 'fiat:NGN',                      required: true,  inBody: true },
+      { key: 'redirectUrl', label: 'Redirect URL', placeholder: 'https://yourstore.com/success', required: true,  inBody: true },
+      { key: 'reference',   label: 'Reference',    placeholder: 'order_123',                     required: false, inBody: true },
+    ],
+  },
+  {
+    method: 'GET', path: '/checkout/sessions/:id',
+    desc: 'Retrieve a checkout session and its linked order status.',
+    params: [
+      { key: ':id', label: 'Session ID', placeholder: 'clx9abc...', required: true },
+    ],
+  },
 ];
 
 function ApiPlayground() {
@@ -604,6 +673,11 @@ function ApiPlayground() {
   const [error, setError]             = useState<string | null>(null);
 
   const endpoint = PLAYGROUND_ENDPOINTS[selectedIdx];
+
+  function useDemoKey() {
+    setApiKey('pk_test_05f4f34a21c51be888b44ffa8441a72601fd393a7f052760');
+    setError(null);
+  }
 
   function setValue(key: string, val: string) {
     setValues(v => ({ ...v, [key]: val }));
@@ -687,22 +761,33 @@ function ApiPlayground() {
       </header>
 
       {/* API key bar */}
-      <div className="flex items-center gap-3 bg-cream-deep/40 border border-hair-soft rounded-2xl px-4 py-3">
-        <KeyRound size={15} className="text-ink-muted shrink-0" strokeWidth={1.9} />
-        <input
-          type="password"
-          placeholder="pk_test_… or pk_live_…"
-          value={apiKey}
-          onChange={(e) => { setApiKey(e.target.value); setError(null); }}
-          className="flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none font-mono"
-          autoComplete="off"
-        />
-        {apiKey && (
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
-            apiKey.startsWith('pk_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
-          }`}>
-            {apiKey.startsWith('pk_test_') ? 'Sandbox' : 'Live'}
-          </span>
+      <div className="space-y-3">
+        <div className="flex items-center gap-3 bg-cream-deep/40 border border-hair-soft rounded-2xl px-4 py-3">
+          <KeyRound size={15} className="text-ink-muted shrink-0" strokeWidth={1.9} />
+          <input
+            type="password"
+            placeholder="pk_test_… or pk_live_…"
+            value={apiKey}
+            onChange={(e) => { setApiKey(e.target.value); setError(null); }}
+            className="flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none font-mono"
+            autoComplete="off"
+          />
+          {apiKey && (
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
+              apiKey.startsWith('pk_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
+            }`}>
+              {apiKey.startsWith('pk_test_') ? 'Sandbox' : 'Live'}
+            </span>
+          )}
+        </div>
+        {!apiKey && (
+          <p className="px-1 text-[12px] text-ink-muted leading-relaxed">
+            Don't have a key yet?{' '}
+            <button onClick={useDemoKey} className="text-forest-deep font-semibold hover:underline underline-offset-2">
+              Try with a demo key
+            </button>
+            {' '}to explore the API responses immediately.
+          </p>
         )}
       </div>
 
@@ -895,7 +980,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
           },
           {
             method: 'POST', path: '/orders',
-            summary: 'Create a payment order and receive nextAction for the widget.',
+            summary: 'Create a payment order. Returns `depositInstruction` (framework-agnostic) alongside `nextAction` (widget-specific).',
             params: [
               { name: 'source.inline.kind',         type: '"crypto_wallet" | "bank_account"', req: true,  desc: 'Type of source instrument' },
               { name: 'source.inline.assetKey',     type: 'string',             req: true,  desc: 'Source asset key, e.g. crypto:ETHEREUM:USDC' },
@@ -935,6 +1020,15 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
       "appFeeUsd":      0.05,
       "bridgeFeeUsd":   0.10,
       "createdAt":      "2026-05-01T10:00:00Z"
+    },
+    "depositInstruction": {
+      "type":           "crypto_transfer",
+      "depositAddress": "0xNEARIntentsDepositAddress",
+      "depositMemo":    null,
+      "amount":         50.38,
+      "token":          "USDC",
+      "chain":          "ETHEREUM",
+      "expiresAt":      "2026-05-01T11:00:00Z"
     },
     "nextAction": {
       "screen":         "collect_crypto",
@@ -1025,6 +1119,82 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
     { "name": "GTBank",      "code": "GTBANK", "id": "..." },
     { "name": "Zenith Bank", "code": "ZENITH", "id": "..." }
   ]
+}`,
+          },
+          {
+            method: 'GET', path: '/assets',
+            summary: 'List every supported fiat and crypto asset. Use the `key` field as the canonical asset identifier in other endpoints.',
+            params: [],
+            request: `curl https://api.paywithweave.com/api/v1/assets`,
+            response: `{
+  "success": true,
+  "data": {
+    "fiat": [
+      { "key": "fiat:NGN", "name": "Nigerian Naira", "symbol": "₦", "country": "Nigeria" }
+    ],
+    "crypto": [
+      { "key": "crypto:BASE:USDC",  "id": "BASE",  "token": "USDC", "name": "Base" },
+      { "key": "crypto:SOLANA:SOL", "id": "SOLANA","token": "SOL",  "name": "Solana" }
+    ]
+  }
+}`,
+          },
+          {
+            method: 'POST', path: '/checkout/sessions',
+            summary: 'Create a hosted checkout session. Returns a `checkoutUrl` you redirect your user to (Stripe / Paystack-style).',
+            params: [
+              { name: 'amount',      type: 'number',             req: true,  desc: 'Payment amount, denominated in destAsset when amountIn=dest' },
+              { name: 'amountIn',    type: '"source" | "dest"',  req: false, desc: 'Whose amount the figure represents. Default: dest' },
+              { name: 'destAsset',   type: 'string',             req: true,  desc: 'Canonical asset key for what the merchant receives, e.g. fiat:NGN' },
+              { name: 'sourceAsset', type: 'string',             req: false, desc: 'Lock the payer to a specific source asset. Omit to let them choose on the hosted page' },
+              { name: 'reference',   type: 'string',             req: false, desc: 'Your internal ID, echoed in the webhook' },
+              { name: 'metadata',    type: 'object',             req: false, desc: 'Opaque JSON object, echoed in the webhook' },
+              { name: 'redirectUrl', type: 'string',             req: true,  desc: 'HTTPS URL the user is redirected to once payment is confirmed' },
+              { name: 'cancelUrl',   type: 'string',             req: false, desc: 'HTTPS URL the user lands on if they abandon or the session expires' },
+              { name: 'expiresIn',   type: 'number',             req: false, desc: 'Seconds until the session expires. Default 7200 (2h). Min 300. Max 86400' },
+            ],
+            request: `curl https://api.paywithweave.com/api/v1/checkout/sessions \\
+  -X POST -H "x-api-key: pk_live_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "amount":      5000,
+    "destAsset":   "fiat:NGN",
+    "redirectUrl": "https://yourstore.com/payment/success",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" }
+  }'`,
+            response: `{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "checkoutUrl": "https://pay.paywithweave.com/checkout/clx9abc...",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "status":      "open"
+  }
+}`,
+          },
+          {
+            method: 'GET', path: '/checkout/sessions/:id',
+            summary: 'Retrieve a checkout session and the status of any linked order.',
+            params: [
+              { name: ':id', type: 'string', req: true, desc: 'Session ID from POST /checkout/sessions' },
+            ],
+            request: `curl https://api.paywithweave.com/api/v1/checkout/sessions/clx9abc... \\
+  -H "x-api-key: pk_live_..."`,
+            response: `{
+  "success": true,
+  "data": {
+    "id":           "clx9abc...",
+    "status":       "complete",
+    "amount":       5000,
+    "destAsset":    "fiat:NGN",
+    "reference":    "order_abc123",
+    "metadata":     { "userId": "usr_999" },
+    "orderId":      "ord_xyz",
+    "orderStatus":  "completed",
+    "expiresAt":    "2026-05-28T14:00:00Z",
+    "createdAt":    "2026-05-28T12:00:00Z"
+  }
 }`,
           },
         ] as EndpointDef[]).map((ep) => {
@@ -1217,13 +1387,16 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
     "destAssetKey":   "fiat:NGN",
     "sourceAmount":   50.38,
     "destAmount":     74250,
-    "createdAt":      "2026-05-01T10:00:00.000Z"
+    "createdAt":      "2026-05-01T10:00:00.000Z",
+    "sessionId":      "clx9abc...",
+    "metadata":       { "userId": "usr_999" }
   }
 }`}
         </CodeBlock>
         <p className="text-[13px] text-ink-muted leading-relaxed">
           Use <IC>data.id</IC> as the idempotency key — store processed order IDs and short-circuit duplicate deliveries with a <IC>200</IC>.
           <IC>reference</IC> is the value you supplied on <IC>POST /orders</IC> (or <IC>null</IC> when omitted).
+          <IC>sessionId</IC> and <IC>metadata</IC> are present only when the order was triggered by a checkout session — they echo back what you sent on <IC>POST /checkout/sessions</IC>.
         </p>
       </section>
 
@@ -1530,6 +1703,160 @@ function SupportPage() {
           <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Try <IC>GET /orders/:id</IC> once — it forces a live sync and may resolve the issue.</span></li>
           <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>For webhook problems, attach the request headers and raw body received by your endpoint.</span></li>
         </ul>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Checkout Sessions
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Checkout Sessions</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          Programmatically create a hosted payment page, redirect your user to it, and get them back when payment is confirmed.
+          The Stripe Checkout / Paystack initialize pattern, for crypto ↔ fiat.
+        </p>
+      </header>
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Info size={17} />} title="When to use it" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          You want the redirect flow but not the work of building a custom checkout UI. Your server creates a session, your user pays on a Weave-hosted page, and they come back to your <IC>redirectUrl</IC> when the order completes.
+          If you'd rather embed the UI directly in your own page, use the <strong className="text-ink">widget</strong>. If you want full UI control plus your own orchestration, use the <strong className="text-ink">direct API</strong>.
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={17} />} title="The redirect flow" />
+        <ol className="bg-cream-soft border border-hair-soft rounded-[20px] p-6 space-y-3 text-[13.5px] text-ink-muted leading-relaxed list-decimal list-inside marker:text-forest-deep marker:font-bold">
+          <li>Your server calls <IC>POST /checkout/sessions</IC> with the payment params and a <IC>redirectUrl</IC>.</li>
+          <li>Redirect the user's browser to the returned <IC>checkoutUrl</IC>.</li>
+          <li>The user pays on the Weave-hosted page.</li>
+          <li>Once payment is fully confirmed (<IC>order.status === 'completed'</IC>), Weave redirects the user back to <IC>{`${'redirectUrl'}?session_id=…&order_id=…`}</IC>.</li>
+          <li>Your server confirms the payment via the <IC>order.completed</IC> webhook. <strong className="text-ink">Do not rely on the redirect alone</strong> — the user could close the tab.</li>
+        </ol>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Terminal size={17} />} title="Create a session" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          <IC>POST /checkout/sessions</IC>. Required: <IC>amount</IC>, <IC>destAsset</IC>, <IC>redirectUrl</IC>. Auth via <IC>x-api-key</IC> or keypair.
+        </p>
+        <CodeBlock id="cs-create-req" copy={copy} copied={copied} lang="bash">
+{`curl https://api.paywithweave.com/api/v1/checkout/sessions \\
+  -X POST -H "x-api-key: pk_live_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "amount":      5000,
+    "amountIn":    "dest",
+    "destAsset":   "fiat:NGN",
+    "sourceAsset": "crypto:BASE:USDC",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" },
+    "redirectUrl": "https://yourstore.com/payment/success",
+    "cancelUrl":   "https://yourstore.com/cart",
+    "expiresIn":   7200
+  }'`}
+        </CodeBlock>
+        <CodeBlock id="cs-create-res" copy={copy} copied={copied} lang="json" light>
+{`{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "checkoutUrl": "https://pay.paywithweave.com/checkout/clx9abc...",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "status":      "open"
+  }
+}`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Cpu size={17} />} title="Retrieve a session" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          <IC>GET /checkout/sessions/:id</IC>. Returns the session plus the linked order's status (once a payment has started).
+        </p>
+        <CodeBlock id="cs-get-res" copy={copy} copied={copied} lang="json" light>
+{`{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "status":      "complete",
+    "amount":      5000,
+    "destAsset":   "fiat:NGN",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" },
+    "orderId":     "ord_xyz",
+    "orderStatus": "completed",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "createdAt":   "2026-05-28T12:00:00Z"
+  }
+}`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={17} />} title="Session Lifecycle" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { status: 'open',       dot: 'bg-amber-400', desc: 'Session created — awaiting payer.' },
+            { status: 'processing', dot: 'bg-forest/50', desc: 'User has started paying. An order is linked via orderId.' },
+            { status: 'complete',   dot: 'bg-forest',    desc: 'Payment confirmed; user has been redirected back to redirectUrl.' },
+            { status: 'expired',    dot: 'bg-ink/25',    desc: 'No payment was completed before expiresAt.' },
+          ].map(({ status, dot, desc }, i, arr) => (
+            <div key={status} className={`flex items-start gap-4 px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
+              <div>
+                <code className="text-[13px] font-mono font-semibold text-ink">{status}</code>
+                <p className="text-[13px] text-ink-muted mt-0.5">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-4">
+        <SectionHeading icon={<AlertTriangle size={17} />} title="Important callouts" />
+        <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed">
+          <strong className="text-forest-deep">Redirect fires on confirmed payment, not on deposit shown.</strong> The hosted success screen drives the redirect — your <IC>redirectUrl</IC> only sees users whose order reached <IC>completed</IC>.
+        </div>
+        <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed">
+          <strong className="text-forest-deep">Sessions expire after 2 hours by default.</strong> Override with <IC>expiresIn</IC> (seconds). Bounds: 5 minutes to 24 hours.
+        </div>
+        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl px-5 py-4 flex gap-3 text-[13.5px] text-amber-900 leading-relaxed">
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" strokeWidth={2} />
+          <span>
+            <strong>Always confirm via webhook.</strong> The redirect is a UX hint — the user can close the tab before being redirected. The <IC>order.completed</IC> webhook is the source of truth.
+          </span>
+        </div>
+        <div className="bg-cream-soft border border-hair-soft rounded-2xl px-5 py-4 text-[13.5px] text-ink-muted leading-relaxed">
+          The webhook payload echoes <IC>sessionId</IC> and <IC>metadata</IC> back to you — reconcile by your own internal IDs without a separate lookup.
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-4">
+        <SectionHeading icon={<Network size={17} />} title="Locking the source asset" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          Omit <IC>sourceAsset</IC> and the hosted page lets the payer choose how to pay. Pass it to lock them to a specific chain / token (e.g. <IC>crypto:BASE:USDC</IC>).
+          For the canonical list of valid keys, call <IC>GET /assets</IC>.
+        </p>
       </section>
     </div>
   );

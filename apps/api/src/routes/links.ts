@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { requireSession } from '../middleware/auth';
+import { requireAuth } from '../middleware/auth';
 import { linkCreationLimiter, apiLimiter } from '../middleware/rate-limit';
 
 const router = Router();
 
 // GET /api/v1/links
 // Fetches all payment links for the logged-in merchant.
-router.get('/', requireSession, async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
     const links = await prisma.paymentLink.findMany({
       where: { merchantId: req.merchantId },
@@ -21,7 +21,7 @@ router.get('/', requireSession, async (req, res) => {
 
 // POST /api/v1/links
 // Creates a new payment link.
-router.post('/', requireSession, linkCreationLimiter, async (req, res) => {
+router.post('/', requireAuth, linkCreationLimiter, async (req, res) => {
   try {
     const { title, description, amount, asset } = req.body;
 
@@ -87,7 +87,7 @@ router.get('/public/:slug', apiLimiter, async (req, res) => {
 
 // PATCH /api/v1/links/:id
 // Updates an existing payment link.
-router.patch('/:id', requireSession, async (req, res) => {
+router.patch('/:id', requireAuth, async (req, res) => {
   try {
     const { title, description, amount, asset, isActive } = req.body;
     if (title && title.length > 100) return res.status(400).json({ success: false, error: 'Title too long' });
@@ -118,7 +118,7 @@ router.patch('/:id', requireSession, async (req, res) => {
 
 // DELETE /api/v1/links/:id
 // Deletes a payment link.
-router.delete('/:id', requireSession, async (req, res) => {
+router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const existing = await prisma.paymentLink.findFirst({
       where: { id: req.params.id, merchantId: req.merchantId }

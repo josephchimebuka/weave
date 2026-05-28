@@ -70,6 +70,73 @@ export interface ExecuteResult {
   feeSummary: { senderFeeUsd: number; appFeeUsd: number; bridgeFeeUsd: number };
 }
 
+// ── DepositInstruction ──────────────────────────────────────────────────────
+// Framework-agnostic equivalent of `nextAction` for direct-API consumers. The
+// widget keeps using `nextAction` (with its UI-screen labels); server-to-server
+// integrations should read this instead.
+
+export type DepositInstruction =
+  | {
+      type: 'crypto_transfer';
+      depositAddress: string;
+      depositMemo: string | null;
+      amount: number;
+      token: string;
+      chain: string;
+      expiresAt: string | null;
+    }
+  | {
+      type: 'bank_transfer';
+      institution: string;
+      accountIdentifier: string;
+      accountName: string;
+      amountToTransfer: string;
+      currency: string;
+      expiresAt: string | null;
+    }
+  | {
+      type: 'paystack_popup';
+      accessCode: string;
+      publicKey: string;
+      amount: number;
+      reference: string;
+    };
+
+export function toDepositInstruction(action: FirstStepAction): DepositInstruction {
+  if (action.screen === 'collect_crypto') {
+    return {
+      type: 'crypto_transfer',
+      depositAddress: action.depositAddress ?? '',
+      depositMemo: action.depositMemo ?? null,
+      amount: action.amount ?? 0,
+      token: action.token ?? '',
+      chain: action.chain ?? '',
+      expiresAt: action.expiresAt ?? null,
+    };
+  }
+  if (action.screen === 'paystack_popup') {
+    const d = action.paystackPopupDetails;
+    return {
+      type: 'paystack_popup',
+      accessCode: d?.accessCode ?? '',
+      publicKey: d?.publicKey ?? '',
+      amount: d?.amount ?? 0,
+      reference: d?.reference ?? '',
+    };
+  }
+  // collect_fiat (bank transfer)
+  const b = action.bankDetails;
+  return {
+    type: 'bank_transfer',
+    institution: b?.institution ?? '',
+    accountIdentifier: b?.accountIdentifier ?? '',
+    accountName: b?.accountName ?? '',
+    amountToTransfer: b?.amountToTransfer ?? '',
+    currency: b?.currency ?? '',
+    expiresAt: action.expiresAt ?? null,
+  };
+}
+
 const SENDER_FEE_BPS = Number(process.env.SENDER_FEE_BPS ?? 75);
 const APP_FEE_BPS = Number(process.env.APP_FEE_BPS ?? 10);
 // Matches the same env the quote endpoint uses for its gross-up. NEAR will
@@ -496,6 +563,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         amountOut: e.amountOut,
         depositAddress: e.depositAddress,
         depositMemo: e.depositMemo,
+        depositBankDetails: e.bankDetails ?? undefined,
         status: i === 0 ? 'awaiting_deposit' : 'pending',
         feeUsd: e.feeUsd,
         startedAt: new Date(),

@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma';
 import { requireAuth } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
-import { executeOrder, syncOrder } from '../services/executor.service';
+import { executeOrder, syncOrder, toDepositInstruction } from '../services/executor.service';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
@@ -323,6 +323,10 @@ router.post('/', requireAuth, async (req, res) => {
       success: true,
       data: {
         order: serializeOrder(updated),
+        // `depositInstruction` is the framework-agnostic shape — preferred for
+        // server-to-server integrations. `nextAction` retains the widget-facing
+        // shape (with `screen` labels) for backward compatibility.
+        depositInstruction: toDepositInstruction(execResult.nextAction),
         nextAction: execResult.nextAction,
         firstStep: execResult.firstStep,
       },
