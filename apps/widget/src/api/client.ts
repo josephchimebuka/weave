@@ -12,8 +12,8 @@ function getApiBase() {
     return (window as any).__WEAVE_API_BASE__;
   }
   return (
+    (typeof process !== 'undefined' && process.env.API_BASE) ||
     (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) ||
-    (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_BASE) ||
     'http://localhost:4000/api/v1'
   );
 }
