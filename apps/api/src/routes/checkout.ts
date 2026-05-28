@@ -41,7 +41,7 @@ function serializeSession(s: any) {
 router.post('/sessions', requireAuth, linkCreationLimiter, async (req, res) => {
   try {
     const {
-      amount, amountIn, sourceAsset, destAsset, reference, metadata,
+      amount, amountIn, sourceAsset, destAsset, reference, metadata, customer,
       redirectUrl, cancelUrl, expiresIn,
     } = req.body ?? {};
 
@@ -74,6 +74,30 @@ router.post('/sessions', requireAuth, linkCreationLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: 'metadata must be a JSON object' });
     }
 
+    // Validate optional customer passthrough — Weave does not verify any of
+    // these. Echoed on the order and in webhook payloads.
+    let cleanCustomer: { email?: string; name?: string; externalId?: string } | null = null;
+    if (customer !== undefined && customer !== null) {
+      if (typeof customer !== 'object' || Array.isArray(customer)) {
+        return res.status(400).json({ success: false, error: 'customer must be a JSON object' });
+      }
+      const c = customer as Record<string, unknown>;
+      const out: { email?: string; name?: string; externalId?: string } = {};
+      if (c.email !== undefined) {
+        if (typeof c.email !== 'string' || c.email.length > 320) return res.status(400).json({ success: false, error: 'customer.email must be a string up to 320 chars' });
+        out.email = c.email;
+      }
+      if (c.name !== undefined) {
+        if (typeof c.name !== 'string' || c.name.length > 200) return res.status(400).json({ success: false, error: 'customer.name must be a string up to 200 chars' });
+        out.name = c.name;
+      }
+      if (c.externalId !== undefined) {
+        if (typeof c.externalId !== 'string' || c.externalId.length > 200) return res.status(400).json({ success: false, error: 'customer.externalId must be a string up to 200 chars' });
+        out.externalId = c.externalId;
+      }
+      cleanCustomer = Object.keys(out).length ? out : null;
+    }
+
     let ttl = DEFAULT_EXPIRES_IN_SEC;
     if (expiresIn !== undefined && expiresIn !== null) {
       const n = Number(expiresIn);
@@ -92,6 +116,7 @@ router.post('/sessions', requireAuth, linkCreationLimiter, async (req, res) => {
         destAsset,
         reference: reference ?? null,
         metadata: metadata ?? undefined,
+        customer: cleanCustomer ?? undefined,
         redirectUrl,
         cancelUrl: cancelUrl ?? null,
         expiresAt: new Date(Date.now() + ttl * 1000),

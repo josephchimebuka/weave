@@ -352,10 +352,25 @@ export async function sendMerchantPaymentNotification(orderId: string) {
     const isCrypto = order.destAssetKey.startsWith('crypto:');
     const amount = order.destAmount ? Number(order.destAmount) : 0;
     const symbol = order.destAssetKey.split(':').pop();
-    const amountStr = isCrypto 
-      ? `${amount.toFixed(4)} ${symbol}` 
+    const amountStr = isCrypto
+      ? `${amount.toFixed(4)} ${symbol}`
       : `${Math.round(amount).toLocaleString()} ${symbol}`;
     const dashboardUrl = process.env.DASHBOARD_URL || 'http://localhost:3000';
+
+    // Resolve a human-readable payer label. Weave does not collect or verify
+    // payer identity — `order.customer` is whatever the merchant passed on
+    // /orders or /checkout/sessions. Falls through to the merchant's own
+    // reference, then to a neutral phrase. Never claims verification.
+    const customer = (order.customer ?? null) as { email?: string; name?: string; externalId?: string } | null;
+    const payerLabel = customer?.name
+      ? (customer.email ? `${customer.name} <${customer.email}>` : customer.name)
+      : customer?.email
+        ? customer.email
+        : customer?.externalId
+          ? customer.externalId
+          : order.reference
+            ? order.reference
+            : null;
 
     const { data, error } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL || 'Weave <payments@weave.com>',
@@ -378,10 +393,11 @@ export async function sendMerchantPaymentNotification(orderId: string) {
                 <td style="color: #6B7572; padding-bottom: 12px;">Order ID</td>
                 <td style="font-weight: 600; text-align: right; padding-bottom: 12px;">${order.id.slice(0, 8).toUpperCase()}</td>
               </tr>
+              ${payerLabel ? `
               <tr>
-                <td style="color: #6B7572;">Customer</td>
-                <td style="font-weight: 600; text-align: right;">${order.sourceInstrument?.bankAccountName || 'Verified Customer'}</td>
-              </tr>
+                <td style="color: #6B7572;">${customer ? 'Customer' : 'Reference'}</td>
+                <td style="font-weight: 600; text-align: right;">${payerLabel}</td>
+              </tr>` : ''}
             </table>
           </div>
           

@@ -177,6 +177,11 @@ model Order {
   status             String       // "awaiting_deposit" | "processing" | "completed" | "failed" | "refunded"
   routePlan          Json?        // RoutePlan snapshot from the router
   reference          String?      // merchant-supplied reference
+  // Merchant-supplied payer identity, pure passthrough. Weave does not verify
+  // any of these fields — they're echoed in webhooks and shown on receipts so
+  // merchants can attach their own customer record to the order. Shape:
+  //   { email?: string, name?: string, externalId?: string }
+  customer           Json?
   senderFeeUsd       Decimal?     @db.Decimal(18, 8)
   appFeeUsd          Decimal?     @db.Decimal(18, 8)
   bridgeFeeUsd       Decimal?     @db.Decimal(18, 8)
@@ -302,6 +307,7 @@ model CheckoutSession {
   destAsset    String
   reference    String?                     // merchant-supplied — echoed in webhook
   metadata     Json?                       // opaque KV bag — echoed in webhook
+  customer     Json?                       // payer identity passthrough — copied to the order on link
 
   redirectUrl  String
   cancelUrl    String?

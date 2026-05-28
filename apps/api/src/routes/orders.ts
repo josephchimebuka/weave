@@ -45,6 +45,33 @@ interface CreateOrderBody {
   // source instrument's walletAddress when both are set.
   refundAddress?: string;
   sessionId?: string;
+  // Optional payer identity, pure passthrough — Weave does not verify any of
+  // these. Echoed on the order, in webhooks, and on receipts.
+  customer?: { email?: string; name?: string; externalId?: string };
+}
+
+// Whitelist customer fields and reject if shape is wrong. Returns sanitized
+// value or null. Throws on invalid shape so route returns a 400.
+function sanitizeCustomer(raw: unknown): { email?: string; name?: string; externalId?: string } | null {
+  if (raw == null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('customer must be an object');
+  }
+  const out: { email?: string; name?: string; externalId?: string } = {};
+  const c = raw as Record<string, unknown>;
+  if (c.email !== undefined) {
+    if (typeof c.email !== 'string' || c.email.length > 320) throw new Error('customer.email must be a string up to 320 chars');
+    out.email = c.email;
+  }
+  if (c.name !== undefined) {
+    if (typeof c.name !== 'string' || c.name.length > 200) throw new Error('customer.name must be a string up to 200 chars');
+    out.name = c.name;
+  }
+  if (c.externalId !== undefined) {
+    if (typeof c.externalId !== 'string' || c.externalId.length > 200) throw new Error('customer.externalId must be a string up to 200 chars');
+    out.externalId = c.externalId;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // POST /api/v1/orders — direction-agnostic order creation.
@@ -63,6 +90,15 @@ router.post('/', requireAuth, async (req, res) => {
   body.amount = amount;
   if (body.reference && body.reference.length > 100) {
     return res.status(400).json({ success: false, error: 'Reference too long' });
+  }
+
+  // Sanitize merchant-supplied customer info (pure passthrough — we never verify).
+  // Validate up-front so a malformed shape returns 400 cleanly.
+  let customer: { email?: string; name?: string; externalId?: string } | null;
+  try {
+    customer = sanitizeCustomer(body.customer);
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: err.message });
   }
 
   try {
@@ -249,6 +285,11 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     if (!order) {
+      // Resolve customer identity: body wins, fall back to the session's customer
+      // when the order was triggered from a hosted checkout. Pure passthrough —
+      // never verified; echoed in webhooks and emails.
+      const resolvedCustomer = customer ?? (checkoutSession?.customer as any) ?? undefined;
+
       try {
         order = await prisma.order.create({
           data: {
@@ -262,6 +303,7 @@ router.post('/', requireAuth, async (req, res) => {
             routePlan: plan as any,
             quoteRate,
             reference: body.reference || (checkoutSession ? checkoutSession.reference : null),
+            customer: resolvedCustomer,
             sandboxMode: req.sandboxMode ?? false,
           },
         });
@@ -341,25 +383,7 @@ router.post('/', requireAuth, async (req, res) => {
       include: { steps: { orderBy: { sequence: 'asc' } } },
     });
 
-    // 6a. Auto-link the order to its CheckoutSession when one was passed.
-    // The widget on the hosted checkout page sends `sessionId` so this happens
-    // transparently for redirect-flow integrations — the merchant never has to
-    // hit a separate link endpoint. Only opens still-open sessions to avoid
-    // accidentally re-binding a completed/expired one.
-    if (body.sessionId) {
-      const linked = await prisma.checkoutSession.updateMany({
-        where: {
-          id: body.sessionId,
-          merchantId: merchant.id,
-          orderId: null,
-          status: 'open',
-        },
-        data: { orderId: order.id, status: 'processing' },
-      });
-      if (linked.count === 0) {
-        console.warn(`[orders] sessionId ${body.sessionId} not linked — may be missing, already linked, or no longer open`);
-      }
-    }
+    // (Session linking already handled inline after order creation above.)
 
     res.json({
       success: true,

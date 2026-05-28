@@ -116,6 +116,22 @@ Drive Paystack's official popup with these.
 
 `GET /api/v1/assets` (no auth) returns every fiat and crypto asset Weave supports. Use the `key` field on each entry as the canonical identifier in `POST /orders` and `POST /checkout/sessions`. Fetch once on app boot and cache — the list changes rarely.
 
+### Attaching customer identity (optional)
+
+Weave does **not** collect or verify payer identity. If you already know who the payer is (they're logged into your product), pass it as `customer` on `POST /orders` or `POST /checkout/sessions`:
+
+```json
+{
+  "customer": {
+    "email": "jane@example.com",
+    "name": "Jane Doe",
+    "externalId": "usr_999"
+  }
+}
+```
+
+All three fields are optional. We treat them as opaque passthrough — never validated, never enriched, never exposed to the payer. We echo them back on the `Order`, in the `order.completed` webhook payload (`data.customer`), and on the merchant-facing receipt email. If you omit `customer`, emails fall back to your `reference` field and avoid making any claim about who paid.
+
 ### End-to-end example (Node.js)
 
 ```javascript
@@ -273,12 +289,13 @@ Weave POSTs to your registered endpoint when an order changes terminal state.
     "destAmount": 74250,
     "createdAt": "2026-05-28T10:00:00Z",
     "sessionId": "clx9abc...",
-    "metadata": { "userId": "usr_999" }
+    "metadata": { "userId": "usr_999" },
+    "customer": { "email": "jane@example.com", "name": "Jane Doe", "externalId": "usr_999" }
   }
 }
 ```
 
-`sessionId` and `metadata` are present only when the order was triggered by a checkout session.
+`sessionId` and `metadata` are present only when the order was triggered by a checkout session. `customer` is present whenever you passed it on `/orders` or `/checkout/sessions` — it's pure passthrough; Weave never verifies these fields.
 
 ### Signature verification
 

@@ -1034,6 +1034,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
               { name: 'flow',                       type: '"external" | "self"',req: false, desc: '"external" = NEAR Intents (deposit address, any chain). "self" = ChainRails (connected EVM wallet). Default: external' },
               { name: 'refundAddress',              type: 'string',             req: false, desc: 'Customer wallet for refunds on failure. Defaults to walletAddress' },
               { name: 'reference',                  type: 'string',             req: false, desc: 'Your unique ID for idempotent creation — returns HTTP 409 if a matching order already exists' },
+              { name: 'customer',                   type: '{ email?, name?, externalId? }', req: false, desc: 'Payer identity passthrough. Weave never verifies these fields — echoed in the webhook and on receipt emails' },
               { name: 'dest',                       type: 'InstrumentRef',      req: false, desc: 'Override the payout destination. Defaults to your merchant default' },
             ],
             request: `curl https://api.paywithweave.com/api/v1/orders \\
@@ -1193,6 +1194,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
               { name: 'sourceAsset', type: 'string',             req: false, desc: 'Lock the payer to a specific source asset. Omit to let them choose on the hosted page' },
               { name: 'reference',   type: 'string',             req: false, desc: 'Your internal ID, echoed in the webhook' },
               { name: 'metadata',    type: 'object',             req: false, desc: 'Opaque JSON object, echoed in the webhook' },
+              { name: 'customer',    type: '{ email?, name?, externalId? }', req: false, desc: 'Payer identity passthrough. Weave never verifies these fields — echoed in the webhook and on receipt emails' },
               { name: 'redirectUrl', type: 'string',             req: true,  desc: 'HTTPS URL the user is redirected to once payment is confirmed' },
               { name: 'cancelUrl',   type: 'string',             req: false, desc: 'HTTPS URL the user lands on if they abandon or the session expires' },
               { name: 'expiresIn',   type: 'number',             req: false, desc: 'Seconds until the session expires. Default 7200 (2h). Min 300. Max 86400' },
@@ -1436,6 +1438,7 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
     "sourceAmount":   50.38,
     "destAmount":     74250,
     "createdAt":      "2026-05-01T10:00:00.000Z",
+    "customer":       { "email": "jane@example.com", "name": "Jane Doe", "externalId": "usr_999" },
     "sessionId":      "clx9abc...",
     "metadata":       { "userId": "usr_999" }
   }
@@ -1445,6 +1448,7 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
           Use <IC>data.id</IC> as the idempotency key — store processed order IDs and short-circuit duplicate deliveries with a <IC>200</IC>.
           <IC>reference</IC> is the value you supplied on <IC>POST /orders</IC> (or <IC>null</IC> when omitted).
           <IC>sessionId</IC> and <IC>metadata</IC> are present only when the order was triggered by a checkout session — they echo back what you sent on <IC>POST /checkout/sessions</IC>.
+          <IC>customer</IC> is present whenever you passed it on order or session creation — Weave never verifies it, we just hand it back to you for reconciliation.
         </p>
       </section>
 
@@ -1927,6 +1931,35 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
         <p className="text-[13.5px] text-ink-muted leading-relaxed">
           Omit <IC>sourceAsset</IC> and the hosted page lets the payer choose how to pay. Pass it to lock them to a specific chain / token (e.g. <IC>crypto:BASE:USDC</IC>).
           For the canonical list of valid keys, call <IC>GET /assets</IC>.
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-4">
+        <SectionHeading icon={<Info size={17} />} title="Attaching a customer (optional)" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          Weave does not collect or verify payer identity — your payers don't sign in to Weave, don't enter contact details, and aren't associated with a Weave account.
+          The hosted page only asks for what the transaction actually requires (e.g. a refund account for fiat onramps).
+        </p>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          If you already know who the payer is (they're logged into your product), pass it on session creation:
+        </p>
+        <CodeBlock id="cs-customer" copy={copy} copied={copied} lang="json" light>
+{`{
+  "amount": 5000,
+  "destAsset": "fiat:NGN",
+  "redirectUrl": "https://yourstore.com/payment/success",
+  "customer": {
+    "email":      "jane@example.com",
+    "name":       "Jane Doe",
+    "externalId": "usr_999"
+  }
+}`}
+        </CodeBlock>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          All three fields are optional. They're echoed onto the order, into the <IC>order.completed</IC> webhook (<IC>data.customer</IC>), and onto your receipt email — so you can reconcile by your own customer record without a second lookup.
+          When you omit <IC>customer</IC>, receipts fall back to your <IC>reference</IC> field; they never claim the payer was "verified."
         </p>
       </section>
     </div>

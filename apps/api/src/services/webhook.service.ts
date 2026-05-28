@@ -43,6 +43,8 @@ export interface WebhookEvent {
     // Set only when the order was initiated via a hosted CheckoutSession.
     sessionId?: string;
     metadata?: unknown;
+    // Merchant-supplied payer identity passthrough. Never verified by Weave.
+    customer?: { email?: string; name?: string; externalId?: string } | null;
   };
 }
 
@@ -140,6 +142,7 @@ class WebhookService {
           sourceAmount:   Number(order.sourceAmount),
           destAmount:     order.destAmount == null ? null : Number(order.destAmount),
           createdAt:      order.createdAt.toISOString(),
+          ...(order.customer ? { customer: order.customer as any } : {}),
           ...(session ? { sessionId: session.id, metadata: session.metadata ?? null } : {}),
         },
       },
