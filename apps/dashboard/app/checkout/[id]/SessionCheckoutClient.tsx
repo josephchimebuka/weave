@@ -78,15 +78,11 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
 
   const currency = parseDestCurrency(session.destAsset);
 
-  async function handleSuccess(txn: { orderId: string; status: string }) {
-    try {
-      await fetch(`/api/public/checkout/sessions/${session.id}/complete`, {
-        method: 'PATCH',
-        headers: { 'x-api-key': session.publishableKey },
-      });
-    } catch {
-      // Best-effort — webhook is the source of truth. Continue to redirect.
-    }
+  function handleSuccess(txn: { orderId: string; status: string }) {
+    // Server-side: POST /orders auto-links the order to the session via the
+    // `sessionId` field, and executor.markStepDone transitions the session to
+    // `complete` when the order completes. The redirect is the user-facing
+    // signal that payment is confirmed.
     window.location.href = appendQuery(session.redirectUrl, {
       session_id: session.id,
       order_id: txn.orderId,
@@ -155,7 +151,6 @@ r py-6 md:py-10 px-4 sm:px-6 lg:px-12">                                         
               currency: currency as any,
               amountIn: session.amountIn,
               ...(session.sourceAsset ? { sourceAssetKey: session.sourceAsset } : {}),
-              destAssetKey: session.destAsset,
             }}
             theme="organic"
             accentColor="forest"

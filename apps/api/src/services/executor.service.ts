@@ -681,6 +681,21 @@ export async function markStepDone(params: {
     data: orderUpdate,
   });
 
+  // ── Roll up linked CheckoutSession ────────────────────────────────────────
+  // Mirror the order's terminal state onto any hosted checkout session bound to
+  // this order. The hosted page polls/observes the order, so this keeps session
+  // state in lockstep without a second round-trip from the client.
+  if (transitioned > 0 && (nextOrderStatus === 'completed' || nextOrderStatus === 'failed')) {
+    try {
+      await prisma.checkoutSession.updateMany({
+        where: { orderId: step.orderId, status: { in: ['open', 'processing'] } },
+        data: { status: nextOrderStatus === 'completed' ? 'complete' : 'expired' },
+      });
+    } catch (err: any) {
+      console.warn(`[executor] failed to sync checkout session for order ${step.orderId}:`, err.message);
+    }
+  }
+
   // ── Notify Merchant ───────────────────────────────────────────────────────
   if (transitioned > 0 && nextOrderStatus === 'completed' && !step.order.sandboxMode) {
     const { webhookService } = await import('./webhook.service');

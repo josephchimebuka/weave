@@ -233,43 +233,65 @@ curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:N
 
       {/* Integration paths */}
       <section className="space-y-5">
-        <SectionHeading icon={<GitBranch size={18} />} title="Integration Paths" />
+        <SectionHeading icon={<GitBranch size={18} />} title="Choosing how to integrate" />
         <p className="text-[14.5px] text-ink-muted leading-relaxed">
-          Pick the path that matches your development stack and how much control you need over the customer experience.
+          There's no single right way to plug Weave in — the best fit depends on how much UI control you want and where the payment lives in your product.
+          All three paths route through the same providers, settle to the same payout destination, and fire the same webhooks. Pick by what fits your stack today; you can always add or swap paths later.
         </p>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[
             {
               tag: 'Path A',
               title: 'The Widget',
-              desc: 'Best for React/Next.js/HTML apps. Drop in our pre-built UI that handles wallet connections, network switching, and real-time status tracking. Zero frontend logic required.',
+              tagline: 'The fastest start.',
+              best: 'You already have a page and want to drop a checkout into it. Common for marketplaces, donation pages, and any flow where the payment is one step inside a larger product.',
+              build: 'A single <WeaveCheckout> React component, or one <script> tag for plain HTML. The widget handles wallet connections, chain switching, the deposit-address screen, real-time status, and the success receipt.',
+              owns: 'Weave owns the whole payment UI; you own the surrounding page.',
               cta: 'Widget playground',
               action: () => setActivePage('widget')
             },
             {
               tag: 'Path B',
               title: 'Direct API',
-              desc: 'Best for custom checkout flows or server-side automation. Build your own UI on top of our REST endpoints. You get raw deposit instructions and handle the rendering yourself.',
+              tagline: 'Total control.',
+              best: 'You want a fully custom checkout — your design system, your flow, your copy — or you\'re building on a stack the widget doesn\'t target (native mobile, terminal, ops dashboard, voice).',
+              build: 'Server calls to POST /quotes, POST /orders, GET /orders/:id. The response includes a `depositInstruction` (framework-agnostic deposit details) — render it however you like and poll until the order completes (or react to webhooks).',
+              owns: 'You own every pixel; Weave handles routing, provider orchestration, and settlement.',
               cta: 'API reference',
               action: () => setActivePage('api')
             },
             {
               tag: 'Path C',
               title: 'Checkout Sessions',
-              desc: 'Best for low-code setups or "Stripe-style" redirects. Generate a hosted payment link on your server and redirect the user. We handle the rest and send them back when done.',
+              tagline: 'The redirect flow.',
+              best: 'You want the Stripe / Paystack-style "redirect away, come back when done" pattern. Common when payment is its own page and you\'d rather not embed anything (e.g. invoice emails, SMS payment links, server-rendered apps).',
+              build: 'Your server calls POST /checkout/sessions. Weave returns a `checkoutUrl` — redirect the user to it. They pay on a Weave-hosted page, then get redirected to your `redirectUrl` once payment confirms.',
+              owns: 'Weave hosts the payment page; your server owns the surrounding flow (creating sessions, handling redirects, reconciling via webhook).',
               cta: 'Checkout sessions',
               action: () => setActivePage('checkout')
             },
-          ].map(({ tag, title, desc, cta, action }) => (
+          ].map(({ tag, title, tagline, best, build, owns, cta, action }) => (
             <button key={title} onClick={action} className="group text-left bg-cream-soft border border-hair-soft hover:border-forest/25 rounded-[20px] p-5 transition-all flex flex-col gap-3 h-full">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-ink-faint">{tag}</span>
-              <p className="font-display text-[16px] font-semibold text-ink">{title}</p>
-              <p className="text-[12.5px] text-ink-muted leading-relaxed flex-1">{desc}</p>
-              <span className="text-[12px] font-semibold text-forest-deep group-hover:underline underline-offset-2 inline-flex items-center gap-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-ink-faint">{tag}</span>
+                <span className="text-[10.5px] font-semibold text-forest-deep">{tagline}</span>
+              </div>
+              <p className="font-display text-[17px] font-semibold text-ink">{title}</p>
+              <div className="space-y-2.5 flex-1 pt-1">
+                <p className="text-[11.5px] text-ink-muted leading-relaxed"><strong className="text-ink">Best when:</strong> {best}</p>
+                <p className="text-[11.5px] text-ink-muted leading-relaxed"><strong className="text-ink">What you build:</strong> {build}</p>
+                <p className="text-[11.5px] text-ink-muted leading-relaxed"><strong className="text-ink">Who owns the UI:</strong> {owns}</p>
+              </div>
+              <span className="text-[12px] font-semibold text-forest-deep group-hover:underline underline-offset-2 inline-flex items-center gap-1.5 pt-1 mt-auto">
                 {cta} <ArrowRight size={12} strokeWidth={2.2} />
               </span>
             </button>
           ))}
+        </div>
+
+        <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13px] text-forest-deep leading-relaxed">
+          <strong className="text-forest-deep">You can mix paths inside a single merchant account.</strong> Ship a widget on web, a checkout-session redirect from your iOS app, and a direct-API integration in your back-office tool — all under the same publishable/secret keys, all visible in the same dashboard, all firing the same webhooks. The "path" is just how this one call enters Weave; the rest of the system is shared.
         </div>
       </section>
 
@@ -900,11 +922,33 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
 
   return (
     <div className="space-y-12 pb-16 fade-up">
-      <header>
+      <header className="space-y-4">
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">API Reference</h1>
-        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
-          Base URL: <IC>https://api.paywithweave.com/api/v1</IC><br />
-          Authenticate with <IC>x-api-key: pk_live_…</IC> on every request.
+        <p className="text-ink-muted text-[15px] leading-relaxed">
+          The full surface for the direct API and checkout-session integration paths.
+          Every endpoint below returns <IC>{`${'{ success: boolean, data?, error? }'}`}</IC>; non-2xx responses still carry a structured error.
+          Base URL: <IC>https://api.paywithweave.com/api/v1</IC>
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
+            <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Browser / widget</p>
+            <code className="text-[11.5px] font-mono text-ink">x-api-key: pk_live_…</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Publishable key. Safe to ship in client code. Scoped to creating + reading own orders.</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
+            <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Server-to-server</p>
+            <code className="text-[11.5px] font-mono text-ink">x-public-key + x-secret-key</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Secret keypair. Required for anything that should not be possible from the browser. Never expose either header in client code.</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
+            <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Sandbox</p>
+            <code className="text-[11.5px] font-mono text-ink">x-api-key: pk_test_…</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Same surface, no real funds. Orders auto-complete, outbound webhooks are suppressed, and orders are flagged as sandbox in the dashboard.</p>
+          </div>
+        </div>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed pt-1">
+          Endpoints are grouped below into <strong className="text-ink">payment</strong> (quotes, orders), <strong className="text-ink">checkout sessions</strong> (the hosted-redirect flow),
+          and <strong className="text-ink">reference data</strong> (institutions, assets). Expand any row to see parameters, a runnable curl, and the response shape.
         </p>
       </header>
 
@@ -1302,10 +1346,14 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
 function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
   return (
     <div className="space-y-12 pb-16 fade-up">
-      <header>
+      <header className="space-y-3">
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Webhooks</h1>
-        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
-          Real-time signed notifications delivered to your server when order status changes.
+        <p className="text-ink-muted text-[15px] leading-relaxed">
+          Signed, server-to-server notifications. When an order reaches a terminal state — settled to your payout destination, or failed beyond recovery — Weave POSTs a JSON event to the URL you register.
+          This is the source of truth for "did the payment actually happen?" Front-end signals (the widget's success screen, the checkout-session redirect) are UX cues; the webhook is the audit trail.
+        </p>
+        <p className="text-ink-muted text-[14px] leading-relaxed">
+          Regardless of which integration path created the order — widget, direct API, or checkout session — the same event fires. If the order originated from a checkout session, the payload also echoes the <IC>sessionId</IC> and any <IC>metadata</IC> you set, so you can reconcile by your own IDs without a separate lookup.
         </p>
       </header>
 
@@ -1718,17 +1766,40 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
       <header>
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Checkout Sessions</h1>
         <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
-          Programmatically create a hosted payment page, redirect your user to it, and get them back when payment is confirmed.
-          The Stripe Checkout / Paystack initialize pattern, for crypto ↔ fiat.
+          Programmatically create a hosted payment page, redirect your user to it, and get them back when payment is confirmed —
+          the Stripe Checkout / Paystack initialize pattern, brought to crypto ↔ fiat. No frontend code on your side; just one server call and a redirect.
         </p>
       </header>
 
       <section className="space-y-5">
-        <SectionHeading icon={<Info size={17} />} title="When to use it" />
+        <SectionHeading icon={<Info size={17} />} title="What this is, exactly" />
         <p className="text-[14px] text-ink-muted leading-relaxed">
-          You want the redirect flow but not the work of building a custom checkout UI. Your server creates a session, your user pays on a Weave-hosted page, and they come back to your <IC>redirectUrl</IC> when the order completes.
-          If you'd rather embed the UI directly in your own page, use the <strong className="text-ink">widget</strong>. If you want full UI control plus your own orchestration, use the <strong className="text-ink">direct API</strong>.
+          A <strong className="text-ink">checkout session</strong> is a one-shot, server-created payment intent that carries everything Weave needs to know
+          about a single payment: the amount, the asset the merchant wants to receive, an optional source-asset lock, where to send the user when they're done, and an optional metadata bag that gets echoed back in the webhook.
         </p>
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          When you create one, you get back a <IC>checkoutUrl</IC>. Send the user there. They'll see a Weave-hosted page running our widget, complete payment, and land back on your <IC>redirectUrl</IC> with <IC>session_id</IC> and <IC>order_id</IC> in the query string.
+          Behind the scenes, Weave routes the payment through the same providers, fires the same webhook, and writes the same order rows as every other path — the session is just the entry point.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4">
+            <p className="text-[12px] font-bold uppercase tracking-widest text-forest-deep mb-1.5">Pick checkout sessions when</p>
+            <ul className="text-[12.5px] text-ink-muted leading-relaxed space-y-1 list-disc list-inside marker:text-forest">
+              <li>The payment lives on its own page — invoice emails, SMS payment links, server-rendered checkouts.</li>
+              <li>You'd rather not embed any frontend SDK.</li>
+              <li>You already model payments as "create intent → redirect → confirm via webhook" (Stripe, Paystack).</li>
+              <li>You need to issue a payment URL from a backend that has no UI at all (a Slack bot, a cron job, an admin tool).</li>
+            </ul>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4">
+            <p className="text-[12px] font-bold uppercase tracking-widest text-ink-faint mb-1.5">Pick something else when</p>
+            <ul className="text-[12.5px] text-ink-muted leading-relaxed space-y-1 list-disc list-inside marker:text-ink/30">
+              <li>You'd rather the payment happen in-place without a redirect → <strong className="text-ink">widget</strong>.</li>
+              <li>You want a fully custom checkout UI in your own design system → <strong className="text-ink">direct API</strong>.</li>
+              <li>You need to reuse the same payment link forever (recurring donation, sticker link) → use the <strong className="text-ink">Payment Links</strong> feature instead. Sessions are single-use and expire.</li>
+            </ul>
+          </div>
+        </div>
       </section>
 
       <div className="rule-dotted" />

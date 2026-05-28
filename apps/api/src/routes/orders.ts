@@ -341,6 +341,26 @@ router.post('/', requireAuth, async (req, res) => {
       include: { steps: { orderBy: { sequence: 'asc' } } },
     });
 
+    // 6a. Auto-link the order to its CheckoutSession when one was passed.
+    // The widget on the hosted checkout page sends `sessionId` so this happens
+    // transparently for redirect-flow integrations — the merchant never has to
+    // hit a separate link endpoint. Only opens still-open sessions to avoid
+    // accidentally re-binding a completed/expired one.
+    if (body.sessionId) {
+      const linked = await prisma.checkoutSession.updateMany({
+        where: {
+          id: body.sessionId,
+          merchantId: merchant.id,
+          orderId: null,
+          status: 'open',
+        },
+        data: { orderId: order.id, status: 'processing' },
+      });
+      if (linked.count === 0) {
+        console.warn(`[orders] sessionId ${body.sessionId} not linked — may be missing, already linked, or no longer open`);
+      }
+    }
+
     res.json({
       success: true,
       data: {
