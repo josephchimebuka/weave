@@ -150,6 +150,10 @@ r py-6 md:py-10 px-4 sm:px-6 lg:px-12">                                         
               amount: session.amount,
               currency: currency as any,
               amountIn: session.amountIn,
+              // Required for the widget to detect the pure-NGN Paystack path
+              // (see WeaveWidget.tsx:2577). Without it, "pay with bank transfer"
+              // falls through to the Paycrest onramp screen.
+              destAssetKey: session.destAsset,
               ...(session.sourceAsset ? { sourceAssetKey: session.sourceAsset } : {}),
             }}
             theme="organic"
