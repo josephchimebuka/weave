@@ -144,7 +144,7 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
       </header>
 
       <main className="flex-1 flex items-start md:items-center justify-center py-6 md:py-10 px-4 sm:px-6 lg:px-12">
-        <div className="w-full max-w-[440px] fade-up">
+        <div className="w-full max-w-sm md:max-w-md fade-up">
           <WeaveCheckout
             apiKey={session.publishableKey}
             apiBase={API_BASE}
