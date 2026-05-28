@@ -27,11 +27,6 @@ export type SessionData = {
   publishableKey: string;
 };
 
-const API_BASE =
-  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) ||
-  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_BASE) ||
-  'http://localhost:4000/api/v1';
-
 function parseDestCurrency(destAsset: string): string {
   // "fiat:NGN" → "NGN", "crypto:BASE:USDC" → "USDC"
   const parts = destAsset.split(':');
@@ -85,7 +80,7 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
 
   async function handleSuccess(txn: { orderId: string; status: string }) {
     try {
-      await fetch(`${API_BASE}/checkout/sessions/${session.id}/complete`, {
+      await fetch(`/api/public/checkout/sessions/${session.id}/complete`, {
         method: 'PATCH',
         headers: { 'x-api-key': session.publishableKey },
       });
@@ -149,11 +144,10 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
         </div>
       </header>
 
-      <main className="flex-1 flex items-start md:items-center justify-center py-6 md:py-10 px-4 sm:px-6 lg:px-12">
-        <div className="w-full max-w-sm md:max-w-md fade-up">
+      <main className="flex-1 flex items-start md:items-center justify-cente
+r py-6 md:py-10 px-4 sm:px-6 lg:px-12">                                             <div className="w-full max-w-sm md:max-w-md fade-up">
           <WeaveCheckout
             apiKey={session.publishableKey}
-            apiBase={API_BASE}
             sessionId={session.id}
             merchant={{
               name: session.merchantName,
