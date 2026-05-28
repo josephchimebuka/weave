@@ -312,6 +312,7 @@ model CheckoutSession {
   redirectUrl  String
   cancelUrl    String?
 
+  sandboxMode  Boolean   @default(false)
   status       String    @default("open")  // "open" | "processing" | "complete" | "expired"
   orderId      String?                     // set once user initiates payment on hosted page
   expiresAt    DateTime

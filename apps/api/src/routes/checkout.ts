@@ -121,6 +121,7 @@ router.post('/sessions', requireAuth, linkCreationLimiter, async (req, res) => {
         cancelUrl: cancelUrl ?? null,
         expiresAt: new Date(Date.now() + ttl * 1000),
         status: 'open',
+        sandboxMode: req.sandboxMode ?? false,
       },
     });
 
@@ -143,7 +144,7 @@ router.post('/sessions', requireAuth, linkCreationLimiter, async (req, res) => {
 router.get('/sessions/:id', requireAuth, async (req, res) => {
   try {
     const session = await prisma.checkoutSession.findFirst({
-      where: { id: req.params.id, merchantId: req.merchantId },
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
     });
     if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
 
@@ -164,15 +165,20 @@ router.get('/sessions/public/:id', apiLimiter, async (req, res) => {
   try {
     const session = await prisma.checkoutSession.findUnique({
       where: { id: req.params.id },
-      include: { merchant: { select: { name: true, publishableKey: true } } },
+      include: { merchant: { select: { name: true, publishableKey: true, sandboxPublishableKey: true } } },
     });
     if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+
+    const publishableKey = session.sandboxMode
+      ? (session.merchant.sandboxPublishableKey ?? session.merchant.publishableKey)
+      : session.merchant.publishableKey;
 
     return res.json({
       success: true,
       data: {
         id: session.id,
         status: session.status,
+        sandboxMode: session.sandboxMode,
         amount: Number(session.amount),
         amountIn: session.amountIn,
         sourceAsset: session.sourceAsset,
@@ -181,7 +187,7 @@ router.get('/sessions/public/:id', apiLimiter, async (req, res) => {
         redirectUrl: session.redirectUrl,
         cancelUrl: session.cancelUrl,
         merchantName: session.merchant.name,
-        publishableKey: session.merchant.publishableKey,
+        publishableKey,
       },
     });
   } catch (err: any) {
@@ -203,7 +209,7 @@ router.patch('/sessions/link', requireApiKey, async (req, res) => {
     }
 
     const session = await prisma.checkoutSession.findFirst({
-      where: { id: sessionId, merchantId: req.merchantId },
+      where: { id: sessionId, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
     });
     if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
 
@@ -236,7 +242,7 @@ router.patch('/sessions/link', requireApiKey, async (req, res) => {
 router.patch('/sessions/:id/complete', requireApiKey, async (req, res) => {
   try {
     const session = await prisma.checkoutSession.findFirst({
-      where: { id: req.params.id, merchantId: req.merchantId },
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
     });
     if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
 

@@ -430,7 +430,7 @@ const TERMINAL = new Set(['completed', 'failed', 'refunded', 'expired']);
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     let order = await prisma.order.findFirst({
-      where: { id: req.params.id, merchantId: req.merchantId },
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
       include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
     });
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
