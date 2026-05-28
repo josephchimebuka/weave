@@ -3,15 +3,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 
-const WeaveCheckout = dynamic(
-  () => import('@weave-sdk/widget').then((m) => m.WeaveCheckout),
-  { ssr: false },
-);
-
 // Point the widget to our internal safe public proxy
 if (typeof window !== 'undefined') {
   (window as any).__WEAVE_API_BASE__ = '/api/public';
 }
+
+const WeaveCheckout = dynamic(
+  () => import('@weave-sdk/widget').then((m) => m.WeaveCheckout),
+  { ssr: false },
+);
 
 export type SessionData = {
   id: string;
