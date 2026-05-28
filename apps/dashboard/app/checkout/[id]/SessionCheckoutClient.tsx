@@ -8,6 +8,11 @@ const WeaveCheckout = dynamic(
   { ssr: false },
 );
 
+// Point the widget to our internal safe public proxy
+if (typeof window !== 'undefined') {
+  (window as any).__WEAVE_API_BASE__ = '/api/public';
+}
+
 export type SessionData = {
   id: string;
   status: 'open' | 'processing' | 'complete' | 'expired';
