@@ -2,7 +2,7 @@
 
 **Status:** Draft for review
 **Author:** Engineering
-**Scope:** Make Weave a SEP-24 anchor that lets any Stellar wallet cash USDC-on-Stellar out to a Nigerian bank account (NGN), reusing Weave's existing route engine for settlement.
+**Scope:** Make Weave a SEP-24 anchor that lets any Stellar wallet cash USDC-on-Stellar out to a Nigerian bank account (NGN), reusing Weave's existing route engine for settlement. Weave must never hold user funds.
 
 ---
 
@@ -22,21 +22,29 @@ grant-completing deliverable for an SCF Build Award.
 - Deposit / on-ramp (NGN → USDC on Stellar). Fast-follow, not MVP.
 - Soroban contracts. Anchors run on Stellar Classic; Soroban escrow is a later phase.
 - SEP-31 anchor-to-anchor corridors. Later.
+- SDF Anchor Platform (JVM service). Unnecessary — see §3.
 
 ---
 
-## 2. Core Insight
+## 2. Core Insight: Weave Never Holds Funds
 
-The Anchor Platform's design splits cleanly:
+NEAR Intents already supports Stellar USDC as a source asset and returns a **Stellar-native
+deposit address + memo** (same as XRP, TON). When Weave calls:
 
-- **Anchor Platform (SDF-maintained)** owns the Stellar/protocol side: SEP-1/10/12/24,
-  Stellar custody, and **incoming-payment detection**.
-- **Your business server** (Weave's existing Express API) owns the money: rates, fees, KYC,
-  and the actual fiat payout.
+```ts
+nearIntents.createQuote({ sourceAssetKey: 'crypto:STELLAR:USDC', ... })
+// → { depositAddress: 'G...NEAR...', depositMemo: '123456789', ... }
+```
 
-A `USDC-on-Stellar → NGN` withdrawal therefore reduces to: *Anchor Platform tells Weave
-"we received X USDC for bank account Y," and Weave runs its existing executor.* Phase 1 is a
-**protocol adapter onto the existing route engine**, not a new settlement system.
+That `depositAddress` is a Stellar account controlled by NEAR Intents — not Weave. The
+user sends USDC directly to NEAR's Stellar account. Weave is a router; it never touches
+the funds.
+
+For SEP-24, the `withdraw_anchor_account` field in the transaction response is set to
+NEAR's Stellar deposit address. The wallet (Lobstr, Vibrant) sends USDC straight to NEAR.
+
+**The anchor keypair (Stellar signing key) is used only for SEP-10 JWT authentication.**
+It never receives funds. There is no custodial hop.
 
 ---
 
@@ -47,77 +55,84 @@ Stellar wallet (Lobstr / Vibrant / any SEP-24 client)
    │  SEP-10 auth  →  SEP-24 /withdraw/interactive  →  interactive KYC + bank entry
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Anchor Platform   (JVM service + its own Postgres)            │
-│  • SEP-1/10/12/24 protocol                                    │
-│  • Stellar custody (self-custody signing keys, MVP)           │
-│  • detects incoming USDC payment to the anchor account        │
+│ Weave API (existing Express, port 4000)                      │
+│  • GET /.well-known/stellar.toml                             │
+│  • POST /sep10/auth  (challenge + verify, keypair signs)     │
+│  • POST /sep24/transactions/withdraw/interactive             │
+│       → creates NEAR Intents quote                           │
+│       → creates Weave Order                                  │
+│       → sets withdraw_anchor_account = NEAR deposit address  │
+│  • GET  /sep24/transaction?id=  (maps to Order.status)       │
+│  • GET  /sep24/transactions                                  │
 └─────────────────────────────────────────────────────────────┘
-   │  (a) Callbacks API  — Weave implements: Rate, Fee, Customer
-   │  (b) Platform API   — Weave consumes: tx events + status updates
+   │
+   │  withdraw_anchor_account = G...NEAR_DEPOSIT_ADDRESS...
+   │  withdraw_memo            = NEAR memo
+   ▼
+User's Stellar wallet sends USDC directly to NEAR Intents
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Weave API (existing Express business server)                 │
-│  • /anchor/callbacks/*  (rate, fee, customer)                 │
-│  • anchor event handler → creates an internal Order           │
-│  • instructs custody to push held USDC onward                 │
+│ Weave executor  ── REUSED ──                                  │
+│  NEAR Intents:  crypto:STELLAR:USDC → crypto:BASE:USDC       │
+│  Paycrest:      crypto:BASE:USDC   → fiat:NGN bank           │
+│  (existing pipeline, zero changes)                           │
 └─────────────────────────────────────────────────────────────┘
-   ▼
-Weave executor  ── REUSED ──
-   ├─ NEAR Intents:  crypto:STELLAR:USDC → crypto:BASE:USDC   (Phase 0, already wired)
-   └─ Paycrest:      crypto:BASE:USDC   → fiat:NGN bank        (already wired)
-   │  on settlement → Platform API: mark anchor tx `completed`
    ▼
 NGN bank account
 ```
 
-### Component decisions (defaults — revisitable)
-- **Protocol layer:** SDF **Anchor Platform**. Rationale: it handles SEP-10 signing,
-  custody, and payment detection (the risky parts of a financial flow), maps onto our
-  callback/event model with minimal new business logic, and is the path SDF expects to see.
-  Cost: a second (JVM) runtime + its own Postgres.
-- **Custody:** **self-custody** via Anchor Platform signing keys for testnet + early mainnet.
-  Revisit Fireblocks/external custody as volume grows.
+**Why skip the SDF Anchor Platform?**
+
+The AP is a JVM service that owns Stellar custody (its own signing keys + Postgres). Since
+Weave has no custody to manage, AP adds a second runtime, a second database, a
+JVM ops burden, and AP↔business-server JWT complexity — with no corresponding benefit.
+SEP-24 is a small, well-specified REST API that fits naturally into the existing Express app.
 
 ---
 
-## 4. The Custodial Hop (the one genuinely new piece)
+## 4. Fund Flow (Non-Custodial)
 
-In the **standard** Weave flow the payer sends crypto straight to a NEAR Intents deposit
-address; Weave never holds funds. In the **anchor** flow, SEP-24 requires the user send USDC
-to the *anchor's* Stellar account. So Weave is custodial for exactly one hop and must push the
-funds onward:
-
-1. Anchor Platform detects the inbound USDC and fires a transaction event to Weave.
-2. Weave creates an Order (`source = crypto:STELLAR:USDC`, `dest = fiat:NGN:<bank>`).
-3. Executor creates the NEAR Intents quote (Stellar USDC → Base USDC) → gets a **deposit
-   address**.
-4. **New step:** Weave instructs Anchor Platform custody to send the held USDC from the anchor
-   account to that NEAR deposit address (an outbound Stellar payment via the Platform
-   API / custody integration).
-5. NEAR completes → Paycrest leg → NGN settles (existing pipeline, unchanged).
-6. On settlement, Weave calls the Platform API to mark the anchor transaction `completed`.
-
-This "push held funds to the NEAR deposit address" is the only new settlement logic.
-
----
-
-## 5. Routing & Executor Integration
-
-Introduce a third `Flow` value to signal the prefunded/custodial path without forking the
-route graph:
-
-```ts
-// router.service.ts
-export type Flow = 'self' | 'external' | 'anchor';
+```
+1. User initiates SEP-24 withdrawal from their Stellar wallet.
+2. Weave's /sep24/transactions/withdraw/interactive:
+     a. Calls nearIntents.createQuote(STELLAR:USDC → BASE:USDC, recipient=Paycrest address).
+     b. Gets { depositAddress: 'G...NEAR...', depositMemo: '...' }.
+     c. Calls runPaycrestOfframp(BASE:USDC → NGN, bank details) to get Paycrest address.
+     d. Creates a Weave Order + RouteSteps (NEAR step + Paycrest step).
+     e. Returns interactive webview URL.
+3. User completes webview (enters bank details, sees rate/fee).
+4. Weave's SEP-24 transaction record sets:
+     withdraw_anchor_account = NEAR's G... address
+     withdraw_memo            = NEAR memo from step 2b
+5. Wallet sends USDC to NEAR's Stellar account. ← Weave never holds funds.
+6. NEAR processes the swap → delivers USDC on Base to Paycrest's receive address.
+7. Paycrest settles NGN to the bank.
+8. Weave's NEAR poller (existing) marks NEAR step done → Paycrest webhook marks done.
+9. Order status → completed; Weave's /sep24/transaction?id= returns status=completed.
 ```
 
-- Routing is identical to the existing `crypto:STELLAR:USDC → fiat:NGN` plan
-  (`nearintents → paycrest`); `flow: 'anchor'` simply keeps the same Stellar NEAR edge eligible.
-- The executor branches on `flow === 'anchor'`: instead of generating a **user-facing** deposit
-  address at step 0, it (after building the NEAR deposit address) triggers the custodial
-  outbound payment described in §4. All downstream steps run as-is.
+The existing reverse-order executor (§6 of the old design) still applies: step 2c runs
+before 2b so Paycrest's receive address is available as the NEAR recipient. No new
+executor logic is needed.
 
-This preserves the reverse-order executor and the `RouteStep` state machine.
+---
+
+## 5. New Routes (Express)
+
+New router `src/routes/sep24.ts`, mounted at `/` (to serve SEP-standard paths):
+
+| Path | Method | Description |
+|---|---|---|
+| `/.well-known/stellar.toml` | GET | SEP-1. Static file advertising anchor metadata. |
+| `/sep10/auth` | GET | SEP-10 challenge. Returns unsigned Stellar tx. |
+| `/sep10/auth` | POST | SEP-10 verify. Validates signed tx, returns JWT. |
+| `/sep24/info` | GET | Returns supported assets (USDC), limits, fee schedule. |
+| `/sep24/fee` | GET | Returns fee for a given amount. Wraps existing fee logic. |
+| `/sep24/transactions/withdraw/interactive` | POST | Creates quote + Order, returns interactive URL. |
+| `/sep24/transaction` | GET | Returns single SEP-24 transaction mapped from Order. |
+| `/sep24/transactions` | GET | Returns list of SEP-24 transactions for the authenticated account. |
+
+Authentication for SEP-24 endpoints: `Authorization: Bearer <SEP-10 JWT>`.
 
 ---
 
@@ -129,129 +144,159 @@ Minimal, additive (`prisma/schema.prisma`):
 model Order {
   // ...existing...
   origin       String  @default("widget") // "widget" | "api" | "anchor"
-  anchorTxId   String?  @unique           // SEP-24 transaction id from Anchor Platform
+  anchorTxId   String?  @unique           // SEP-24 transaction id (UUID Weave issues)
+  anchorStellarAccount String?            // user's Stellar account (from SEP-10 JWT)
 }
 
-// Idempotency for Anchor Platform events (mirror of WebhookLog pattern)
-model AnchorEventLog {
+// Idempotency for SEP-10 nonces and replay protection
+model AnchorChallenge {
   id         String   @id @default(uuid())
-  anchorTxId String
-  event      String   // AP transaction status, e.g. "pending_anchor", "completed"
-  processed  Boolean  @default(false)
-  payload    Json
+  nonce      String   @unique
+  stellarAccount String
+  usedAt     DateTime?
+  expiresAt  DateTime
   createdAt  DateTime @default(now())
-
-  @@unique([anchorTxId, event])
 }
 ```
 
-- `Order.anchorTxId` links the Weave Order ↔ the AP transaction for status round-tripping.
-- `AnchorEventLog` gives the AP event stream the same idempotency guarantee inbound provider
-  webhooks already have (`@@unique`), so duplicate AP notifications can't double-process.
-- The Stellar receive itself is owned by AP, so we do **not** model it as a `RouteStep`; the
-  executor's first real step remains the NEAR Intents leg.
+- `Order.anchorTxId` — the SEP-24 transaction ID returned to wallets. Stable handle.
+- `Order.anchorStellarAccount` — the user's Stellar G address (from SEP-10 auth).
+- `AnchorChallenge` — prevents SEP-10 nonce replay.
+
+No `AnchorEventLog` needed (no AP callbacks to deduplicate).
 
 ---
 
-## 7. Callbacks Weave Must Implement
+## 7. SEP-10 Authentication
 
-New router `src/routes/anchor.ts`, mounted at `/api/v1/anchor` (or a dedicated callbacks path),
-authenticated by a shared JWT/secret between Anchor Platform and the business server.
+SEP-10 is a challenge-response protocol:
 
-| Callback | Maps onto existing Weave logic |
-|---|---|
-| **Rate** (`GET /rate`) | Wrap `/quotes` + Paycrest sell rate. Returns price for `USDC → NGN`. |
-| **Fee** (`GET /fee`) | Wrap `SENDER_FEE_BPS` + `APP_FEE_BPS` (+ NEAR bridge fee). |
-| **Customer / KYC** (SEP-12) | Map to existing KYC infra (`OtpChallenge`, `BusinessVerification`). End-user cash-out KYC may be lighter than merchant KYB — define a dedicated tier. |
-| **Unique address** (optional) | Only if per-user deposit addresses are used; not needed for memo-routed shared account. |
+1. Wallet calls `GET /sep10/auth?account=G...` — Weave builds a Stellar transaction
+   containing a nonce, signed by the anchor's signing key, returned unsigned to the wallet.
+2. Wallet signs the transaction with its own key.
+3. Wallet calls `POST /sep10/auth` with the signed tx — Weave verifies both signatures
+   (anchor's and wallet's), issues a short-lived JWT.
 
-**Event consumption (Platform API):** a handler that receives AP transaction status changes,
-checks `AnchorEventLog` for idempotency, creates/advances the Order, and on terminal settlement
-PATCHes the AP transaction to `completed` / `error`.
+Implementation uses `@stellar/stellar-sdk` (Stellar's official JS SDK):
+- `TransactionBuilder` to build the challenge tx
+- `Transaction.verify` to check wallet signature
+- `jwt.sign` to issue the SEP-10 JWT (standard `jsonwebtoken` package)
+
+New env vars: `STELLAR_ANCHOR_SECRET` (the anchor keypair secret, `S...`), 
+`STELLAR_ANCHOR_ACCOUNT` (derived `G...`), `STELLAR_NETWORK_PASSPHRASE` (mainnet or testnet),
+`STELLAR_SEP10_JWT_SECRET` (signs Weave's SEP-10 JWTs).
 
 ---
 
-## 8. Status Mapping
+## 8. `stellar.toml` (SEP-1)
 
-| Anchor Platform tx status | Trigger | Weave Order status |
+Served at `/.well-known/stellar.toml` as `text/plain`:
+
+```toml
+NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015"
+SIGNING_KEY="G...ANCHOR_ACCOUNT..."
+TRANSFER_SERVER_SEP0024="https://api.weave.finance"
+WEB_AUTH_ENDPOINT="https://api.weave.finance/sep10/auth"
+
+[[CURRENCIES]]
+code="USDC"
+issuer="GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+status="live"
+is_asset_anchored=true
+anchor_asset_type="fiat"
+anchor_asset="NGN"
+redemption_instructions="Withdraw USDC for NGN via SEP-24 interactive flow."
+```
+
+Can be a static file committed to the repo and served by a new Express middleware.
+
+---
+
+## 9. Status Mapping
+
+| Weave Order status | SEP-24 transaction status | Trigger |
 |---|---|---|
-| `incomplete` | withdrawal initiated, awaiting user send | (no Order yet) |
-| `pending_user_transfer_start` | awaiting USDC deposit to anchor acct | `awaiting_deposit` |
-| `pending_anchor` | USDC received → Order created, executor running | `processing` |
-| `completed` | Paycrest settled NGN | `completed` |
-| `error` / `refunded` | executor failed | `failed` / `refunded` |
+| `awaiting_deposit` | `pending_user_transfer_start` | NEAR quote created, waiting for user to send |
+| `processing` | `pending_anchor` | NEAR swap in progress |
+| `processing` | `pending_external` | Paycrest settling NGN |
+| `completed` | `completed` | Paycrest settled |
+| `failed` | `error` | Any step failed |
+| `refunded` | `refunded` | NEAR refunded |
 
-Weave drives AP status via the Platform API off the existing `markStepDone` / `markStepFailed`
-roll-ups — the same functions the webhook worker and NEAR poller already call.
-
----
-
-## 9. SEP Stack & `stellar.toml`
-
-- **SEP-1** `stellar.toml` at `/.well-known/stellar.toml` — advertises org info, signing key,
-  `TRANSFER_SERVER_SEP0024`, supported currency (NGN), and the USDC asset accepted. Can be
-  served by AP or by Weave (Next.js/Express static).
-- **SEP-10** — handled by AP (server signing key).
-- **SEP-12** — KYC, AP-stored, populated via our Customer callback.
-- **SEP-24** — interactive withdrawal; AP hosts the webview shell, Weave provides the
-  interactive content (bank entry / KYC) and the rate/fee.
-- **SEP-38** (optional) — firm quotes; add if we advertise locked rates. SEP-24 works with the
-  simpler rate/fee callbacks for MVP.
+`GET /sep24/transaction?id=:anchorTxId` maps `Order.status` to the SEP-24 status enum.
+No additional state machine needed.
 
 ---
 
-## 10. Deploy Topology
+## 10. SEP Stack
+
+- **SEP-1** — `stellar.toml`, static file in Express.
+- **SEP-10** — Implemented in `src/routes/sep24.ts` using `@stellar/stellar-sdk`.
+- **SEP-24** — Interactive withdrawal routes. Interactive webview can be a minimal React page
+  served by the Express app (or Next.js dashboard) that collects the bank account and shows
+  the quote. Rate/fee callbacks reuse existing quote logic.
+- **SEP-38** (optional) — Firm quotes. Add later if locked rates are requested.
+- **SEP-12** (KYC) — End-user KYC is lighter than merchant KYB. For Phase 1: reuse the
+  existing `OtpChallenge` system for phone verification. Define a `basic` KYC tier for
+  anchor cash-out users (not merchants; no KYB required).
+
+---
+
+## 11. Deploy Topology
 
 ```
-┌── Weave API (existing) ──┐     ┌── Anchor Platform ──┐
-│  Express :4000           │◄───►│  JVM service        │
-│  /anchor/callbacks/*     │ JWT │  + Postgres (AP)    │
-│  Platform API client     │     │  Stellar signing key│
-└──────────────────────────┘     └─────────────────────┘
-        │                                  │
-   Weave Postgres                    Stellar network
-   (Orders, RouteSteps)              (Horizon / RPC)
+┌── Weave API (existing Express, port 4000) ──────────────────┐
+│  Existing routes unchanged                                   │
+│  + /.well-known/stellar.toml                                 │
+│  + /sep10/auth                                               │
+│  + /sep24/*                                                  │
+│  Anchor signing key (env only, never committed)              │
+└─────────────────────────────────────────────────────────────┘
+         │                            │
+    Weave Postgres                Stellar network
+    (Orders + new anchor cols)    (Horizon RPC — for tx verification)
 ```
 
-- AP is **stateless** but needs its **own Postgres** (separate DB or schema; do not share
-  Weave's app tables).
-- New secrets: Stellar distribution/signing keys, SEP-10 server key, shared AP↔business-server
-  JWT secret, Horizon/RPC URL. All via env (`.env.example`), never committed.
-- Start testnet (Horizon testnet + test USDC) → promote to mainnet for the final tranche.
+- No new runtime. No new Postgres schema beyond additive columns.
+- New secrets: `STELLAR_ANCHOR_SECRET`, `STELLAR_SEP10_JWT_SECRET`,
+  `STELLAR_NETWORK_PASSPHRASE`, `HORIZON_URL`. All via env.
+- Testnet first (Testnet USDC, Horizon testnet) → mainnet for final tranche.
 
 ---
 
-## 11. Milestones (mapped to SCF Build tranches)
+## 12. Milestones (SCF Build tranches)
 
-1. **MVP (⅓):** AP on **testnet**, `stellar.toml` live, SEP-10 auth working, SEP-24 withdrawal
-   happy path with rate/fee/customer callbacks wired to Weave; mock NGN payout.
-2. **Testnet / LaunchKit:** Full withdrawal end-to-end on testnet through the *real* executor
-   (NEAR bridge → Paycrest sandbox), KYC reusing the tiered system, status round-trips correct,
-   custodial hop (§4) working.
-3. **Mainnet (final ⅓):** Live on mainnet, a real merchant/user cashes Stellar USDC → NGN,
-   anchor submitted to the Anchor Directory (anchors.stellar.org). Grant-completing deliverable.
+1. **MVP (⅓):** `stellar.toml` live, SEP-10 auth working, SEP-24 withdrawal happy path on
+   testnet with mock NGN payout. `anchorTxId` round-trips correctly.
+2. **Testnet / LaunchKit:** Full withdrawal end-to-end on testnet through real executor
+   (NEAR bridge → Paycrest sandbox). KYC reusing `OtpChallenge`. Status round-trips
+   correct. Weave anchor submitted to Anchor Validator.
+3. **Mainnet (final ⅓):** Live on mainnet. Real user cashes Stellar USDC → NGN.
+   Anchor submitted to Anchor Directory (anchors.stellar.org).
 
 ---
 
-## 12. Open Questions / Risks
+## 13. Open Questions / Risks
 
-- **End-user KYC tier:** anchor cash-out is by an *end user*, not a merchant. Define a
-  dedicated, lighter KYC tier vs. the merchant KYB flow. (Reuses `OtpChallenge`; new policy.)
-- **Custodial-hop latency/fees:** the extra Stellar→NEAR outbound adds one on-chain payment;
-  confirm it stays within SLA and fee budget.
-- **NEAR Intents Stellar liquidity/min-amount:** verify min-swap thresholds for
-  `STELLAR:USDC → BASE:USDC` so small cash-outs don't fail (executor already maps the
-  "amount too low" error).
-- **Direct Stellar→NGN partner:** if a partner can off-ramp directly from Stellar USDC, the
-  NEAR bridge hop could be removed for this corridor — track as an optimization.
-- **JVM ops:** Anchor Platform is a new runtime for a Node shop; containerize and treat its
-  Postgres as managed.
+- **End-user KYC tier:** Anchor cash-out is by an end user, not a merchant. A `basic`
+  tier (phone OTP) is likely sufficient for NGN regulatory requirements, but confirm with
+  local legal counsel.
+- **NEAR Intents Stellar min-amount:** Verify minimum swap threshold for STELLAR:USDC →
+  BASE:USDC. The executor already surfaces "amount too low" errors.
+- **SEP-10 JWT expiry:** SEP-10 JWTs should be short-lived (15–30 min). Anchor clients
+  typically re-auth before each interactive session.
+- **Horizon RPC:** Needed for SEP-10 tx verification. Prefer a managed provider
+  (Blockdaemon, Quicknode Stellar) over a self-hosted node.
+- **Direct Stellar→NGN partner (future):** If a partner (e.g. Yellow Card) can off-ramp
+  directly from Stellar USDC, the NEAR bridge hop can be removed for this corridor —
+  track as an optimization that reduces latency and fees.
 
 ---
 
 ## References
 
-- Anchor Platform architecture — https://developers.stellar.org/docs/platforms/anchor-platform/admin-guide/architecture
-- SEP-24 withdrawal flow — https://developers.stellar.org/docs/platforms/anchor-platform/admin-guide/sep24/withdrawal
-- Custody integration — https://developers.stellar.org/docs/platforms/anchor-platform/admin-guide/custody-service-integration
+- SEP-10 spec — https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md
+- SEP-24 spec — https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0024.md
+- SEP-1 (stellar.toml) — https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0001.md
 - Anchor basics — https://developers.stellar.org/docs/learn/fundamentals/anchors
+- Stellar JS SDK — https://github.com/stellar/js-stellar-sdk
