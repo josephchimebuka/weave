@@ -404,7 +404,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       // The remainder goes to the merchant subaccount. bearer:'subaccount' means Paystack's
       // processing fee is deducted from the merchant's share, not added on top for the payer.
       const txn = await paystack.initializeTransaction({
-        email: 'admin@dewdroplabs.com',
+        email: merchant.email,
         amountNgn: chargeAmountNgn,
         reference: paystackRef,
         subaccount: merchant.paystackSubaccountCode!,
