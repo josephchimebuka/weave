@@ -325,7 +325,7 @@ router.post('/verify', async (req, res) => {
       }),
       prisma.merchant.update({
         where: { id: v.merchantId },
-        data: { kycLevel: 'none' }
+        data: { kycLevel: 'basic' }
       })
     ]);
 
