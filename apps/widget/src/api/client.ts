@@ -146,6 +146,7 @@ export async function createOrder(
     flow?:           Flow;
     refundAddress?:  string;
     reference?:      string;
+    sessionId?:      string;
   },
 ): Promise<CreateOrderResponse> {
   return apiFetch('/orders', publishableKey, {

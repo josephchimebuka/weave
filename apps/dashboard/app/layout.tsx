@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { SidebarLayout } from '../components/SidebarLayout';
 import { Analytics } from '@vercel/analytics/next';
 import { Toaster } from './components/Toaster';
+import type { Viewport } from 'next';
 
 const fraunces = Fraunces({
   subsets: ['latin'],
@@ -21,6 +22,13 @@ const figtree = Figtree({
 export const metadata = {
   title: 'Weave — Merchant Dashboard',
   description: 'Merchant portal for Weave payments',
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false, // Prevents auto-zoom on iOS when tapping inputs
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

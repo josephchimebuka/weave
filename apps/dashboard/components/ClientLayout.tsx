@@ -25,7 +25,7 @@ export function ClientLayout({
     setSidebarOpen(false);
   }, [pathname]);
 
-  const isAuth   = pathname.startsWith('/auth') || pathname === '/pay' || pathname.startsWith('/pay/');
+  const isAuth   = pathname.startsWith('/auth') || pathname === '/pay' || pathname.startsWith('/pay/') || pathname.startsWith('/checkout/');
   const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy');
 
   if (isAuth) {

@@ -215,6 +215,20 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
   res.json({ success: true, count: openSteps.length });
 });
 
+// ── Expire Checkout Sessions ────────────────────────────────────────────────
+
+router.post('/expire-checkout-sessions', verifyQStash, async (req, res) => {
+  const result = await prisma.checkoutSession.updateMany({
+    where: {
+      status: 'open',
+      expiresAt: { lt: new Date() },
+    },
+    data: { status: 'expired' },
+  });
+
+  res.json({ success: true, count: result.count });
+});
+
 // ── Cleanup Abandoned Payments ──────────────────────────────────────────────
 
 router.post('/cleanup-expired', verifyQStash, async (req, res) => {

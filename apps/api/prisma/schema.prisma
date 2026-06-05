@@ -41,6 +41,7 @@ model Merchant {
   orders             Order[]
   keyPairs           KeyPair[]
   paymentLinks       PaymentLink[]
+  checkoutSessions   CheckoutSession[]
   verification       BusinessVerification?
   deliveries         WebhookDelivery[]
 }
@@ -177,6 +178,11 @@ model Order {
   status             String       // "awaiting_deposit" | "processing" | "completed" | "failed" | "refunded"
   routePlan          Json?        // RoutePlan snapshot from the router
   reference          String?      // merchant-supplied reference
+  // Merchant-supplied payer identity, pure passthrough. Weave does not verify
+  // any of these fields — they're echoed in webhooks and shown on receipts so
+  // merchants can attach their own customer record to the order. Shape:
+  //   { email?: string, name?: string, externalId?: string }
+  customer           Json?
   senderFeeUsd       Decimal?     @db.Decimal(18, 8)
   appFeeUsd          Decimal?     @db.Decimal(18, 8)
   bridgeFeeUsd       Decimal?     @db.Decimal(18, 8)
@@ -209,6 +215,7 @@ model RouteStep {
   externalId     String?   // provider-side id
   depositAddress String?   // for crypto steps: where funds should be sent
   depositMemo    String?   // required on XRP, TON, XLM, NEAR
+  depositBankDetails Json? // for fiat-source (Paycrest onramp) steps: { institution, accountIdentifier, accountName, amountToTransfer, currency }
   startedAt      DateTime?
   completedAt    DateTime?
 
@@ -282,4 +289,38 @@ enum SubaccountSyncStatus {
   PENDING   // Bank details saved locally, not yet mirrored to Paystack
   SYNCED    // Successfully created/updated on Paystack
   FAILED    // Last sync attempt failed
+}
+
+// ── Checkout Sessions ────────────────────────────────────────────────────────
+// Single-use, programmatically-created hosted-checkout sessions. The merchant's
+// backend calls POST /checkout/sessions and redirects their user to the
+// returned checkoutUrl. When the order completes, the user is redirected back
+// to redirectUrl. Modeled after Stripe Checkout Sessions / Paystack initialize.
+
+model CheckoutSession {
+  id           String    @id @default(cuid())
+  merchantId   String
+  merchant     Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  amount       Decimal   @db.Decimal(18, 8)
+  amountIn     String    @default("dest")  // "source" | "dest"
+  sourceAsset  String?                     // null = payer chooses on the hosted page
+  destAsset    String
+  reference    String?                     // merchant-supplied — echoed in webhook
+  metadata     Json?                       // opaque KV bag — echoed in webhook
+  customer     Json?                       // payer identity passthrough — copied to the order on link
+
+  redirectUrl  String
+  cancelUrl    String?
+
+  sandboxMode  Boolean   @default(false)
+  status       String    @default("open")  // "open" | "processing" | "complete" | "expired"
+  orderId      String?                     // set once user initiates payment on hosted page
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([merchantId])
+  @@index([status])
+  @@index([orderId])
 }

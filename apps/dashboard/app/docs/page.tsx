@@ -6,6 +6,7 @@ import {
   MessageSquare, Zap, Network, GitBranch, Terminal,
   Check, Copy, ChevronDown, KeyRound, Play,
   AlertTriangle, FlaskConical, Lock, ArrowRight,
+  Link2, ExternalLink,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -14,7 +15,7 @@ const WeaveCheckout = dynamic(
   { ssr: false }
 );
 
-type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'webhooks' | 'security' | 'support';
+type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'checkout' | 'webhooks' | 'security' | 'support';
 type CodeTab  = 'html' | 'react' | 'nextjs';
 
 export default function DocsPage() {
@@ -47,6 +48,7 @@ export default function DocsPage() {
           <NavGroup label="Reference">
             <NavItem icon={<Cpu size={14} />}        label="API Reference"    active={activePage === 'api'}        onClick={() => setActivePage('api')} />
             <NavItem icon={<Terminal size={14} />}   label="API Playground"   active={activePage === 'playground'} onClick={() => setActivePage('playground')} />
+            <NavItem icon={<Link2 size={14} />}      label="Checkout Sessions" active={activePage === 'checkout'}  onClick={() => setActivePage('checkout')} />
             <NavItem icon={<Bell size={14} />}       label="Webhooks"         active={activePage === 'webhooks'}   onClick={() => setActivePage('webhooks')} />
           </NavGroup>
           <NavGroup label="More">
@@ -72,6 +74,7 @@ export default function DocsPage() {
           {activePage === 'widget'       && <WidgetPlayground />}
           {activePage === 'api'          && <ApiReferencePage copy={copy} copied={copied} />}
           {activePage === 'playground'   && <ApiPlayground />}
+          {activePage === 'checkout'     && <CheckoutSessionsPage copy={copy} copied={copied} />}
           {activePage === 'webhooks'     && <WebhooksPage copy={copy} copied={copied} />}
           {activePage === 'security'     && <SecurityPage copy={copy} copied={copied} />}
           {activePage === 'support'      && <SupportPage />}
@@ -182,9 +185,9 @@ export default function CheckoutPage() {
       {/* Quick-nav cards */}
       <div className="grid grid-cols-2 gap-4">
         {[
-          { icon: <Zap size={17} className="text-forest" />, title: '2-min setup', desc: 'One script tag. No build step.', action: () => {} },
+          { icon: <Zap size={17} className="text-forest" />, title: '2-min setup', desc: 'One script tag. No build step.', action: () => setActivePage('widget') },
           { icon: <Terminal size={17} className="text-forest" />, title: 'REST API', desc: 'Server-side, programmatic control.', action: () => setActivePage('api') },
-          { icon: <Network size={17} className="text-forest" />, title: 'Corridors', desc: 'ChainRails, NEAR Intents, Paycrest.', action: () => {} },
+          { icon: <Link2 size={17} className="text-forest" />, title: 'Checkout URLs', desc: 'Redirect users to a hosted page.', action: () => setActivePage('checkout') },
           { icon: <Bell size={17} className="text-forest" />, title: 'Webhooks', desc: 'HMAC-signed async notifications.', action: () => setActivePage('webhooks') },
         ].map(({ icon, title, desc, action }) => (
           <button key={title} onClick={action} className="group text-left bg-cream-deep/30 hover:bg-cream-deep/60 border border-hair-soft hover:border-forest/25 rounded-[20px] p-5 transition-all">
@@ -224,6 +227,72 @@ export default function CheckoutPage() {
 curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:NGN&amount=50" \\
   -H "x-api-key: pk_live_..."`}
         </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Integration paths */}
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={18} />} title="Choosing how to integrate" />
+        <p className="text-[14.5px] text-ink-muted leading-relaxed">
+          There's no single right way to plug Weave in — the best fit depends on how much UI control you want and where the payment lives in your product.
+          All three paths route through the same providers, settle to the same payout destination, and fire the same webhooks. Pick by what fits your stack today; you can always add or swap paths later.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {[
+            {
+              tag: 'Path A',
+              title: 'The Widget',
+              tagline: 'The fastest start.',
+              best: 'You already have a page and want to drop a checkout into it. Common for marketplaces, donation pages, and any flow where the payment is one step inside a larger product.',
+              build: 'A single <WeaveCheckout> React component, or one <script> tag for plain HTML. The widget handles wallet connections, chain switching, the deposit-address screen, real-time status, and the success receipt.',
+              owns: 'Weave owns the whole payment UI; you own the surrounding page.',
+              cta: 'Widget playground',
+              action: () => setActivePage('widget')
+            },
+            {
+              tag: 'Path B',
+              title: 'Direct API',
+              tagline: 'Total control.',
+              best: 'You want a fully custom checkout — your design system, your flow, your copy — or you\'re building on a stack the widget doesn\'t target (native mobile, terminal, ops dashboard, voice).',
+              build: 'Server calls to POST /quotes, POST /orders, GET /orders/:id. The response includes a `depositInstruction` (framework-agnostic deposit details) — render it however you like and poll until the order completes (or react to webhooks).',
+              owns: 'You own every pixel; Weave handles routing, provider orchestration, and settlement.',
+              cta: 'API reference',
+              action: () => setActivePage('api')
+            },
+            {
+              tag: 'Path C',
+              title: 'Checkout Sessions',
+              tagline: 'The redirect flow.',
+              best: 'You want the Stripe / Paystack-style "redirect away, come back when done" pattern. Common when payment is its own page and you\'d rather not embed anything (e.g. invoice emails, SMS payment links, server-rendered apps).',
+              build: 'Your server calls POST /checkout/sessions. Weave returns a `checkoutUrl` — redirect the user to it. They pay on a Weave-hosted page, then get redirected to your `redirectUrl` once payment confirms.',
+              owns: 'Weave hosts the payment page; your server owns the surrounding flow (creating sessions, handling redirects, reconciling via webhook).',
+              cta: 'Checkout sessions',
+              action: () => setActivePage('checkout')
+            },
+          ].map(({ tag, title, tagline, best, build, owns, cta, action }) => (
+            <button key={title} onClick={action} className="group text-left bg-cream-soft border border-hair-soft hover:border-forest/25 rounded-[20px] p-5 transition-all flex flex-col gap-3 h-full">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-ink-faint">{tag}</span>
+                <span className="text-[10.5px] font-semibold text-forest-deep">{tagline}</span>
+              </div>
+              <p className="font-display text-[17px] font-semibold text-ink">{title}</p>
+              <div className="space-y-2.5 flex-1 pt-1">
+                <p className="text-[11.5px] text-ink-muted leading-relaxed"><strong className="text-ink">Best when:</strong> {best}</p>
+                <p className="text-[11.5px] text-ink-muted leading-relaxed"><strong className="text-ink">What you build:</strong> {build}</p>
+                <p className="text-[11.5px] text-ink-muted leading-relaxed"><strong className="text-ink">Who owns the UI:</strong> {owns}</p>
+              </div>
+              <span className="text-[12px] font-semibold text-forest-deep group-hover:underline underline-offset-2 inline-flex items-center gap-1.5 pt-1 mt-auto">
+                {cta} <ArrowRight size={12} strokeWidth={2.2} />
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13px] text-forest-deep leading-relaxed">
+          <strong className="text-forest-deep">You can mix paths inside a single merchant account.</strong> Ship a widget on web, a checkout-session redirect from your iOS app, and a direct-API integration in your back-office tool — all under the same publishable/secret keys, all visible in the same dashboard, all firing the same webhooks. The "path" is just how this one call enters Weave; the rest of the system is shared.
+        </div>
       </section>
 
       <div className="rule-dotted" />
@@ -593,6 +662,28 @@ const PLAYGROUND_ENDPOINTS: PlaygroundEndpoint[] = [
       { key: 'currency', label: 'Currency', placeholder: 'NGN', required: true },
     ],
   },
+  {
+    method: 'GET', path: '/assets',
+    desc: 'List every supported fiat and crypto asset.',
+    params: [],
+  },
+  {
+    method: 'POST', path: '/checkout/sessions',
+    desc: 'Create a hosted checkout session. Returns a checkoutUrl to redirect your user to.',
+    params: [
+      { key: 'amount',      label: 'Amount',       placeholder: '5000',                          required: true,  inBody: true },
+      { key: 'destAsset',   label: 'Dest Asset',   placeholder: 'fiat:NGN',                      required: true,  inBody: true },
+      { key: 'redirectUrl', label: 'Redirect URL', placeholder: 'https://yourstore.com/success', required: true,  inBody: true },
+      { key: 'reference',   label: 'Reference',    placeholder: 'order_123',                     required: false, inBody: true },
+    ],
+  },
+  {
+    method: 'GET', path: '/checkout/sessions/:id',
+    desc: 'Retrieve a checkout session and its linked order status.',
+    params: [
+      { key: ':id', label: 'Session ID', placeholder: 'clx9abc...', required: true },
+    ],
+  },
 ];
 
 function ApiPlayground() {
@@ -604,6 +695,11 @@ function ApiPlayground() {
   const [error, setError]             = useState<string | null>(null);
 
   const endpoint = PLAYGROUND_ENDPOINTS[selectedIdx];
+
+  function useDemoKey() {
+    setApiKey('pk_test_05f4f34a21c51be888b44ffa8441a72601fd393a7f052760');
+    setError(null);
+  }
 
   function setValue(key: string, val: string) {
     setValues(v => ({ ...v, [key]: val }));
@@ -687,22 +783,33 @@ function ApiPlayground() {
       </header>
 
       {/* API key bar */}
-      <div className="flex items-center gap-3 bg-cream-deep/40 border border-hair-soft rounded-2xl px-4 py-3">
-        <KeyRound size={15} className="text-ink-muted shrink-0" strokeWidth={1.9} />
-        <input
-          type="password"
-          placeholder="pk_test_… or pk_live_…"
-          value={apiKey}
-          onChange={(e) => { setApiKey(e.target.value); setError(null); }}
-          className="flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none font-mono"
-          autoComplete="off"
-        />
-        {apiKey && (
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
-            apiKey.startsWith('pk_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
-          }`}>
-            {apiKey.startsWith('pk_test_') ? 'Sandbox' : 'Live'}
-          </span>
+      <div className="space-y-3">
+        <div className="flex items-center gap-3 bg-cream-deep/40 border border-hair-soft rounded-2xl px-4 py-3">
+          <KeyRound size={15} className="text-ink-muted shrink-0" strokeWidth={1.9} />
+          <input
+            type="password"
+            placeholder="pk_test_… or pk_live_…"
+            value={apiKey}
+            onChange={(e) => { setApiKey(e.target.value); setError(null); }}
+            className="flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none font-mono"
+            autoComplete="off"
+          />
+          {apiKey && (
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
+              apiKey.startsWith('pk_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
+            }`}>
+              {apiKey.startsWith('pk_test_') ? 'Sandbox' : 'Live'}
+            </span>
+          )}
+        </div>
+        {!apiKey && (
+          <p className="px-1 text-[12px] text-ink-muted leading-relaxed">
+            Don't have a key yet?{' '}
+            <button onClick={useDemoKey} className="text-forest-deep font-semibold hover:underline underline-offset-2">
+              Try with a demo key
+            </button>
+            {' '}to explore the API responses immediately.
+          </p>
         )}
       </div>
 
@@ -815,11 +922,33 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
 
   return (
     <div className="space-y-12 pb-16 fade-up">
-      <header>
+      <header className="space-y-4">
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">API Reference</h1>
-        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
-          Base URL: <IC>https://api.paywithweave.com/api/v1</IC><br />
-          Authenticate with <IC>x-api-key: pk_live_…</IC> on every request.
+        <p className="text-ink-muted text-[15px] leading-relaxed">
+          The full surface for the direct API and checkout-session integration paths.
+          Every endpoint below returns <IC>{`${'{ success: boolean, data?, error? }'}`}</IC>; non-2xx responses still carry a structured error.
+          Base URL: <IC>https://api.paywithweave.com/api/v1</IC>
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
+            <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Browser / widget</p>
+            <code className="text-[11.5px] font-mono text-ink">x-api-key: pk_live_…</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Publishable key. Safe to ship in client code. Scoped to creating + reading own orders.</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
+            <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Server-to-server</p>
+            <code className="text-[11.5px] font-mono text-ink">x-public-key + x-secret-key</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Secret keypair. Required for anything that should not be possible from the browser. Never expose either header in client code.</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
+            <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Sandbox</p>
+            <code className="text-[11.5px] font-mono text-ink">x-api-key: pk_test_…</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Same surface, no real funds. Orders auto-complete, outbound webhooks are suppressed, and orders are flagged as sandbox in the dashboard.</p>
+          </div>
+        </div>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed pt-1">
+          Endpoints are grouped below into <strong className="text-ink">payment</strong> (quotes, orders), <strong className="text-ink">checkout sessions</strong> (the hosted-redirect flow),
+          and <strong className="text-ink">reference data</strong> (institutions, assets). Expand any row to see parameters, a runnable curl, and the response shape.
         </p>
       </header>
 
@@ -895,7 +1024,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
           },
           {
             method: 'POST', path: '/orders',
-            summary: 'Create a payment order and receive nextAction for the widget.',
+            summary: 'Create a payment order. Returns `depositInstruction` (framework-agnostic) alongside `nextAction` (widget-specific).',
             params: [
               { name: 'source.inline.kind',         type: '"crypto_wallet" | "bank_account"', req: true,  desc: 'Type of source instrument' },
               { name: 'source.inline.assetKey',     type: 'string',             req: true,  desc: 'Source asset key, e.g. crypto:ETHEREUM:USDC' },
@@ -905,6 +1034,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
               { name: 'flow',                       type: '"external" | "self"',req: false, desc: '"external" = NEAR Intents (deposit address, any chain). "self" = ChainRails (connected EVM wallet). Default: external' },
               { name: 'refundAddress',              type: 'string',             req: false, desc: 'Customer wallet for refunds on failure. Defaults to walletAddress' },
               { name: 'reference',                  type: 'string',             req: false, desc: 'Your unique ID for idempotent creation — returns HTTP 409 if a matching order already exists' },
+              { name: 'customer',                   type: '{ email?, name?, externalId? }', req: false, desc: 'Payer identity passthrough. Weave never verifies these fields — echoed in the webhook and on receipt emails' },
               { name: 'dest',                       type: 'InstrumentRef',      req: false, desc: 'Override the payout destination. Defaults to your merchant default' },
             ],
             request: `curl https://api.paywithweave.com/api/v1/orders \\
@@ -935,6 +1065,15 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
       "appFeeUsd":      0.05,
       "bridgeFeeUsd":   0.10,
       "createdAt":      "2026-05-01T10:00:00Z"
+    },
+    "depositInstruction": {
+      "type":           "crypto_transfer",
+      "depositAddress": "0xNEARIntentsDepositAddress",
+      "depositMemo":    null,
+      "amount":         50.38,
+      "token":          "USDC",
+      "chain":          "ETHEREUM",
+      "expiresAt":      "2026-05-01T11:00:00Z"
     },
     "nextAction": {
       "screen":         "collect_crypto",
@@ -1025,6 +1164,83 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
     { "name": "GTBank",      "code": "GTBANK", "id": "..." },
     { "name": "Zenith Bank", "code": "ZENITH", "id": "..." }
   ]
+}`,
+          },
+          {
+            method: 'GET', path: '/assets',
+            summary: 'List every supported fiat and crypto asset. Use the `key` field as the canonical asset identifier in other endpoints.',
+            params: [],
+            request: `curl https://api.paywithweave.com/api/v1/assets`,
+            response: `{
+  "success": true,
+  "data": {
+    "fiat": [
+      { "key": "fiat:NGN", "name": "Nigerian Naira", "symbol": "₦", "country": "Nigeria" }
+    ],
+    "crypto": [
+      { "key": "crypto:BASE:USDC",  "id": "BASE",  "token": "USDC", "name": "Base" },
+      { "key": "crypto:SOLANA:SOL", "id": "SOLANA","token": "SOL",  "name": "Solana" }
+    ]
+  }
+}`,
+          },
+          {
+            method: 'POST', path: '/checkout/sessions',
+            summary: 'Create a hosted checkout session. Returns a `checkoutUrl` you redirect your user to (Stripe / Paystack-style).',
+            params: [
+              { name: 'amount',      type: 'number',             req: true,  desc: 'Payment amount, denominated in destAsset when amountIn=dest' },
+              { name: 'amountIn',    type: '"source" | "dest"',  req: false, desc: 'Whose amount the figure represents. Default: dest' },
+              { name: 'destAsset',   type: 'string',             req: true,  desc: 'Canonical asset key for what the merchant receives, e.g. fiat:NGN' },
+              { name: 'sourceAsset', type: 'string',             req: false, desc: 'Lock the payer to a specific source asset. Omit to let them choose on the hosted page' },
+              { name: 'reference',   type: 'string',             req: false, desc: 'Your internal ID, echoed in the webhook' },
+              { name: 'metadata',    type: 'object',             req: false, desc: 'Opaque JSON object, echoed in the webhook' },
+              { name: 'customer',    type: '{ email?, name?, externalId? }', req: false, desc: 'Payer identity passthrough. Weave never verifies these fields — echoed in the webhook and on receipt emails' },
+              { name: 'redirectUrl', type: 'string',             req: true,  desc: 'HTTPS URL the user is redirected to once payment is confirmed' },
+              { name: 'cancelUrl',   type: 'string',             req: false, desc: 'HTTPS URL the user lands on if they abandon or the session expires' },
+              { name: 'expiresIn',   type: 'number',             req: false, desc: 'Seconds until the session expires. Default 7200 (2h). Min 300. Max 86400' },
+            ],
+            request: `curl https://api.paywithweave.com/api/v1/checkout/sessions \\
+  -X POST -H "x-api-key: pk_live_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "amount":      5000,
+    "destAsset":   "fiat:NGN",
+    "redirectUrl": "https://yourstore.com/payment/success",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" }
+  }'`,
+            response: `{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "checkoutUrl": "https://pay.paywithweave.com/checkout/clx9abc...",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "status":      "open"
+  }
+}`,
+          },
+          {
+            method: 'GET', path: '/checkout/sessions/:id',
+            summary: 'Retrieve a checkout session and the status of any linked order.',
+            params: [
+              { name: ':id', type: 'string', req: true, desc: 'Session ID from POST /checkout/sessions' },
+            ],
+            request: `curl https://api.paywithweave.com/api/v1/checkout/sessions/clx9abc... \\
+  -H "x-api-key: pk_live_..."`,
+            response: `{
+  "success": true,
+  "data": {
+    "id":           "clx9abc...",
+    "status":       "complete",
+    "amount":       5000,
+    "destAsset":    "fiat:NGN",
+    "reference":    "order_abc123",
+    "metadata":     { "userId": "usr_999" },
+    "orderId":      "ord_xyz",
+    "orderStatus":  "completed",
+    "expiresAt":    "2026-05-28T14:00:00Z",
+    "createdAt":    "2026-05-28T12:00:00Z"
+  }
 }`,
           },
         ] as EndpointDef[]).map((ep) => {
@@ -1132,10 +1348,14 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
 function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
   return (
     <div className="space-y-12 pb-16 fade-up">
-      <header>
+      <header className="space-y-3">
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Webhooks</h1>
-        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
-          Real-time signed notifications delivered to your server when order status changes.
+        <p className="text-ink-muted text-[15px] leading-relaxed">
+          Signed, server-to-server notifications. When an order reaches a terminal state — settled to your payout destination, or failed beyond recovery — Weave POSTs a JSON event to the URL you register.
+          This is the source of truth for "did the payment actually happen?" Front-end signals (the widget's success screen, the checkout-session redirect) are UX cues; the webhook is the audit trail.
+        </p>
+        <p className="text-ink-muted text-[14px] leading-relaxed">
+          Regardless of which integration path created the order — widget, direct API, or checkout session — the same event fires. If the order originated from a checkout session, the payload also echoes the <IC>sessionId</IC> and any <IC>metadata</IC> you set, so you can reconcile by your own IDs without a separate lookup.
         </p>
       </header>
 
@@ -1217,13 +1437,18 @@ function WebhooksPage({ copy, copied }: { copy: (id: string, text: string) => vo
     "destAssetKey":   "fiat:NGN",
     "sourceAmount":   50.38,
     "destAmount":     74250,
-    "createdAt":      "2026-05-01T10:00:00.000Z"
+    "createdAt":      "2026-05-01T10:00:00.000Z",
+    "customer":       { "email": "jane@example.com", "name": "Jane Doe", "externalId": "usr_999" },
+    "sessionId":      "clx9abc...",
+    "metadata":       { "userId": "usr_999" }
   }
 }`}
         </CodeBlock>
         <p className="text-[13px] text-ink-muted leading-relaxed">
           Use <IC>data.id</IC> as the idempotency key — store processed order IDs and short-circuit duplicate deliveries with a <IC>200</IC>.
           <IC>reference</IC> is the value you supplied on <IC>POST /orders</IC> (or <IC>null</IC> when omitted).
+          <IC>sessionId</IC> and <IC>metadata</IC> are present only when the order was triggered by a checkout session — they echo back what you sent on <IC>POST /checkout/sessions</IC>.
+          <IC>customer</IC> is present whenever you passed it on order or session creation — Weave never verifies it, we just hand it back to you for reconciliation.
         </p>
       </section>
 
@@ -1530,6 +1755,212 @@ function SupportPage() {
           <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>Try <IC>GET /orders/:id</IC> once — it forces a live sync and may resolve the issue.</span></li>
           <li className="flex items-start gap-2.5"><Check size={14} className="text-forest mt-0.5 shrink-0" strokeWidth={2.4} /><span>For webhook problems, attach the request headers and raw body received by your endpoint.</span></li>
         </ul>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Checkout Sessions
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Checkout Sessions</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          Programmatically create a hosted payment page, redirect your user to it, and get them back when payment is confirmed —
+          the Stripe Checkout / Paystack initialize pattern, brought to crypto ↔ fiat. No frontend code on your side; just one server call and a redirect.
+        </p>
+      </header>
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Info size={17} />} title="What this is, exactly" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          A <strong className="text-ink">checkout session</strong> is a one-shot, server-created payment intent that carries everything Weave needs to know
+          about a single payment: the amount, the asset the merchant wants to receive, an optional source-asset lock, where to send the user when they're done, and an optional metadata bag that gets echoed back in the webhook.
+        </p>
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          When you create one, you get back a <IC>checkoutUrl</IC>. Send the user there. They'll see a Weave-hosted page running our widget, complete payment, and land back on your <IC>redirectUrl</IC> with <IC>session_id</IC> and <IC>order_id</IC> in the query string.
+          Behind the scenes, Weave routes the payment through the same providers, fires the same webhook, and writes the same order rows as every other path — the session is just the entry point.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4">
+            <p className="text-[12px] font-bold uppercase tracking-widest text-forest-deep mb-1.5">Pick checkout sessions when</p>
+            <ul className="text-[12.5px] text-ink-muted leading-relaxed space-y-1 list-disc list-inside marker:text-forest">
+              <li>The payment lives on its own page — invoice emails, SMS payment links, server-rendered checkouts.</li>
+              <li>You'd rather not embed any frontend SDK.</li>
+              <li>You already model payments as "create intent → redirect → confirm via webhook" (Stripe, Paystack).</li>
+              <li>You need to issue a payment URL from a backend that has no UI at all (a Slack bot, a cron job, an admin tool).</li>
+            </ul>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4">
+            <p className="text-[12px] font-bold uppercase tracking-widest text-ink-faint mb-1.5">Pick something else when</p>
+            <ul className="text-[12.5px] text-ink-muted leading-relaxed space-y-1 list-disc list-inside marker:text-ink/30">
+              <li>You'd rather the payment happen in-place without a redirect → <strong className="text-ink">widget</strong>.</li>
+              <li>You want a fully custom checkout UI in your own design system → <strong className="text-ink">direct API</strong>.</li>
+              <li>You need to reuse the same payment link forever (recurring donation, sticker link) → use the <strong className="text-ink">Payment Links</strong> feature instead. Sessions are single-use and expire.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={17} />} title="The redirect flow" />
+        <ol className="bg-cream-soft border border-hair-soft rounded-[20px] p-6 space-y-3 text-[13.5px] text-ink-muted leading-relaxed list-decimal list-inside marker:text-forest-deep marker:font-bold">
+          <li>Your server calls <IC>POST /checkout/sessions</IC> with the payment params and a <IC>redirectUrl</IC>.</li>
+          <li>Redirect the user's browser to the returned <IC>checkoutUrl</IC>.</li>
+          <li>The user pays on the Weave-hosted page.</li>
+          <li>Once payment is fully confirmed (<IC>order.status === 'completed'</IC>), Weave redirects the user back to <IC>{`${'redirectUrl'}?session_id=…&order_id=…`}</IC>.</li>
+          <li>Your server confirms the payment via the <IC>order.completed</IC> webhook. <strong className="text-ink">Do not rely on the redirect alone</strong> — the user could close the tab.</li>
+        </ol>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Terminal size={17} />} title="Create a session" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          <IC>POST /checkout/sessions</IC>. Required: <IC>amount</IC>, <IC>destAsset</IC>, <IC>redirectUrl</IC>. Auth via <IC>x-api-key</IC> or keypair.
+        </p>
+        <CodeBlock id="cs-create-req" copy={copy} copied={copied} lang="bash">
+{`curl https://api.paywithweave.com/api/v1/checkout/sessions \\
+  -X POST -H "x-api-key: pk_live_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "amount":      5000,
+    "amountIn":    "dest",
+    "destAsset":   "fiat:NGN",
+    "sourceAsset": "crypto:BASE:USDC",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" },
+    "redirectUrl": "https://yourstore.com/payment/success",
+    "cancelUrl":   "https://yourstore.com/cart",
+    "expiresIn":   7200
+  }'`}
+        </CodeBlock>
+        <CodeBlock id="cs-create-res" copy={copy} copied={copied} lang="json" light>
+{`{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "checkoutUrl": "https://pay.paywithweave.com/checkout/clx9abc...",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "status":      "open"
+  }
+}`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Cpu size={17} />} title="Retrieve a session" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          <IC>GET /checkout/sessions/:id</IC>. Returns the session plus the linked order's status (once a payment has started).
+        </p>
+        <CodeBlock id="cs-get-res" copy={copy} copied={copied} lang="json" light>
+{`{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "status":      "complete",
+    "amount":      5000,
+    "destAsset":   "fiat:NGN",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" },
+    "orderId":     "ord_xyz",
+    "orderStatus": "completed",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "createdAt":   "2026-05-28T12:00:00Z"
+  }
+}`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={17} />} title="Session Lifecycle" />
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { status: 'open',       dot: 'bg-amber-400', desc: 'Session created — awaiting payer.' },
+            { status: 'processing', dot: 'bg-forest/50', desc: 'User has started paying. An order is linked via orderId.' },
+            { status: 'complete',   dot: 'bg-forest',    desc: 'Payment confirmed; user has been redirected back to redirectUrl.' },
+            { status: 'expired',    dot: 'bg-ink/25',    desc: 'No payment was completed before expiresAt.' },
+          ].map(({ status, dot, desc }, i, arr) => (
+            <div key={status} className={`flex items-start gap-4 px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
+              <div>
+                <code className="text-[13px] font-mono font-semibold text-ink">{status}</code>
+                <p className="text-[13px] text-ink-muted mt-0.5">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-4">
+        <SectionHeading icon={<AlertTriangle size={17} />} title="Important callouts" />
+        <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed">
+          <strong className="text-forest-deep">Redirect fires on confirmed payment, not on deposit shown.</strong> The hosted success screen drives the redirect — your <IC>redirectUrl</IC> only sees users whose order reached <IC>completed</IC>.
+        </div>
+        <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed">
+          <strong className="text-forest-deep">Sessions expire after 2 hours by default.</strong> Override with <IC>expiresIn</IC> (seconds). Bounds: 5 minutes to 24 hours.
+        </div>
+        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl px-5 py-4 flex gap-3 text-[13.5px] text-amber-900 leading-relaxed">
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" strokeWidth={2} />
+          <span>
+            <strong>Always confirm via webhook.</strong> The redirect is a UX hint — the user can close the tab before being redirected. The <IC>order.completed</IC> webhook is the source of truth.
+          </span>
+        </div>
+        <div className="bg-cream-soft border border-hair-soft rounded-2xl px-5 py-4 text-[13.5px] text-ink-muted leading-relaxed">
+          The webhook payload echoes <IC>sessionId</IC> and <IC>metadata</IC> back to you — reconcile by your own internal IDs without a separate lookup.
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-4">
+        <SectionHeading icon={<Network size={17} />} title="Locking the source asset" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          Omit <IC>sourceAsset</IC> and the hosted page lets the payer choose how to pay. Pass it to lock them to a specific chain / token (e.g. <IC>crypto:BASE:USDC</IC>).
+          For the canonical list of valid keys, call <IC>GET /assets</IC>.
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-4">
+        <SectionHeading icon={<Info size={17} />} title="Attaching a customer (optional)" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          Weave does not collect or verify payer identity — your payers don't sign in to Weave, don't enter contact details, and aren't associated with a Weave account.
+          The hosted page only asks for what the transaction actually requires (e.g. a refund account for fiat onramps).
+        </p>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          If you already know who the payer is (they're logged into your product), pass it on session creation:
+        </p>
+        <CodeBlock id="cs-customer" copy={copy} copied={copied} lang="json" light>
+{`{
+  "amount": 5000,
+  "destAsset": "fiat:NGN",
+  "redirectUrl": "https://yourstore.com/payment/success",
+  "customer": {
+    "email":      "jane@example.com",
+    "name":       "Jane Doe",
+    "externalId": "usr_999"
+  }
+}`}
+        </CodeBlock>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          All three fields are optional. They're echoed onto the order, into the <IC>order.completed</IC> webhook (<IC>data.customer</IC>), and onto your receipt email — so you can reconcile by your own customer record without a second lookup.
+          When you omit <IC>customer</IC>, receipts fall back to your <IC>reference</IC> field; they never claim the payer was "verified."
+        </p>
       </section>
     </div>
   );

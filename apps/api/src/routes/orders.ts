@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma';
 import { requireAuth } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
-import { executeOrder, syncOrder } from '../services/executor.service';
+import { executeOrder, syncOrder, toDepositInstruction } from '../services/executor.service';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
@@ -44,6 +44,34 @@ interface CreateOrderBody {
   // a refund wallet from the user and sends it here. Takes precedence over the
   // source instrument's walletAddress when both are set.
   refundAddress?: string;
+  sessionId?: string;
+  // Optional payer identity, pure passthrough — Weave does not verify any of
+  // these. Echoed on the order, in webhooks, and on receipts.
+  customer?: { email?: string; name?: string; externalId?: string };
+}
+
+// Whitelist customer fields and reject if shape is wrong. Returns sanitized
+// value or null. Throws on invalid shape so route returns a 400.
+function sanitizeCustomer(raw: unknown): { email?: string; name?: string; externalId?: string } | null {
+  if (raw == null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('customer must be an object');
+  }
+  const out: { email?: string; name?: string; externalId?: string } = {};
+  const c = raw as Record<string, unknown>;
+  if (c.email !== undefined) {
+    if (typeof c.email !== 'string' || c.email.length > 320) throw new Error('customer.email must be a string up to 320 chars');
+    out.email = c.email;
+  }
+  if (c.name !== undefined) {
+    if (typeof c.name !== 'string' || c.name.length > 200) throw new Error('customer.name must be a string up to 200 chars');
+    out.name = c.name;
+  }
+  if (c.externalId !== undefined) {
+    if (typeof c.externalId !== 'string' || c.externalId.length > 200) throw new Error('customer.externalId must be a string up to 200 chars');
+    out.externalId = c.externalId;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // POST /api/v1/orders — direction-agnostic order creation.
@@ -62,6 +90,15 @@ router.post('/', requireAuth, async (req, res) => {
   body.amount = amount;
   if (body.reference && body.reference.length > 100) {
     return res.status(400).json({ success: false, error: 'Reference too long' });
+  }
+
+  // Sanitize merchant-supplied customer info (pure passthrough — we never verify).
+  // Validate up-front so a malformed shape returns 400 cleanly.
+  let customer: { email?: string; name?: string; externalId?: string } | null;
+  try {
+    customer = sanitizeCustomer(body.customer);
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: err.message });
   }
 
   try {
@@ -250,6 +287,15 @@ router.post('/', requireAuth, async (req, res) => {
     // 4. Create or Reuse the Order row (Idempotency)
     // If the merchant provided a reference, check for an existing order first.
     let order: any;
+
+    // Auto-link to Checkout Session if provided
+    let checkoutSession = null;
+    if (body.sessionId) {
+      checkoutSession = await prisma.checkoutSession.findUnique({
+        where: { id: body.sessionId, merchantId: merchant.id }
+      });
+    }
+
     if (body.reference) {
       order = await prisma.order.findFirst({
         where: {
@@ -265,6 +311,11 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     if (!order) {
+      // Resolve customer identity: body wins, fall back to the session's customer
+      // when the order was triggered from a hosted checkout. Pure passthrough —
+      // never verified; echoed in webhooks and emails.
+      const resolvedCustomer = customer ?? (checkoutSession?.customer as any) ?? undefined;
+
       try {
         order = await prisma.order.create({
           data: {
@@ -277,11 +328,24 @@ router.post('/', requireAuth, async (req, res) => {
             status: 'awaiting_deposit',
             routePlan: plan as any,
             quoteRate,
-            reference: body.reference,
+            reference: body.reference || (checkoutSession ? checkoutSession.reference : null),
+            customer: resolvedCustomer,
             sandboxMode: req.sandboxMode ?? false,
           },
         });
         console.log(`[orders] created new order: ${order.id}`);
+
+        // Link to checkout session if it exists and isn't already linked
+        if (checkoutSession && !checkoutSession.orderId) {
+          await prisma.checkoutSession.update({
+            where: { id: checkoutSession.id },
+            data: { 
+              orderId: order.id,
+              status: 'processing' 
+            }
+          });
+          console.log(`[orders] linked session ${checkoutSession.id} to order ${order.id}`);
+        }
       } catch (createErr: any) {
         // P2002 = unique constraint violation — concurrent request with the same reference
         if (createErr?.code === 'P2002' && body.reference) {
@@ -345,10 +409,16 @@ router.post('/', requireAuth, async (req, res) => {
       include: { steps: { orderBy: { sequence: 'asc' } } },
     });
 
+    // (Session linking already handled inline after order creation above.)
+
     res.json({
       success: true,
       data: {
         order: serializeOrder(updated),
+        // `depositInstruction` is the framework-agnostic shape — preferred for
+        // server-to-server integrations. `nextAction` retains the widget-facing
+        // shape (with `screen` labels) for backward compatibility.
+        depositInstruction: toDepositInstruction(execResult.nextAction),
         nextAction: execResult.nextAction,
         firstStep: execResult.firstStep,
       },
@@ -386,7 +456,7 @@ const TERMINAL = new Set(['completed', 'failed', 'refunded', 'expired']);
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     let order = await prisma.order.findFirst({
-      where: { id: req.params.id, merchantId: req.merchantId },
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
       include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
     });
     if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
