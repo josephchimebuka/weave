@@ -32,6 +32,7 @@ model Merchant {
   
   createdAt                 DateTime     @default(now())
   updatedAt                 DateTime     @updatedAt
+  emailVerifiedAt            DateTime?
   paystackSubaccountCode     String?
   paystackSubaccountStatus   SubaccountSyncStatus @default(PENDING)
   paystackSubaccountSyncedAt DateTime?

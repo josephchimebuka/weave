@@ -99,12 +99,13 @@ router.get('/profile', requireSession, async (req, res) => {
     return res.json({
       success: true,
       data: {
-        id:                   merchant.id,
-        email:                merchant.email,
-        name:                 merchant.name,
-        kycLevel:             merchant.kycLevel,
-        createdAt:            merchant.createdAt,
-        publishableKey:       merchant.publishableKey ?? null,
+        id:                    merchant.id,
+        email:                 merchant.email,
+        name:                  merchant.name,
+        kycLevel:              merchant.kycLevel,
+        emailVerifiedAt:       merchant.emailVerifiedAt,
+        createdAt:             merchant.createdAt,
+        publishableKey:        merchant.publishableKey ?? null,
         sandboxPublishableKey: merchant.sandboxPublishableKey ?? null,
       },
     });

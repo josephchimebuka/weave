@@ -13,6 +13,7 @@ import {
   Link as LinkIcon,
   Landmark,
   X,
+  Mail,
 } from 'lucide-react';
 
 type NavItem = {
@@ -66,13 +67,18 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 
 export default function Sidebar({
   merchantName = '',
+  kycLevel = 'none',
+  emailVerifiedAt = null,
   isOpen = false,
   onClose = () => {},
 }: {
   merchantName?: string;
+  kycLevel?: string;
+  emailVerifiedAt?: string | null;
   isOpen?: boolean;
   onClose?: () => void;
 }) {
+  const needsEmailVerification = !emailVerifiedAt && kycLevel === 'none';
   const pathname = usePathname();
 
   // Derive initials and first name from the provided name
@@ -117,7 +123,7 @@ export default function Sidebar({
             {displayName}
           </p>
           <p className="text-[11px] text-ink-muted tracking-wide">
-            Verified Partner
+            {kycLevel === 'verified' ? 'Verified Partner' : kycLevel === 'basic' ? 'Basic Account' : 'Unverified'}
           </p>
         </div>
       </Link>
@@ -128,6 +134,23 @@ export default function Sidebar({
           <NavLink key={item.href} item={item} pathname={pathname} />
         ))}
       </nav>
+
+      {/* Email verification nudge */}
+      {needsEmailVerification && (
+        <Link
+          href="/verify-email"
+          className="mx-1 mb-3 flex items-center gap-3 rounded-2xl px-4 py-3 bg-tan-mist/60 border border-tan-mist hover:bg-tan-mist transition-all group"
+        >
+          <div className="relative shrink-0">
+            <Mail size={17} strokeWidth={1.9} className="text-tan-deep" />
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-tan animate-pulse" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-semibold text-tan-deep leading-tight">Verify email</p>
+            <p className="text-[11px] text-tan-deep/70 mt-0.5 truncate">Unlock payment links →</p>
+          </div>
+        </Link>
+      )}
 
       {/* Footer — Support + Logout */}
       <div className="pt-5 mt-5 border-t border-hair-soft flex flex-col gap-1.5">

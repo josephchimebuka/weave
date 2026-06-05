@@ -116,6 +116,32 @@ router.post('/', requireAuth, async (req, res) => {
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(401).json({ success: false, error: 'Unknown merchant' });
 
+    // Unverified merchants (no email verification) cannot place orders.
+    if (!merchant.emailVerifiedAt && merchant.kycLevel === 'none') {
+      return res.status(403).json({
+        success: false,
+        error:   'Email verification required before placing orders.',
+        code:    'EMAIL_VERIFICATION_REQUIRED',
+      });
+    }
+
+    // Basic-tier merchants (email verified, not yet fully KYB'd) are capped at
+    // 30 non-failed orders per rolling 30-day window to limit compliance exposure.
+    if (merchant.kycLevel === 'basic') {
+      const BASIC_MONTHLY_LIMIT = 30;
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const count = await prisma.order.count({
+        where: { merchantId: req.merchantId, status: { not: 'failed' }, createdAt: { gte: since } },
+      });
+      if (count >= BASIC_MONTHLY_LIMIT) {
+        return res.status(403).json({
+          success: false,
+          error:   'Monthly order limit reached for your account tier. Complete business verification (KYB) to continue.',
+          code:    'TIER_LIMIT_EXCEEDED',
+        });
+      }
+    }
+
     const sourceInstrument = await resolveInstrument(body.source, merchant.id);
 
     let destInstrument;

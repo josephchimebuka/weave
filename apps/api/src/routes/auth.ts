@@ -62,7 +62,7 @@ function generateSecretKey(): string {
   return 'sk_live_' + crypto.randomBytes(32).toString('hex');
 }
 
-function pickPublicMerchant(m: { id: string; email: string; name: string; publishableKey: string; sandboxPublishableKey?: string | null; createdAt: Date; updatedAt: Date }) {
+function pickPublicMerchant(m: { id: string; email: string; name: string; publishableKey: string; sandboxPublishableKey?: string | null; createdAt: Date; updatedAt: Date; kycLevel: string; emailVerifiedAt: Date | null }) {
   return {
     id:                    m.id,
     email:                 m.email,
@@ -71,6 +71,8 @@ function pickPublicMerchant(m: { id: string; email: string; name: string; publis
     sandboxPublishableKey: m.sandboxPublishableKey ?? null,
     createdAt:             m.createdAt,
     updatedAt:             m.updatedAt,
+    kycLevel:              m.kycLevel,
+    emailVerifiedAt:       m.emailVerifiedAt,
   };
 }
 

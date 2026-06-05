@@ -6,7 +6,17 @@ import Link from 'next/link';
 import { Menu } from 'lucide-react';
 import Sidebar from './Sidebar';
 
-export function ClientLayout({ children, merchantName }: { children: React.ReactNode; merchantName: string }) {
+export function ClientLayout({
+  children,
+  merchantName,
+  kycLevel = 'none',
+  emailVerifiedAt = null,
+}: {
+  children: React.ReactNode;
+  merchantName: string;
+  kycLevel?: string;
+  emailVerifiedAt?: string | null;
+}) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -49,6 +59,8 @@ export function ClientLayout({ children, merchantName }: { children: React.React
     <div className="flex min-h-screen bg-cream text-ink">
       <Sidebar
         merchantName={merchantName}
+        kycLevel={kycLevel}
+        emailVerifiedAt={emailVerifiedAt}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
