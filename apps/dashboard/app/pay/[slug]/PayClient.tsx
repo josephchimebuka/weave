@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { WeaveCheckout } from '@weave-sdk/widget';
 
 // Point the widget to our internal safe public proxy
@@ -18,6 +19,9 @@ type LinkData = {
 };
 
 export default function PayClient({ link }: { link: LinkData }) {
+  const [customerName, setCustomerName] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
+
   const isP2P = link.asset.startsWith('crypto:');
   const assetParts = link.asset.split(':');
   const token = assetParts.pop() || '';
@@ -65,6 +69,24 @@ export default function PayClient({ link }: { link: LinkData }) {
             </div>
           </div>
 
+          {/* Customer details */}
+          <div className="mt-8 lg:mt-10 space-y-3">
+            <input
+              type="text"
+              placeholder="Full name"
+              value={customerName}
+              onChange={e => setCustomerName(e.target.value)}
+              className="w-full px-4 py-3 rounded-2xl bg-cream border border-hair text-[14px] text-ink placeholder:text-ink-muted/50 focus:outline-none focus:border-forest/40 focus:ring-2 focus:ring-forest/10 transition-all"
+            />
+            <input
+              type="email"
+              placeholder="Email address"
+              value={customerEmail}
+              onChange={e => setCustomerEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-2xl bg-cream border border-hair text-[14px] text-ink placeholder:text-ink-muted/50 focus:outline-none focus:border-forest/40 focus:ring-2 focus:ring-forest/10 transition-all"
+            />
+          </div>
+
           {link.description && (
             <div className="mt-8 lg:mt-12 pt-6 lg:pt-8 border-t border-hair/10">
               <p className="text-[15px] sm:text-[17px] text-ink-muted leading-relaxed max-w-[380px] font-medium italic opacity-80">
@@ -80,6 +102,10 @@ export default function PayClient({ link }: { link: LinkData }) {
         <div className="w-full max-w-[420px] fade-up lg:ml-8 xl:ml-16">
           <WeaveCheckout
             apiKey={link.publishableKey}
+            customer={{
+              name: customerName || undefined,
+              email: customerEmail || undefined,
+            }}
             merchant={{
               name: link.merchantName,
               amount: link.amount,

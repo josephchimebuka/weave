@@ -324,33 +324,35 @@ export default async function Page() {
                 <p className="text-[14px] font-medium">Business Status</p>
               </div>
               <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold ${
-                merchant?.kycLevel === 'verified' ? 'bg-forest-surface text-forest-deep' : 
-                merchant?.kycLevel === 'pending' ? 'bg-tan-mist text-tan-deep' : 
+                merchant?.kycLevel === 'verified' ? 'bg-forest-surface text-forest-deep' :
+                merchant?.kycLevel === 'pending' ? 'bg-tan-mist text-tan-deep' :
                 'bg-cream-deep text-ink-muted'
               }`}>
-                {merchant?.kycLevel === 'verified' ? <CheckCircle2 size={12} strokeWidth={2.5} /> : 
+                {merchant?.kycLevel === 'verified' ? <CheckCircle2 size={12} strokeWidth={2.5} /> :
                  merchant?.kycLevel === 'pending' ? <div className="w-1.5 h-1.5 rounded-full bg-tan animate-pulse" /> :
                  null}
-                {merchant?.kycLevel === 'verified' ? 'Verified' : 
-                 merchant?.kycLevel === 'pending' ? 'Pending' : 
+                {merchant?.kycLevel === 'verified' ? 'Verified' :
+                 merchant?.kycLevel === 'pending' ? 'Pending' :
                  'Action Req.'}
               </span>
             </div>
             <p className="mt-4 font-display text-[22px] font-semibold text-ink leading-tight">
-              {merchant?.kycLevel === 'verified' ? 'KYB Approved' : 
-               merchant?.kycLevel === 'pending' ? 'Review Pending' : 
-               'KYB Action Required'}
+              {merchant?.kycLevel === 'verified' ? 'KYB Approved' :
+               merchant?.kycLevel === 'pending' ? 'Review Pending' :
+               merchant?.kycLevel === 'basic' ? 'KYB Action Required' :
+               'Email Verification Required'}
             </p>
             <p className="mt-1 text-[13px] text-ink-muted">
-              {merchant?.kycLevel === 'verified' ? 'Next review in 180 days.' : 
-               merchant?.kycLevel === 'pending' ? 'Est. review: 1-3 days.' : 
-               'Submit details to accept live payments.'}
+              {merchant?.kycLevel === 'verified' ? 'Next review in 180 days.' :
+               merchant?.kycLevel === 'pending' ? 'Est. review: 1-3 days.' :
+               merchant?.kycLevel === 'basic' ? 'Submit business details to accept live payments.' :
+               'Verify your email to unlock orders and payment links.'}
             </p>
             <Link
-              href="/onboarding/kyb"
+              href={merchant?.kycLevel === 'none' ? '/verify-email' : '/onboarding/kyb'}
               className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-semibold text-forest-deep hover:text-forest transition-colors"
             >
-              View details <ArrowRight size={13} strokeWidth={2.3} />
+              {merchant?.kycLevel === 'none' ? 'Verify email' : 'View details'} <ArrowRight size={13} strokeWidth={2.3} />
             </Link>
           </div>
         </div>

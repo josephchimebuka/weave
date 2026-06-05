@@ -147,6 +147,7 @@ export async function createOrder(
     refundAddress?:  string;
     reference?:      string;
     sessionId?:      string;
+    customer?:       { name?: string; email?: string };
   },
 ): Promise<CreateOrderResponse> {
   return apiFetch('/orders', publishableKey, {

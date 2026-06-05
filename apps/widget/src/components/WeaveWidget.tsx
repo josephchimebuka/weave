@@ -2303,6 +2303,7 @@ export interface WeaveCheckoutProps {
   apiKey?: string;
   sessionId?: string;
   userAddress?: string;
+  customer?: { name?: string; email?: string };
   theme?: 'organic' | 'minimal';
   borderRadius?: number;
   accentColor?: string;
@@ -2334,6 +2335,7 @@ function WeaveCheckoutInner({
   apiKey: propApiKey,
   sessionId,
   userAddress: propUserAddress,
+  customer,
   theme = 'organic',
   borderRadius = 16,
   accentColor,
@@ -2637,6 +2639,7 @@ function WeaveCheckoutInner({
         refundAddress: refundAddr,
         reference: pendingOrderRef.current,
         sessionId,
+        customer: customer ?? undefined,
         dest: merchant.destInstrument ? {
           inline: {
             ...merchant.destInstrument,
@@ -2764,6 +2767,7 @@ function WeaveCheckoutInner({
         amount: merchant.amount,
         reference: pendingOrderRef.current,
         sessionId,
+        customer: customer ?? undefined,
         dest: merchant.destInstrument ? {
           inline: {
             ...merchant.destInstrument,
@@ -2825,6 +2829,7 @@ function WeaveCheckoutInner({
           flow: isWalletFlow ? 'self' : undefined,
           reference: pendingOrderRef.current,
           sessionId,
+          customer: customer ?? undefined,
           dest: merchant.destInstrument ? {
             inline: {
               ...merchant.destInstrument,
