@@ -96,6 +96,8 @@ Transport in `src/api/client.ts` — no cookies, API-key auth. Base URL resoluti
 
 `src/dev.tsx` is the local playground rendered by `pnpm --filter @weave-sdk/widget dev` — overlays `WeaveCheckout` on a mocked `MerchantBackdrop` merchant page.
 
+`WeaveCheckout` accepts an optional `customer?: { name?: string; email?: string }` prop. When provided, it is forwarded on every `createOrder` call so the merchant can see payer details in their dashboard. **Note:** any change to `apps/widget` requires publishing a new `@weave-sdk/widget` version before consumers pick up the change.
+
 ## `apps/dashboard` — merchant portal (Next.js 15)
 
 App Router, React 19, Tailwind v4 with a natural design system (forest/tan/cream/ink). **User identity system** backed by email/password accounts stored in Postgres.
@@ -132,17 +134,53 @@ Both endpoints return `{ user: { id, email, ... }, session: { token, expiresAt }
 `AUTH_SESSION_TTL_HOURS` (default 24), `AUTH_RESET_TTL_MINUTES` (default 15) — session and password-reset OTP lifetimes.
 `API_BASE` (default `http://localhost:4000/api/v1`) — backend URL for server-side API calls.
 
+### KYB Tier System
+
+Merchants progress through four tiers:
+
+| `kycLevel`  | Gate                                  | Capabilities                                   |
+|-------------|---------------------------------------|------------------------------------------------|
+| `none`      | No email verification                 | Read-only dashboard — no orders or links       |
+| `basic`     | Email OTP verified                    | Orders + links, capped at 30/30 days           |
+| `pending`   | KYB form submitted, awaiting review   | Same as `basic` while under review             |
+| `verified`  | Admin approved via secure magic link  | Full access, no transaction caps               |
+
+- Admin approval/rejection handled by `GET /admin/verify?id=&action=approve|reject&token=` with a JWT-signed magic link.
+- **Rejection resets to `kycLevel: 'basic'`** (not `none`) — email is still verified.
+- The dashboard home page (`app/page.tsx`) shows a 4-state KYB card that adapts copy and CTA for each tier.
+- `kycLevel === 'none'` users are shown an email verification prompt and redirected to `/verify-email`.
+
+### Customer PII on Orders
+
+`Order.customer` is a `Json?` field in the Prisma schema. The API whitelists `{ name, email }` on `POST /orders`. Merchants pass it through the `WeaveCheckout` widget prop or via direct API. It is:
+- Displayed on the merchant's transaction detail page (`app/transactions/[id]/page.tsx`) when present.
+- Echoed in the `order.completed` webhook.
+- Optional — absence never blocks payment processing.
+
+The hosted payment link page (`app/pay/[slug]/PayClient.tsx`) collects customer name + email on the left column and passes them to `WeaveCheckout`.
+
+### Sandbox
+
+Sandbox routing is fully wired. Using a `pk_test_` / `sk_test_` key:
+- `auth.ts` middleware sets `req.sandboxMode = true`.
+- `executor.service.ts` branches to `sandboxDispatch` in `sandbox-executor.ts`.
+- All provider calls are mocked — no real funds move.
+- Sandbox orders are isolated from live orders and only appear when authenticated with test keys.
+
 ### Layout & Routes
 
 - `app/layout.tsx` — Root HTML shell, mounts `SidebarLayout` (client component).
 - `components/SidebarLayout.tsx` — Detects auth routes vs authenticated routes and renders sidebar + content accordingly. Includes a `BusinessStatus` capsule.
-- `app/page.tsx` — Main dashboard. Includes `AutoRefresh` (20s polling) and revenue metrics using `netSettlement` (post-fee).
+- `app/page.tsx` — Main dashboard. Includes `AutoRefresh` (20s polling) and revenue metrics using `netSettlement` (post-fee). Shows a 4-state KYB status card.
 - `app/transactions/page.tsx` — Transaction history with filtering and CSV export.
+- `app/transactions/[id]/page.tsx` — Transaction detail / receipt. Shows customer name + email when the order has them.
 - `app/links/page.tsx` — Payment link management. Includes a regex-validated numeric amount input and asset picker portal.
+- `app/pay/[slug]/page.tsx` — Public hosted payment page. Collects payer name + email, renders `WeaveCheckout`.
 - `app/onboarding/kyb/page.tsx` — Full KYB submission workflow (Personal -> Business -> Documents).
 - `app/support/page.tsx` — Integrated contact form (routes to API) + FAQ + links to legal pages.
 - `app/terms/page.tsx` & `app/privacy/page.tsx` — Legal documentation.
 - `app/settings/page.tsx` — Merchant profile and payout destination management.
+- `app/docs/page.tsx` — In-app developer docs. Sections: Introduction, Widget Playground, API Reference, API Playground, Checkout Sessions, Webhooks, **Agents**, Security, Support.
 
 ### Technical Patterns
 

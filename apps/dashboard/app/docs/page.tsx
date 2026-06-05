@@ -15,7 +15,7 @@ const WeaveCheckout = dynamic(
   { ssr: false }
 );
 
-type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'checkout' | 'webhooks' | 'security' | 'support';
+type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'checkout' | 'webhooks' | 'agents' | 'security' | 'support';
 type CodeTab  = 'html' | 'react' | 'nextjs';
 
 export default function DocsPage() {
@@ -52,6 +52,7 @@ export default function DocsPage() {
             <NavItem icon={<Bell size={14} />}       label="Webhooks"         active={activePage === 'webhooks'}   onClick={() => setActivePage('webhooks')} />
           </NavGroup>
           <NavGroup label="More">
+            <NavItem icon={<Zap size={14} />}           label="Agents"   active={activePage === 'agents'}   onClick={() => setActivePage('agents')} />
             <NavItem icon={<Shield size={14} />}        label="Security" active={activePage === 'security'} onClick={() => setActivePage('security')} />
             <NavItem icon={<MessageSquare size={14} />} label="Support"  active={activePage === 'support'}  onClick={() => setActivePage('support')} />
           </NavGroup>
@@ -76,6 +77,7 @@ export default function DocsPage() {
           {activePage === 'playground'   && <ApiPlayground />}
           {activePage === 'checkout'     && <CheckoutSessionsPage copy={copy} copied={copied} />}
           {activePage === 'webhooks'     && <WebhooksPage copy={copy} copied={copied} />}
+          {activePage === 'agents'       && <AgentsPage copy={copy} copied={copied} />}
           {activePage === 'security'     && <SecurityPage copy={copy} copied={copied} />}
           {activePage === 'support'      && <SupportPage />}
         </div>
@@ -1961,6 +1963,220 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
           All three fields are optional. They're echoed onto the order, into the <IC>order.completed</IC> webhook (<IC>data.customer</IC>), and onto your receipt email — so you can reconcile by your own customer record without a second lookup.
           When you omit <IC>customer</IC>, receipts fall back to your <IC>reference</IC> field; they never claim the payer was "verified."
         </p>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agents
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AgentsPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Agents</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          Weave's REST API is fully agent-callable. Any AI agent that can make HTTP requests — LLM tool calls, AutoGen workers, LangChain tools,
+          or a plain <IC>fetch</IC> loop — can quote, create, and track payments without human interaction. This page covers the key patterns.
+        </p>
+      </header>
+
+      <section className="space-y-5">
+        <SectionHeading icon={<KeyRound size={18} />} title="Authentication" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Agents calling from a trusted backend should use the keypair pattern — both headers must be present and belong to the same merchant account.
+          The publishable key alone is enough for read-only calls and for creating orders when the flow starts in a user's browser.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-2">
+            <p className="text-[12px] font-bold uppercase tracking-widest text-forest-deep">Server-side (agent) — keypair</p>
+            <p className="text-[12.5px] text-ink-muted leading-relaxed">Pass both <IC>x-public-key</IC> and <IC>x-secret-key</IC>. Never expose the secret key to a browser or end-user.</p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-2">
+            <p className="text-[12px] font-bold uppercase tracking-widest text-ink-faint">Browser / widget — publishable key</p>
+            <p className="text-[12.5px] text-ink-muted leading-relaxed">Pass <IC>x-api-key: pk_live_…</IC>. Safe to include in frontend code. Cannot access admin operations.</p>
+          </div>
+        </div>
+        <CodeBlock id="ag-auth" copy={copy} copied={copied} lang="bash">
+{`# Keypair auth (server-side agent)
+curl https://api.paywithweave.com/api/v1/quotes \\
+  -H "x-public-key: pk_live_..." \\
+  -H "x-secret-key: sk_live_..." \\
+  -G -d "from=fiat:NGN&to=crypto:BASE:USDC&amount=5000&amountIn=source"`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Zap size={18} />} title="Core primitives" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Three calls cover almost every agentic payment workflow.
+        </p>
+        <div className="space-y-3">
+          {[
+            { method: 'GET',  path: '/quotes',      desc: 'Price a cross-corridor transfer. Always call before creating an order so the agent can show or validate amounts.' },
+            { method: 'POST', path: '/orders',      desc: 'Create and execute a payment. Returns nextAction which tells the agent or payer what to do next (send crypto, bank transfer, etc.).' },
+            { method: 'GET',  path: '/orders/:id',  desc: 'Poll for completion. Forces a live sync with the underlying provider on every call. Safe to call once per second.' },
+          ].map(({ method, path, desc }) => (
+            <div key={path} className="flex items-start gap-4 bg-cream-soft border border-hair-soft rounded-[16px] px-5 py-4">
+              <MethodBadge method={method} />
+              <div>
+                <code className="text-[13px] font-mono font-semibold text-ink">{path}</code>
+                <p className="text-[12.5px] text-ink-muted mt-1 leading-relaxed">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Terminal size={18} />} title="OpenAI tool definitions" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Drop these into your <IC>tools</IC> array and your model can quote and initiate payments in a single turn.
+        </p>
+        <CodeBlock id="ag-tools" copy={copy} copied={copied} lang="json">
+{`[
+  {
+    "type": "function",
+    "function": {
+      "name": "weave_get_quote",
+      "description": "Get an exchange rate and fee breakdown for a cross-corridor transfer.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from":     { "type": "string", "description": "Source asset key, e.g. 'fiat:NGN' or 'crypto:BASE:USDC'" },
+          "to":       { "type": "string", "description": "Destination asset key" },
+          "amount":   { "type": "number", "description": "Transfer amount" },
+          "amountIn": { "type": "string", "enum": ["source", "dest"], "description": "Whether amount refers to source or destination" }
+        },
+        "required": ["from", "to", "amount"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "weave_create_order",
+      "description": "Create a payment order. Returns nextAction describing what the payer must do.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sourceAssetKey": { "type": "string", "description": "Asset the payer will send, e.g. 'crypto:BASE:USDC'" },
+          "amount":         { "type": "number" },
+          "amountIn":       { "type": "string", "enum": ["source", "dest"] },
+          "reference":      { "type": "string", "description": "Your internal order or invoice ID" },
+          "customer": {
+            "type": "object",
+            "properties": {
+              "name":  { "type": "string" },
+              "email": { "type": "string" }
+            }
+          }
+        },
+        "required": ["sourceAssetKey", "amount"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "weave_get_order",
+      "description": "Get the current status and details of a payment order.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "orderId": { "type": "string" }
+        },
+        "required": ["orderId"]
+      }
+    }
+  }
+]`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Network size={18} />} title="Polling for completion" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          After <IC>createOrder</IC> returns, the payment is in flight. Poll <IC>GET /orders/:id</IC> until <IC>status</IC> is terminal.
+          Each call forces a live sync — no extra configuration needed.
+        </p>
+        <CodeBlock id="ag-poll" copy={copy} copied={copied} lang="typescript">
+{`const TERMINAL = new Set(['completed', 'failed', 'refunded', 'expired']);
+
+async function waitForOrder(orderId: string, apiKey: string, timeoutMs = 300_000) {
+  const deadline = Date.now() + timeoutMs;
+  let delay = 2_000;
+
+  while (Date.now() < deadline) {
+    const res  = await fetch(\`https://api.paywithweave.com/api/v1/orders/\${orderId}\`, {
+      headers: { 'x-api-key': apiKey },
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    const { status } = data.data;
+    if (TERMINAL.has(status)) return data.data;
+
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, 15_000); // back off to 15s max
+  }
+  throw new Error('Order did not complete within timeout');
+}`}
+        </CodeBlock>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          For production agents, prefer receiving the <IC>order.completed</IC> webhook instead of polling — it's instantaneous and has no rate-limit implications.
+          Polling is the right fallback when your agent runs in a short-lived Lambda or a turn-based LLM tool loop.
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<FlaskConical size={18} />} title="Sandbox" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Use <IC>pk_test_…</IC> / <IC>sk_test_…</IC> keys during development. The API behaves identically — all routes, all validations —
+          but no real funds move and provider calls are mocked. Orders created with test keys are isolated from live orders and only appear
+          when you authenticate with the same test keys.
+        </p>
+        <div className="bg-forest/5 border border-forest/12 rounded-[16px] p-4">
+          <p className="text-[12.5px] text-ink-muted leading-relaxed">
+            <strong className="text-ink">Tip for agents:</strong> run your full tool-call loop in sandbox first. The response shapes, status transitions, and
+            webhook payloads are identical to production — so a passing sandbox run means your agent is production-ready.
+          </p>
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<GitBranch size={18} />} title="Customer passthrough" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Pass an optional <IC>customer</IC> object with <IC>createOrder</IC> to tag the order with payer information.
+          This is surfaced to the merchant in the transaction detail view and echoed in the <IC>order.completed</IC> webhook — useful
+          for agents that know who the payer is from their own session context.
+        </p>
+        <CodeBlock id="ag-customer" copy={copy} copied={copied} lang="bash">
+{`curl https://api.paywithweave.com/api/v1/orders \\
+  -X POST \\
+  -H "x-public-key: pk_live_..." \\
+  -H "x-secret-key: sk_live_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "source":    { "inline": { "kind": "crypto_wallet", "assetKey": "crypto:BASE:USDC", "walletAddress": "0xabc..." } },
+    "amount":    5000,
+    "amountIn":  "dest",
+    "reference": "inv_2024_001",
+    "customer":  { "name": "Amaka Obi", "email": "amaka@example.com" }
+  }'`}
+        </CodeBlock>
       </section>
     </div>
   );
