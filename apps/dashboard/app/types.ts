@@ -52,6 +52,10 @@ export interface Order {
     bankAccountName?: string | null;
     walletAddress?: string | null;
   };
+  customer?: {
+    name?:  string | null;
+    email?: string | null;
+  } | null;
 }
 
 import { 

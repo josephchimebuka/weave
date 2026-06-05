@@ -126,6 +126,19 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
         </div>
       </div>
 
+      {/* Customer */}
+      {(order.customer?.name || order.customer?.email) && (
+        <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '140ms' }}>
+          <div className="px-7 py-5 border-b border-hair-soft">
+            <h2 className="font-display text-[20px] font-semibold text-ink">Customer</h2>
+          </div>
+          <div className="px-7 py-6 grid grid-cols-2 gap-x-8 gap-y-6">
+            {order.customer.name  && <Field label="Name"  value={order.customer.name} />}
+            {order.customer.email && <Field label="Email" value={order.customer.email} />}
+          </div>
+        </div>
+      )}
+
       {/* Fees */}
       <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '160ms' }}>
         <div className="px-7 py-5 border-b border-hair-soft">
