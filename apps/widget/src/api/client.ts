@@ -74,9 +74,28 @@ async function apiFetch(path: string, publishableKey: string, options?: RequestI
   try {
     const res  = await fetch(`${base}${path}`, { ...options, headers, signal: controller.signal });
     if (res.status === 204) return null;
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error ?? 'API error');
-    return json.data;
+
+    // Parse defensively: gateways return non-JSON bodies on 429/502, which the
+    // old `await res.json()` turned into an opaque SyntaxError.
+    const text = await res.text();
+    let json: any = null;
+    if (text) { try { json = JSON.parse(text); } catch { /* non-JSON body */ } }
+
+    if (!res.ok || (json && json.success === false)) {
+      const message =
+        (json && json.error) ||
+        (res.status === 429 ? 'Too many requests — please wait a moment and retry.'
+          : res.status >= 500 ? 'The payment service is temporarily unavailable. Please try again.'
+            : `Request failed (${res.status})`);
+      const err: any = new Error(message);
+      err.status = res.status;
+      // Preserve any recoverable payload (e.g. the existing orderId returned with
+      // a 409 duplicate-reference) instead of discarding it.
+      if (json && json.data) err.data = json.data;
+      throw err;
+    }
+
+    return json ? json.data : null;
   } catch (err: any) {
     if (err?.name === 'AbortError') throw new Error('Request timed out — please check your connection');
     throw err;
@@ -143,7 +162,7 @@ export type InlineInstrument = InlineBankInstrument | InlineWalletInstrument;
 export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstrument };
 
 export interface NextAction {
-  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_bank_transfer' | 'paystack_popup';
+  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup';
   depositAddress?: string;
   depositMemo?:    string;
   amount?:         number;

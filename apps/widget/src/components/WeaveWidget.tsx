@@ -208,6 +208,13 @@ const TOKEN_DP: Record<string, number> = {
 };
 const tokenDp = (token?: string | null) => TOKEN_DP[(token ?? '').toUpperCase()] ?? 6;
 
+// Idempotency reference for an order attempt. Prefer a real UUID; fall back to a
+// random+time string only where crypto.randomUUID is unavailable.
+const newOrderRef = () =>
+  'weave_' + (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36));
+
 // Copy helper that resolves true ONLY when the text actually reached the
 // clipboard. navigator.clipboard is undefined in non-secure contexts, so the
 // old `navigator.clipboard?.writeText(x); setCopied(true)` flashed "Copied" on
@@ -855,6 +862,33 @@ function WeavingLoader() {
 }
 
 
+// Loads the Paystack inline SDK exactly once per page. A cached promise plus an
+// existing-tag check means concurrent or remounting callers never inject a
+// duplicate <script>.
+let _paystackPromise: Promise<void> | null = null;
+function loadPaystackSdk(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).PaystackPop) return Promise.resolve();
+  if (_paystackPromise) return _paystackPromise;
+  _paystackPromise = new Promise<void>((resolve, reject) => {
+    const SRC = 'https://js.paystack.co/v2/inline.js';
+    const fail = () => { _paystackPromise = null; reject(new Error('paystack-load-failed')); };
+    const existing = document.querySelector(`script[src="${SRC}"]`) as HTMLScriptElement | null;
+    if (existing) {
+      if ((window as any).PaystackPop) return resolve();
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', fail);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = SRC;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = fail;
+    document.head.appendChild(script);
+  });
+  return _paystackPromise;
+}
+
 function ScreenPaystackPopup({
   onNext,
   details,
@@ -865,38 +899,36 @@ function ScreenPaystackPopup({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const launched = useRef(false);
+  // Guard every async callback below — the SDK load + popup callbacks can fire
+  // after the user navigates away, which would setState on an unmounted screen.
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   const launch = () => {
     if (!details) { setError('Payment details unavailable. Please retry.'); setLoading(false); return; }
     const { accessCode } = details;
-
-    const open = () => {
-      if (launched.current) return;
-      launched.current = true;
-      setLoading(false);
+    setError(null);
+    setLoading(true);
+    loadPaystackSdk().then(() => {
+      if (!mounted.current || launched.current) return;
       const Pop = (window as any).PaystackPop;
       if (!Pop) {
         setError('Paystack failed to load. Please check your connection and retry.');
-        launched.current = false;
+        setLoading(false);
         return;
       }
+      launched.current = true;
+      setLoading(false);
       const popup = new Pop();
       popup.resumeTransaction(accessCode, {
-        onSuccess: () => onNext('processing'),
+        onSuccess: () => { if (mounted.current) onNext('processing'); },
         onCancel: () => { launched.current = false; },
       });
-    };
-
-    if ((window as any).PaystackPop) { open(); return; }
-
-    const script = document.createElement('script');
-    script.src = 'https://js.paystack.co/v2/inline.js';
-    script.onload = open;
-    script.onerror = () => {
+    }).catch(() => {
+      if (!mounted.current) return;
       setLoading(false);
       setError('Could not load Paystack. Check your network and try again.');
-    };
-    document.head.appendChild(script);
+    });
   };
 
   useEffect(() => { launch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1249,7 +1281,7 @@ function ScreenSuccess({
   );
 }
 
-function ScreenError({ onNext, onBack }: { onNext: (s: string) => void; onBack: (s: string) => void }) {
+function ScreenError({ onNext, onBack, message }: { onNext: (s: string) => void; onBack: (s: string) => void; message?: string | null }) {
   return (
     <Stack gap={16} style={{ padding: '28px 20px 12px', minHeight: 360 }}>
       <Stack gap={14} style={{ alignItems: 'center', paddingTop: 8 }}>
@@ -1259,7 +1291,7 @@ function ScreenError({ onNext, onBack }: { onNext: (s: string) => void; onBack: 
         <Stack gap={4} style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 18, fontWeight: 600 }}>Transaction didn't go through</div>
           <div style={{ fontSize: 13, color: WEAVE.mute, textAlign: 'center', maxWidth: 280 }}>
-            Your wallet rejected the signature or the rate expired. No funds were moved.
+            {message || 'Something went wrong while processing your payment. No funds were moved.'}
           </div>
         </Stack>
       </Stack>
@@ -2583,6 +2615,7 @@ function WeaveCheckoutInner({
 
   useEffect(() => {
     if (!apiKey) return;
+    let cancelled = false;
     setLoadingEthPrice(true);
     fetchQuote(apiKey, {
       from: 'crypto:ETHEREUM:ETH',
@@ -2590,6 +2623,7 @@ function WeaveCheckoutInner({
       amount: 1,
       amountIn: 'source'
     }).then(q => {
+      if (cancelled) return;
       // Find the fiat rate to convert back to USD
       const fiatAsset = supportedAssets.fiat.find(f => f.key === fiatKey(merchant.currency));
       const rate = fiatAsset?.rate || 1515;
@@ -2599,9 +2633,11 @@ function WeaveCheckoutInner({
       }
       setLoadingEthPrice(false);
     }).catch(err => {
+      if (cancelled) return;
       console.warn('[WeaveCheckoutInner] Live ETH price fetch failed:', err);
       setLoadingEthPrice(false);
     });
+    return () => { cancelled = true; };
   }, [apiKey, merchant.currency, supportedAssets.fiat]);
 
   // 2. Persistence logic: Save state whenever orderId or screen changes
@@ -2720,7 +2756,7 @@ function WeaveCheckoutInner({
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: '' },
       };
-      pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      pendingOrderRef.current ??= newOrderRef();
       const res = await createOrder(apiKey, {
         source,
         amount: targetAmount,
@@ -2853,7 +2889,7 @@ function WeaveCheckoutInner({
           bankAccountName: refundAccount.accountName,
         },
       };
-      pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      pendingOrderRef.current ??= newOrderRef();
       const res = await createOrder(apiKey, {
         source,
         amount: merchant.amount,
@@ -2919,7 +2955,7 @@ function WeaveCheckoutInner({
             walletAddress: isWalletFlow ? wagmiAddress! : userAddress,
           },
         };
-        pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        pendingOrderRef.current ??= newOrderRef();
         const res = await createOrder(apiKey, {
           source,
           amount: merchant.amount,
@@ -3043,7 +3079,7 @@ function WeaveCheckoutInner({
       if (screen === 'paystack_popup') return <ScreenPaystackPopup onNext={advance} details={paystackPopupDetails} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
-      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} />;
+      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} message={apiError} />;
     } else {
       if (screen === 'walletConnect') return <ScreenWalletConnect onConnected={() => setScreen('walletAsset')} onExternalFlow={() => { setDirection('offramp'); setScreen('deposit'); }} />;
       if (screen === 'walletAsset') return <ScreenWalletAsset onSelectToken={(token, bal) => advanceToWalletQuote(bal, token)} onExternalFlow={() => setScreen('deposit')} merchant={merchant} currencies={currencies} fmtCur={fmtCur} ethUsdPrice={ethUsdPrice} loadingEthPrice={loadingEthPrice} />;
@@ -3053,7 +3089,7 @@ function WeaveCheckoutInner({
       if (screen === 'quote') return <ScreenQuote merchant={merchant} balance={walletBalanceEntry ?? balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
-      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')} />;
+      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')} message={apiError} />;
     }
     return null;
   })();
