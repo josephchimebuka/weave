@@ -22,7 +22,7 @@ import {
 } from 'wagmi';
 import { waitForTransactionReceipt } from '@wagmi/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { formatEther, formatUnits, parseEther, parseUnits } from 'viem';
+import { formatEther, formatUnits, parseEther, parseUnits, isAddress } from 'viem';
 
 const MINIMAL_ERC20_ABI = [
   {
@@ -214,6 +214,41 @@ const newOrderRef = () =>
   'weave_' + (typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36));
+
+// EVM chains where we can verify an address shape with certainty. Non-EVM chains
+// (XRP, TON, Stellar, Solana, BTC, …) pass through — we have no reliable
+// validator and a false reject would block a legitimate payment.
+const EVM_CHAINS = new Set(['BASE', 'ETHEREUM', 'ARBITRUM', 'OPTIMISM', 'POLYGON', 'BSC', 'AVALANCHE']);
+
+// Defense-in-depth: never blindly trust an API-returned deposit address — the
+// user pays into it irreversibly. Returns an error message if the address is
+// missing, or malformed for the chain the user actually selected; null if it's
+// acceptable (or a non-EVM chain we can't verify). Also flags a chain/token echo
+// mismatch, which would mean the response doesn't describe what we asked for.
+function depositAddressError(
+  address: string | null | undefined,
+  requestedChain: string | null | undefined,
+  opts?: { resChain?: string | null; resToken?: string | null; requestedToken?: string | null },
+): string | null {
+  const addr = (address ?? '').trim();
+  if (!addr) return 'No deposit address was returned. Please try again.';
+
+  const chain = (requestedChain ?? '').toUpperCase();
+  if (EVM_CHAINS.has(chain) && !isAddress(addr)) {
+    return 'The deposit address looked invalid, so we stopped before you could send funds. Please try again.';
+  }
+
+  // If the backend echoes a chain/token, it must match what we requested.
+  const rc = (opts?.resChain ?? '').toUpperCase();
+  const rt = (opts?.resToken ?? '').toUpperCase();
+  if (rc && chain && rc !== chain) {
+    return 'The payment network did not match your selection, so we stopped. Please try again.';
+  }
+  if (rt && opts?.requestedToken && rt !== opts.requestedToken.toUpperCase()) {
+    return 'The payment token did not match your selection, so we stopped. Please try again.';
+  }
+  return null;
+}
 
 // Copy helper that resolves true ONLY when the text actually reached the
 // clipboard. navigator.clipboard is undefined in non-secure contexts, so the
@@ -2773,6 +2808,12 @@ function WeaveCheckoutInner({
         } : undefined,
       });
       if (depositReq.current !== myReq) return;
+      // Validate the API-returned address against the chain the user selected,
+      // before we render it and they irreversibly pay into it.
+      const addrErr = depositAddressError(res.nextAction.depositAddress, apiChain, {
+        resChain: res.nextAction.chain, resToken: res.nextAction.token, requestedToken: token,
+      });
+      if (addrErr) throw new Error(addrErr);
       pendingOrderRef.current = null;
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
@@ -2972,6 +3013,12 @@ function WeaveCheckoutInner({
           } : undefined,
         });
         pendingOrderRef.current = null;
+        // Validate the API-returned address against the selected chain before we
+        // sign a transfer to it.
+        const offrampAddrErr = depositAddressError(res.nextAction.depositAddress, apiChain, {
+          resChain: res.nextAction.chain, resToken: res.nextAction.token, requestedToken: token,
+        });
+        if (offrampAddrErr) throw new Error(offrampAddrErr);
         activeOrderId = res.order.id;
         activeDepositAddr = res.nextAction.depositAddress ?? null;
         activeSourceAmt = res.order.sourceAmount;
