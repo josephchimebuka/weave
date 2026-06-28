@@ -208,6 +208,33 @@ const TOKEN_DP: Record<string, number> = {
 };
 const tokenDp = (token?: string | null) => TOKEN_DP[(token ?? '').toUpperCase()] ?? 6;
 
+// Copy helper that resolves true ONLY when the text actually reached the
+// clipboard. navigator.clipboard is undefined in non-secure contexts, so the
+// old `navigator.clipboard?.writeText(x); setCopied(true)` flashed "Copied" on
+// a silent no-op for a high-stakes payment address. Falls back to execCommand.
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to the legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string, accentColor?: string) => {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -411,8 +438,8 @@ function WidgetHeader({
       borderBottom: `1px solid ${WEAVE.hair}`,
     }}>
       {showBack ? (
-        <button onClick={onBack} style={backBtn}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        <button onClick={onBack} style={backBtn} aria-label="Go back">
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -423,8 +450,8 @@ function WidgetHeader({
       <div style={{ flex: 1, textAlign: 'center', fontSize: 12.5, color: WEAVE.mute }}>
         Paying <span style={{ color: WEAVE.ink, fontWeight: 500 }}>{merchantName}</span>
       </div>
-      <button onClick={onClose} style={closeBtn}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
+      <button onClick={onClose} style={closeBtn} aria-label="Close checkout">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
       </button>
     </div>
   );
@@ -1011,19 +1038,22 @@ function ScreenProcessing({
   }, [orderId, apiKey]);
 
   const currentStage = stages[Math.min(stage, stages.length - 1)];
+  // Bank-led settlement is 30s–2min; past ~2min, reassure rather than spin
+  // silently forever. Polling continues — this is informational, not terminal.
+  const takingLong = !!orderId && seconds >= 120;
 
   return (
     <Stack gap={20} style={{ padding: '28px 20px 12px', minHeight: 360 }}>
       <Stack gap={12} style={{ alignItems: 'center', paddingTop: 12 }}>
         <WeavingLoader />
-        <Stack gap={4} style={{ alignItems: 'center' }}>
+        <div role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
           <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: -0.3 }}>
             {currentStage.label}
           </div>
           <div style={{ fontSize: 12.5, color: WEAVE.mute, textAlign: 'center' }}>
             {currentStage.sub}
           </div>
-        </Stack>
+        </div>
       </Stack>
 
       <Stack gap={0} style={{ padding: '4px 8px' }}>
@@ -1054,6 +1084,18 @@ function ScreenProcessing({
           </Row>
         ))}
       </Stack>
+
+      {takingLong && (
+        <div style={{
+          background: WEAVE.warnSoft, border: `1px solid ${WEAVE.warn}22`,
+          borderRadius: 10, padding: '10px 12px', fontSize: 11.5,
+          color: WEAVE.warn, lineHeight: 1.5,
+        }}>
+          This is taking longer than usual, but your payment is still being confirmed —
+          you don't need to pay again. It's safe to close this window; we'll email your
+          receipt once it settles{orderId ? ` (ref: ${orderId})` : ''}.
+        </div>
+      )}
 
       <div style={{ fontSize: 11, color: WEAVE.mute, textAlign: 'center' }}>
         You can safely close this window. We'll email a receipt.
@@ -1416,16 +1458,20 @@ function ScreenDeposit({
 
   const copy = () => {
     if (!address) return;
-    navigator.clipboard?.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    copyToClipboard(address).then(ok => {
+      if (!ok) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
 
   const copyMemo = () => {
     if (!memo) return;
-    navigator.clipboard?.writeText(memo);
-    setMemoCopied(true);
-    setTimeout(() => setMemoCopied(false), 1500);
+    copyToClipboard(memo).then(ok => {
+      if (!ok) return;
+      setMemoCopied(true);
+      setTimeout(() => setMemoCopied(false), 1500);
+    });
   };
 
   // When the picker is open, the whole body swaps to a dedicated selection
@@ -1642,9 +1688,6 @@ function ScreenDeposit({
                   on {chain.name}
                 </div>
               </Stack>
-              <div style={{ fontSize: 10.5, color: WEAVE.mute, lineHeight: 1.4 }}>
-                Rate locked for <span style={{ color: WEAVE.ink, fontWeight: 500 }}>9:42</span>
-              </div>
             </Stack>
           </div>
 
@@ -1942,19 +1985,20 @@ function ScreenVirtualAccount({
     })()
     : fmtCur(merchant.amount, merchant.currency);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [mins, setMins] = useState(9);
-  const [secs, setSecs] = useState(42);
 
+  // Drive the countdown from the real account expiry (validUntil), not a fake
+  // 9:42. If the backend didn't supply one, hide the timer rather than invent a
+  // deadline.
+  const expiryMs = bankDetails?.validUntil ? new Date(bankDetails.validUntil).getTime() : null;
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => {
-      setSecs((s) => {
-        if (s > 0) return s - 1;
-        setMins((m) => Math.max(0, m - 1));
-        return 59;
-      });
-    }, 1000);
+    if (expiryMs == null) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [expiryMs]);
+  const remainingMs = expiryMs != null ? Math.max(0, expiryMs - now) : null;
+  const mins = remainingMs != null ? Math.floor(remainingMs / 60000) : null;
+  const secs = remainingMs != null ? Math.floor((remainingMs % 60000) / 1000) : null;
 
   useEffect(() => {
     if (!orderId) return;
@@ -1980,9 +2024,11 @@ function ScreenVirtualAccount({
   }, [apiKey, orderId, onNext]);
 
   const copy = (key: string, value: string) => {
-    navigator.clipboard?.writeText(value);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 1400);
+    copyToClipboard(value).then(ok => {
+      if (!ok) return;
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1400);
+    });
   };
 
   const Field = ({ label, value, k, mono = true }: { label: string; value: string; k: string; mono?: boolean }) => (
@@ -2021,10 +2067,12 @@ function ScreenVirtualAccount({
           <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>
             Send {displayAmount}
           </div>
-          <Pill tone="warn">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M12 7V12L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
-            {mins}:{String(secs).padStart(2, '0')}
-          </Pill>
+          {remainingMs != null && (
+            <Pill tone="warn">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M12 7V12L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+              {mins}:{String(secs).padStart(2, '0')}
+            </Pill>
+          )}
         </Row>
         <div style={{ fontSize: 12.5, color: WEAVE.mute, lineHeight: 1.5 }}>
           Open your bank app and transfer to this account. We'll confirm your payment automatically — no need to send proof.
@@ -2665,6 +2713,9 @@ function WeaveCheckoutInner({
       const q = await fetchQuote(apiKey, {
         from, to, amount: targetAmount, amountIn: finalAmountIn,
       });
+      // A newer chain selection superseded this one while we were quoting — bail
+      // BEFORE creating an order so a stale request doesn't leave an orphan.
+      if (depositReq.current !== myReq) return;
       // External flow: sender identity is unknown at order-creation time.
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: '' },
@@ -2696,6 +2747,9 @@ function WeaveCheckoutInner({
       setDepositChain(res.nextAction.chain ?? apiChain);
     } catch (e: any) {
       if (depositReq.current !== myReq) return;
+      // Clear the idempotency ref so a retry (especially on a different chain)
+      // gets a fresh reference instead of colliding with this failed attempt.
+      pendingOrderRef.current = null;
       setDepositError(e.message ?? 'Could not generate a deposit address');
       onError?.(e);
     } finally {
@@ -2823,6 +2877,8 @@ function WeaveCheckoutInner({
           'vaccount';
       setScreen(nextScreen);
     } catch (e: any) {
+      // Clear the idempotency ref so a retry gets a fresh reference.
+      pendingOrderRef.current = null;
       setApiError(e.message ?? 'Failed to create order');
       onError?.(e);
     } finally {
@@ -2935,6 +2991,10 @@ function WeaveCheckoutInner({
       const msg = e.message ?? '';
       const rejected = msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied') || msg.toLowerCase().includes('cancelled');
       setApiError(rejected ? 'Transaction was rejected. Please try again.' : (msg || 'Failed to complete payment'));
+      // Clear the idempotency ref so a retry that needs a fresh order gets a new
+      // reference. When an order was already created, orderId is set and the
+      // retry reuses it, so this only bites when creation itself failed.
+      pendingOrderRef.current = null;
       if (enteredWalletSign) setScreen('quote');
       onError?.(e);
     } finally {
@@ -2944,17 +3004,17 @@ function WeaveCheckoutInner({
 
   if (closed) {
     return (
-      <div style={{
+      <button type="button" aria-label="Reopen Weave checkout" style={{
         position: 'absolute', bottom: 24, right: 24, zIndex: 10,
-        background: WEAVE.ink, color: '#fff',
-        padding: '10px 16px', borderRadius: 999, fontSize: 13,
+        background: WEAVE.ink, color: '#fff', border: 'none',
+        padding: '10px 16px', borderRadius: 999, fontSize: 13, fontFamily: 'inherit',
         display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
         boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
         minWidth: '185px',
       }} onClick={() => setClosed(false)}>
         <WeaveMark size={16} />
         Pay with Weave
-      </div>
+      </button>
     );
   }
 
@@ -3010,6 +3070,9 @@ function WeaveCheckoutInner({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Pay ${merchant.name}`}
       className={`weave-checkout weave-theme-${theme}`}
       style={{
         '--weave-accent': ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C',
