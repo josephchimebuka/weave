@@ -1285,7 +1285,7 @@ const buildDepositQRPayload = (
 };
 
 function ScreenDeposit({
-  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, ready, apiKey, orderId, preSelectedChainIdx,
+  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, ready, apiKey, orderId, preSelectedChainKey,
   depositChains, currencies, fmtCur,
 }: {
   onNext: (s: string) => void;
@@ -1301,7 +1301,7 @@ function ScreenDeposit({
   onChainChange: (apiChain: string, token: string, refundAddress: string) => void;
   apiKey: string;
   orderId: string | null;
-  preSelectedChainIdx?: number | null;
+  preSelectedChainKey?: string | null;
   depositChains: CryptoMeta[];
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
@@ -1309,7 +1309,10 @@ function ScreenDeposit({
   // chainIdx stays null until the user picks a network — we don't want to
   // spin up a NEAR Intents quote / Paycrest order on mount with an arbitrary default.
   const [nearStatus, setNearStatus] = useState<string>('');
-  const [chainIdx, setChainIdx] = useState<number | null>(preSelectedChainIdx ?? null);
+  const [chainIdx, setChainIdx] = useState<number | null>(null);
+  // True once the user manually picks a network, after which we never let the
+  // pre-select resolver below override their choice.
+  const userPickedChain = useRef(false);
 
   const [chainPickerOpen, setChainPickerOpen] = useState(false);
   const [chainSearch, setChainSearch] = useState('');
@@ -1347,6 +1350,17 @@ function ScreenDeposit({
     setOrderSubmitted(true);
     onChainChange(chain.id, chain.token, refundAddress.trim());
   };
+
+  // Resolve the pre-selected network by KEY against the LIVE chain list, not a
+  // cached index. depositChains can change from the fallback to the API-synced
+  // list after mount, so an index captured earlier could point at the wrong
+  // network. We re-resolve whenever the list or key changes, until the user
+  // makes their own pick.
+  useEffect(() => {
+    if (userPickedChain.current || !preSelectedChainKey) return;
+    const idx = depositChains.findIndex(c => `${c.id}:${c.token}` === preSelectedChainKey);
+    setChainIdx(idx === -1 ? null : idx);
+  }, [preSelectedChainKey, depositChains]);
 
   // When the user changes the selected chain we invalidate the previous submission
   // so they can enter a chain-appropriate refund address.
@@ -1460,7 +1474,7 @@ function ScreenDeposit({
             </div>
           ) : (
             filteredChains.map(({ c, i }) => (
-              <button key={`${c.id}:${c.token}`} onClick={() => { setChainIdx(i); setChainPickerOpen(false); setChainSearch(''); }} style={{
+              <button key={`${c.id}:${c.token}`} onClick={() => { userPickedChain.current = true; setChainIdx(i); setChainPickerOpen(false); setChainSearch(''); }} style={{
                 width: '100%', padding: '10px 10px', borderRadius: 7,
                 background: i === chainIdx ? WEAVE.accentSoft : 'transparent',
                 border: 'none', cursor: 'pointer', fontFamily: 'inherit',
@@ -2367,7 +2381,9 @@ function WeaveCheckoutInner({
   const { disconnect: wagmiDisconnect } = useDisconnect();
   const disconnect = () => {
     wagmiDisconnect();
-    localStorage.clear();
+    // Only clear the widget's own resume record — NEVER localStorage.clear(),
+    // which would wipe the merchant host page's entire origin storage.
+    try { localStorage.removeItem(`weave-order-${apiKey}`); } catch { /* storage unavailable */ }
   };
   const { writeContractAsync } = useWriteContract();
   const { sendTransactionAsync } = useSendTransaction();
@@ -2375,7 +2391,7 @@ function WeaveCheckoutInner({
   const [screen, setScreen] = useState('connect');
   const [direction, setDirection] = useState<'offramp' | 'onramp'>('offramp');
   const [selectedBalance, setSelectedBalance] = useState<number | null>(0);
-  const [preSelectedChainIdx, setPreSelectedChainIdx] = useState<number | null>(null);
+  const [preSelectedChainKey, setPreSelectedChainKey] = useState<string | null>(null);
   const [closed, setClosed] = useState(false);
   const [refundAccount, setRefundAccount] = useState<RefundAccount>({
     institution: '',
@@ -2488,11 +2504,14 @@ function WeaveCheckoutInner({
       if (data) setSupportedAssets(data);
     }).catch(() => { });
 
-    // Existing: Pre-selection logic
-    if (merchant.sourceAssetKey && merchant.amountIn === 'source') {
-      const idx = supportedAssets.crypto.findIndex(c => `${c.id}:${c.token}` === merchant.sourceAssetKey?.split('crypto:')[1]);
-      if (idx !== -1) {
-        setPreSelectedChainIdx(idx);
+    // Pre-selection: stash the source asset KEY, not an index. supportedAssets is
+    // still the fallback list here (fetchAssets above is async), so an index
+    // captured now could point at the wrong network once the API list loads.
+    // ScreenDeposit resolves the key against the live list at render time.
+    if (merchant.sourceAssetKey?.startsWith('crypto:') && merchant.amountIn === 'source') {
+      const key = merchant.sourceAssetKey.split('crypto:')[1] || null;
+      if (key) {
+        setPreSelectedChainKey(key);
         setDirection('offramp');
         setScreen('deposit');
       }
@@ -2803,6 +2822,10 @@ function WeaveCheckoutInner({
     // Use real wallet balance entry if in the connect-wallet flow, else fall back to mock BALANCES
     const bal = walletBalanceEntry ?? BALANCES[selectedBalance ?? 0];
     const isWalletFlow = wagmiConnected && wagmiAddress && wagmiChainId && walletBalanceEntry;
+    // Track wallet-sign entry locally. The `screen` closure is stale inside this
+    // async handler (it's whatever it was at render, e.g. 'quote'), so the catch
+    // below must NOT read `screen` to decide whether to navigate back.
+    let enteredWalletSign = false;
 
     setSubmitting(true);
     setApiError(null);
@@ -2855,6 +2878,7 @@ function WeaveCheckoutInner({
 
       if (isWalletFlow && activeDepositAddr) {
         // Self flow: prompt wallet to sign the transfer to the ChainRails intent address
+        enteredWalletSign = true;
         setScreen('walletSign');
         const token = walletToken;
         const sourceAmt = activeSourceAmt!;
@@ -2896,7 +2920,7 @@ function WeaveCheckoutInner({
       const msg = e.message ?? '';
       const rejected = msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied') || msg.toLowerCase().includes('cancelled');
       setApiError(rejected ? 'Transaction was rejected. Please try again.' : (msg || 'Failed to complete payment'));
-      if (screen === 'walletSign') setScreen('quote');
+      if (enteredWalletSign) setScreen('quote');
       onError?.(e);
     } finally {
       setSubmitting(false);
@@ -2949,7 +2973,7 @@ function WeaveCheckoutInner({
       if (screen === 'walletConnect') return <ScreenWalletConnect onConnected={() => setScreen('walletAsset')} onExternalFlow={() => { setDirection('offramp'); setScreen('deposit'); }} />;
       if (screen === 'walletAsset') return <ScreenWalletAsset onSelectToken={(token, bal) => advanceToWalletQuote(bal, token)} onExternalFlow={() => setScreen('deposit')} merchant={merchant} currencies={currencies} fmtCur={fmtCur} ethUsdPrice={ethUsdPrice} loadingEthPrice={loadingEthPrice} />;
       if (screen === 'walletSign') return <ScreenWalletSign onRetry={confirmOfframp} />;
-      if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainIdx={preSelectedChainIdx} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainKey={preSelectedChainKey} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'wallet') return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance} currencies={currencies} />;
       if (screen === 'quote') return <ScreenQuote merchant={merchant} balance={walletBalanceEntry ?? balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
