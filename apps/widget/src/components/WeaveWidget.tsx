@@ -22,7 +22,7 @@ import {
 } from 'wagmi';
 import { waitForTransactionReceipt } from '@wagmi/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { formatEther, formatUnits, parseEther, parseUnits } from 'viem';
+import { formatEther, formatUnits, parseEther, parseUnits, isAddress } from 'viem';
 
 const MINIMAL_ERC20_ABI = [
   {
@@ -57,7 +57,8 @@ import {
   type InlineBankInstrument,
   type InlineWalletInstrument,
   type NextAction,
-  fetchAssets
+  fetchAssets,
+  configureApiBase
 } from '../api/client';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
@@ -183,6 +184,9 @@ const fmtMoney = (n: number, cur: string, fractionDigits?: number) => {
     maximumFractionDigits: dp,
   }).format(rounded);
 
+  // No CURRENCIES entry (e.g. a crypto-denominated merchant) — don't crash on
+  // c.symbol; show the amount with its currency/token code instead.
+  if (!c) return `${formatted} ${cur}`;
   return `${c.symbol}${formatted}`;
 };
 const fmtCrypto = (n: number, precision: number = 4) => {
@@ -193,6 +197,94 @@ const fmtCrypto = (n: number, precision: number = 4) => {
     maximumFractionDigits: precision,
   });
 };
+
+// Decimal places to display per token. fmtCrypto rounds UP (so the payer never
+// underpays), but a coarse 4dp ceil on high-unit-value tokens (BTC/ETH) tells
+// the payer to send materially MORE than the locked quote. Give those tokens
+// finer precision so the rounding overcharge is negligible; stables stay compact.
+const TOKEN_DP: Record<string, number> = {
+  BTC: 8, WBTC: 8, ETH: 6, WETH: 6, BNB: 5, SOL: 5, AVAX: 5,
+  USDC: 2, USDT: 2, DAI: 2,
+};
+const tokenDp = (token?: string | null) => TOKEN_DP[(token ?? '').toUpperCase()] ?? 6;
+
+// Idempotency reference for an order attempt. Prefer a real UUID; fall back to a
+// random+time string only where crypto.randomUUID is unavailable.
+const newOrderRef = () =>
+  'weave_' + (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36));
+
+// EVM chains where we can verify an address shape with certainty. Non-EVM chains
+// (XRP, TON, Stellar, Solana, BTC, …) pass through — we have no reliable
+// validator and a false reject would block a legitimate payment.
+const EVM_CHAINS = new Set(['BASE', 'ETHEREUM', 'ARBITRUM', 'OPTIMISM', 'POLYGON', 'BSC', 'AVALANCHE']);
+
+// Defense-in-depth: never blindly trust an API-returned deposit address — the
+// user pays into it irreversibly. Returns an error message if the address is
+// missing, or malformed for the chain the user actually selected; null if it's
+// acceptable (or a non-EVM chain we can't verify). Also flags a chain/token echo
+// mismatch, which would mean the response doesn't describe what we asked for.
+function depositAddressError(
+  address: string | null | undefined,
+  requestedChain: string | null | undefined,
+  opts?: { resChain?: string | null; resToken?: string | null; requestedToken?: string | null },
+): string | null {
+  const addr = (address ?? '').trim();
+  if (!addr) return 'No deposit address was returned. Please try again.';
+
+  const chain = (requestedChain ?? '').toUpperCase();
+  if (EVM_CHAINS.has(chain) && !isAddress(addr)) {
+    return 'The deposit address looked invalid, so we stopped before you could send funds. Please try again.';
+  }
+
+  // If the backend echoes a chain/token, it must match what we requested.
+  const rc = (opts?.resChain ?? '').toUpperCase();
+  const rt = (opts?.resToken ?? '').toUpperCase();
+  if (rc && chain && rc !== chain) {
+    return 'The payment network did not match your selection, so we stopped. Please try again.';
+  }
+  if (rt && opts?.requestedToken && rt !== opts.requestedToken.toUpperCase()) {
+    return 'The payment token did not match your selection, so we stopped. Please try again.';
+  }
+  return null;
+}
+
+// On a 409 (an order for this reference already exists — typically a concurrent
+// duplicate submit), fetch the existing order so the caller can resume from it
+// instead of dead-ending on an error. Returns the order, or null if it's not a
+// recoverable 409 / the fetch fails.
+async function fetchExistingOrderOn409(apiKey: string, e: any): Promise<any | null> {
+  if (e?.status !== 409 || !e?.data?.orderId) return null;
+  try { return await fetchOrder(apiKey, e.data.orderId); } catch { return null; }
+}
+
+// Copy helper that resolves true ONLY when the text actually reached the
+// clipboard. navigator.clipboard is undefined in non-secure contexts, so the
+// old `navigator.clipboard?.writeText(x); setCopied(true)` flashed "Copied" on
+// a silent no-op for a high-stakes payment address. Falls back to execCommand.
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to the legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 // USD-pegged stablecoins render with a "$" prefix to match the hosted pay page.
 const USD_STABLES = new Set(['USDC', 'USDT', 'DAI', 'USDBC', 'PYUSD', 'USDC.E']);
@@ -422,8 +514,8 @@ function WidgetHeader({
       borderBottom: `1px solid ${WEAVE.hair}`,
     }}>
       {showBack ? (
-        <button onClick={onBack} style={backBtn}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        <button onClick={onBack} style={backBtn} aria-label="Go back">
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18L9 12L15 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -434,8 +526,8 @@ function WidgetHeader({
       <div style={{ flex: 1, textAlign: 'center', fontSize: 12.5, color: WEAVE.mute }}>
         Paying <span style={{ color: WEAVE.ink, fontWeight: 500 }}>{merchantName}</span>
       </div>
-      <button onClick={onClose} style={closeBtn}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
+      <button onClick={onClose} style={closeBtn} aria-label="Close checkout">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
       </button>
     </div>
   );
@@ -584,7 +676,14 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
           style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
         >
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <IconDot bg="#F6851B" size={24}>🦊</IconDot>
+            {/* Neutral QR/scan glyph — this routes to a deposit-address flow for ANY
+                wallet, not a MetaMask connect, so we don't show the fox here. */}
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1.2" stroke={WEAVE.ink} strokeWidth="1.7" />
+              <rect x="14" y="3" width="7" height="7" rx="1.2" stroke={WEAVE.ink} strokeWidth="1.7" />
+              <rect x="3" y="14" width="7" height="7" rx="1.2" stroke={WEAVE.ink} strokeWidth="1.7" />
+              <path d="M14 14h3.5v3.5M21 14v7h-7v-3.5" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 500 }}>Pay with crypto</div>
@@ -815,7 +914,7 @@ function ScreenQuote({
           )}
         </button>
         <div style={{ fontSize: 11, color: WEAVE.mute, textAlign: 'center' }}>
-          Rate locked for 30s · You'll sign one transaction in your wallet
+          You'll sign one transaction in your wallet
         </div>
       </Stack>
     </Stack>
@@ -839,6 +938,33 @@ function WeavingLoader() {
 }
 
 
+// Loads the Paystack inline SDK exactly once per page. A cached promise plus an
+// existing-tag check means concurrent or remounting callers never inject a
+// duplicate <script>.
+let _paystackPromise: Promise<void> | null = null;
+function loadPaystackSdk(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).PaystackPop) return Promise.resolve();
+  if (_paystackPromise) return _paystackPromise;
+  _paystackPromise = new Promise<void>((resolve, reject) => {
+    const SRC = 'https://js.paystack.co/v2/inline.js';
+    const fail = () => { _paystackPromise = null; reject(new Error('paystack-load-failed')); };
+    const existing = document.querySelector(`script[src="${SRC}"]`) as HTMLScriptElement | null;
+    if (existing) {
+      if ((window as any).PaystackPop) return resolve();
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', fail);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = SRC;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = fail;
+    document.head.appendChild(script);
+  });
+  return _paystackPromise;
+}
+
 function ScreenPaystackPopup({
   onNext,
   details,
@@ -849,38 +975,36 @@ function ScreenPaystackPopup({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const launched = useRef(false);
+  // Guard every async callback below — the SDK load + popup callbacks can fire
+  // after the user navigates away, which would setState on an unmounted screen.
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   const launch = () => {
     if (!details) { setError('Payment details unavailable. Please retry.'); setLoading(false); return; }
     const { accessCode } = details;
-
-    const open = () => {
-      if (launched.current) return;
-      launched.current = true;
-      setLoading(false);
+    setError(null);
+    setLoading(true);
+    loadPaystackSdk().then(() => {
+      if (!mounted.current || launched.current) return;
       const Pop = (window as any).PaystackPop;
       if (!Pop) {
         setError('Paystack failed to load. Please check your connection and retry.');
-        launched.current = false;
+        setLoading(false);
         return;
       }
+      launched.current = true;
+      setLoading(false);
       const popup = new Pop();
       popup.resumeTransaction(accessCode, {
-        onSuccess: () => onNext('processing'),
+        onSuccess: () => { if (mounted.current) onNext('processing'); },
         onCancel: () => { launched.current = false; },
       });
-    };
-
-    if ((window as any).PaystackPop) { open(); return; }
-
-    const script = document.createElement('script');
-    script.src = 'https://js.paystack.co/v2/inline.js';
-    script.onload = open;
-    script.onerror = () => {
+    }).catch(() => {
+      if (!mounted.current) return;
       setLoading(false);
       setError('Could not load Paystack. Check your network and try again.');
-    };
-    document.head.appendChild(script);
+    });
   };
 
   useEffect(() => { launch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -942,7 +1066,7 @@ function ScreenProcessing({
   fmtCur: (n: number, cur: string, dec?: number) => string;
 }) {
   const [stage, setStage] = useState(0);
-  const [, setSeconds] = useState(0);
+  const [seconds, setSeconds] = useState(0);
   const pollTerminated = useRef(false);
   const c = CURRENCIES[merchant.currency];
 
@@ -1022,19 +1146,22 @@ function ScreenProcessing({
   }, [orderId, apiKey]);
 
   const currentStage = stages[Math.min(stage, stages.length - 1)];
+  // Bank-led settlement is 30s–2min; past ~2min, reassure rather than spin
+  // silently forever. Polling continues — this is informational, not terminal.
+  const takingLong = !!orderId && seconds >= 120;
 
   return (
     <Stack gap={20} style={{ padding: '28px 20px 12px', minHeight: 360 }}>
       <Stack gap={12} style={{ alignItems: 'center', paddingTop: 12 }}>
         <WeavingLoader />
-        <Stack gap={4} style={{ alignItems: 'center' }}>
+        <div role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
           <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: -0.3 }}>
             {currentStage.label}
           </div>
           <div style={{ fontSize: 12.5, color: WEAVE.mute, textAlign: 'center' }}>
             {currentStage.sub}
           </div>
-        </Stack>
+        </div>
       </Stack>
 
       <Stack gap={0} style={{ padding: '4px 8px' }}>
@@ -1065,6 +1192,18 @@ function ScreenProcessing({
           </Row>
         ))}
       </Stack>
+
+      {takingLong && (
+        <div style={{
+          background: WEAVE.warnSoft, border: `1px solid ${WEAVE.warn}22`,
+          borderRadius: 10, padding: '10px 12px', fontSize: 11.5,
+          color: WEAVE.warn, lineHeight: 1.5,
+        }}>
+          This is taking longer than usual, but your payment is still being confirmed —
+          you don't need to pay again. It's safe to close this window; we'll email your
+          receipt once it settles{orderId ? ` (ref: ${orderId})` : ''}.
+        </div>
+      )}
 
       <div style={{ fontSize: 11, color: WEAVE.mute, textAlign: 'center' }}>
         You can safely close this window. We'll email a receipt.
@@ -1110,14 +1249,16 @@ function ScreenSuccess({
   // or if we're resuming a stored order whose merchant context has since changed.
   const onrampPaidAmount = order ? Number(order.sourceAmount) : merchant.amount;
   const paidWith = direction === 'offramp' && order
-    ? `${fmtCrypto(Number(order.sourceAmount), 4)} ${sourceToken ?? (asset as any).token}`
+    ? `${fmtCrypto(Number(order.sourceAmount), tokenDp(sourceToken ?? (asset as any).token))} ${sourceToken ?? (asset as any).token}`
     : `${fmtCur(onrampPaidAmount, merchant.currency)}`;
 
   const destBank = order?.destInstrument?.bankInstitution;
-  const settledTo = direction === 'offramp'
-    ? (destBank
-      ? institutionName(merchant.currency, destBank)
-      : (currencies[merchant.currency]?.bank || CURRENCIES[merchant.currency]?.bank))
+  const destIsCrypto = (order?.destAssetKey ?? merchant.destAssetKey ?? '').startsWith('crypto:');
+  // Only show a bank when this is a genuine fiat payout AND we actually have the
+  // destination bank. Crypto-settling merchants (or missing bank info) must NOT
+  // fall back to the hardcoded placeholder bank — show the merchant instead.
+  const settledTo = (direction === 'offramp' && !destIsCrypto && destBank)
+    ? institutionName(merchant.currency, destBank)
     : merchant.name;
 
   const completedInSec = order?.createdAt && order?.updatedAt
@@ -1216,7 +1357,7 @@ function ScreenSuccess({
   );
 }
 
-function ScreenError({ onNext, onBack }: { onNext: (s: string) => void; onBack: (s: string) => void }) {
+function ScreenError({ onNext, onBack, message }: { onNext: (s: string) => void; onBack: (s: string) => void; message?: string | null }) {
   return (
     <Stack gap={16} style={{ padding: '28px 20px 12px', minHeight: 360 }}>
       <Stack gap={14} style={{ alignItems: 'center', paddingTop: 8 }}>
@@ -1226,7 +1367,7 @@ function ScreenError({ onNext, onBack }: { onNext: (s: string) => void; onBack: 
         <Stack gap={4} style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 18, fontWeight: 600 }}>Transaction didn't go through</div>
           <div style={{ fontSize: 13, color: WEAVE.mute, textAlign: 'center', maxWidth: 280 }}>
-            Your wallet rejected the signature or the rate expired. No funds were moved.
+            {message || 'Something went wrong while processing your payment. No funds were moved.'}
           </div>
         </Stack>
       </Stack>
@@ -1309,7 +1450,7 @@ const buildDepositQRPayload = (
 };
 
 function ScreenDeposit({
-  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, apiKey, orderId, preSelectedChainIdx,
+  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, apiKey, orderId, preSelectedChainKey,
   depositChains, currencies,
 }: {
   onNext: (s: string) => void;
@@ -1325,7 +1466,7 @@ function ScreenDeposit({
   onChainChange: (apiChain: string, token: string, refundAddress: string) => void;
   apiKey: string;
   orderId: string | null;
-  preSelectedChainIdx?: number | null;
+  preSelectedChainKey?: string | null;
   depositChains: CryptoMeta[];
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
@@ -1333,7 +1474,10 @@ function ScreenDeposit({
   // chainIdx stays null until the user picks a network — we don't want to
   // spin up a NEAR Intents quote / Paycrest order on mount with an arbitrary default.
   const [nearStatus, setNearStatus] = useState<string>('');
-  const [chainIdx, setChainIdx] = useState<number | null>(preSelectedChainIdx ?? null);
+  const [chainIdx, setChainIdx] = useState<number | null>(null);
+  // True once the user manually picks a network, after which we never let the
+  // pre-select resolver below override their choice.
+  const userPickedChain = useRef(false);
 
   const [chainPickerOpen, setChainPickerOpen] = useState(false);
   const [chainSearch, setChainSearch] = useState('');
@@ -1371,6 +1515,17 @@ function ScreenDeposit({
     setOrderSubmitted(true);
     onChainChange(chain.id, chain.token, refundAddress.trim());
   };
+
+  // Resolve the pre-selected network by KEY against the LIVE chain list, not a
+  // cached index. depositChains can change from the fallback to the API-synced
+  // list after mount, so an index captured earlier could point at the wrong
+  // network. We re-resolve whenever the list or key changes, until the user
+  // makes their own pick.
+  useEffect(() => {
+    if (userPickedChain.current || !preSelectedChainKey) return;
+    const idx = depositChains.findIndex(c => `${c.id}:${c.token}` === preSelectedChainKey);
+    setChainIdx(idx === -1 ? null : idx);
+  }, [preSelectedChainKey, depositChains]);
 
   // When the user changes the selected chain we invalidate the previous submission
   // so they can enter a chain-appropriate refund address.
@@ -1411,16 +1566,20 @@ function ScreenDeposit({
 
   const copy = () => {
     if (!address) return;
-    navigator.clipboard?.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    copyToClipboard(address).then(ok => {
+      if (!ok) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
 
   const copyMemo = () => {
     if (!memo) return;
-    navigator.clipboard?.writeText(memo);
-    setMemoCopied(true);
-    setTimeout(() => setMemoCopied(false), 1500);
+    copyToClipboard(memo).then(ok => {
+      if (!ok) return;
+      setMemoCopied(true);
+      setTimeout(() => setMemoCopied(false), 1500);
+    });
   };
 
   // When the picker is open, the whole body swaps to a dedicated selection
@@ -1484,7 +1643,7 @@ function ScreenDeposit({
             </div>
           ) : (
             filteredChains.map(({ c, i }) => (
-              <button key={`${c.id}:${c.token}`} onClick={() => { setChainIdx(i); setChainPickerOpen(false); setChainSearch(''); }} style={{
+              <button key={`${c.id}:${c.token}`} onClick={() => { userPickedChain.current = true; setChainIdx(i); setChainPickerOpen(false); setChainSearch(''); }} style={{
                 width: '100%', padding: '10px 10px', borderRadius: 7,
                 background: i === chainIdx ? WEAVE.accentSoft : 'transparent',
                 border: 'none', cursor: 'pointer', fontFamily: 'inherit',
@@ -1630,16 +1789,13 @@ function ScreenDeposit({
                   {loading ? (
                     <span style={{ color: WEAVE.mute, fontWeight: 400 }}>Calculating…</span>
                   ) : (
-                    <>{fmtCrypto(displayAmount)} {displayToken}</>
+                    <>{fmtCrypto(displayAmount, tokenDp(displayToken))} {displayToken}</>
                   )}
                 </div>
                 <div style={{ fontSize: 11, color: WEAVE.mute }}>
                   on {chain.name}
                 </div>
               </Stack>
-              <div style={{ fontSize: 10.5, color: WEAVE.mute, lineHeight: 1.4 }}>
-                Rate locked for <span style={{ color: WEAVE.ink, fontWeight: 500 }}>9:42</span>
-              </div>
             </Stack>
           </div>
 
@@ -1937,19 +2093,20 @@ function ScreenVirtualAccount({
     })()
     : fmtCur(merchant.amount, merchant.currency);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [mins, setMins] = useState(9);
-  const [secs, setSecs] = useState(42);
 
+  // Drive the countdown from the real account expiry (validUntil), not a fake
+  // 9:42. If the backend didn't supply one, hide the timer rather than invent a
+  // deadline.
+  const expiryMs = bankDetails?.validUntil ? new Date(bankDetails.validUntil).getTime() : null;
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => {
-      setSecs((s) => {
-        if (s > 0) return s - 1;
-        setMins((m) => Math.max(0, m - 1));
-        return 59;
-      });
-    }, 1000);
+    if (expiryMs == null) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [expiryMs]);
+  const remainingMs = expiryMs != null ? Math.max(0, expiryMs - now) : null;
+  const mins = remainingMs != null ? Math.floor(remainingMs / 60000) : null;
+  const secs = remainingMs != null ? Math.floor((remainingMs % 60000) / 1000) : null;
 
   useEffect(() => {
     if (!orderId) return;
@@ -1975,9 +2132,11 @@ function ScreenVirtualAccount({
   }, [apiKey, orderId, onNext]);
 
   const copy = (key: string, value: string) => {
-    navigator.clipboard?.writeText(value);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 1400);
+    copyToClipboard(value).then(ok => {
+      if (!ok) return;
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1400);
+    });
   };
 
   const Field = ({ label, value, k, mono = true }: { label: string; value: string; k: string; mono?: boolean }) => (
@@ -2016,10 +2175,12 @@ function ScreenVirtualAccount({
           <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>
             Send {displayAmount}
           </div>
-          <Pill tone="warn">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M12 7V12L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
-            {mins}:{String(secs).padStart(2, '0')}
-          </Pill>
+          {remainingMs != null && (
+            <Pill tone="warn">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M12 7V12L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+              {mins}:{String(secs).padStart(2, '0')}
+            </Pill>
+          )}
         </Row>
         <div style={{ fontSize: 12.5, color: WEAVE.mute, lineHeight: 1.5 }}>
           Open your bank app and transfer to this account. We'll confirm your payment automatically — no need to send proof.
@@ -2029,7 +2190,7 @@ function ScreenVirtualAccount({
       <div style={{ background: '#fff', border: `1px solid ${WEAVE.hair}`, borderRadius: 12, overflow: 'hidden' }}>
         <Row gap={10} style={{ padding: '12px 14px', background: WEAVE.panel, borderBottom: `1px solid ${WEAVE.hair}` }}>
           <div style={{ width: 28, height: 28, borderRadius: 14, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: WEAVE.ink }}>
-            {c.flag}
+            {c?.flag ?? '🏦'}
           </div>
           <Stack gap={1} style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 500 }}>{va.bank}</div>
@@ -2369,8 +2530,11 @@ function WeaveCheckoutInner({
   apiBase,
   disabledMethods,
 }: WeaveCheckoutProps) {
-  if (apiBase && typeof window !== 'undefined') {
-    (window as any).__WEAVE_API_BASE__ = apiBase;
+  // Route the trusted `apiBase` prop through a module-scoped setter rather than
+  // the mutable `window.__WEAVE_API_BASE__` global — see client.ts for why the
+  // global is no longer trusted for absolute URLs.
+  if (apiBase) {
+    configureApiBase(apiBase);
   }
   const apiKey =
     propApiKey ??
@@ -2387,7 +2551,9 @@ function WeaveCheckoutInner({
   const { disconnect: wagmiDisconnect } = useDisconnect();
   const disconnect = () => {
     wagmiDisconnect();
-    localStorage.clear();
+    // Only clear the widget's own resume record — NEVER localStorage.clear(),
+    // which would wipe the merchant host page's entire origin storage.
+    try { localStorage.removeItem(`weave-order-${apiKey}`); } catch { /* storage unavailable */ }
   };
   const { writeContractAsync } = useWriteContract();
   const { sendTransactionAsync } = useSendTransaction();
@@ -2395,7 +2561,7 @@ function WeaveCheckoutInner({
   const [screen, setScreen] = useState('connect');
   const [direction, setDirection] = useState<'offramp' | 'onramp'>('offramp');
   const [selectedBalance, setSelectedBalance] = useState<number | null>(0);
-  const [preSelectedChainIdx, setPreSelectedChainIdx] = useState<number | null>(null);
+  const [preSelectedChainKey, setPreSelectedChainKey] = useState<string | null>(null);
   const [closed, setClosed] = useState(false);
   const [refundAccount, setRefundAccount] = useState<RefundAccount>({
     institution: '',
@@ -2508,11 +2674,14 @@ function WeaveCheckoutInner({
       if (data) setSupportedAssets(data);
     }).catch(() => { });
 
-    // Existing: Pre-selection logic
-    if (merchant.sourceAssetKey && merchant.amountIn === 'source') {
-      const idx = supportedAssets.crypto.findIndex(c => `${c.id}:${c.token}` === merchant.sourceAssetKey?.split('crypto:')[1]);
-      if (idx !== -1) {
-        setPreSelectedChainIdx(idx);
+    // Pre-selection: stash the source asset KEY, not an index. supportedAssets is
+    // still the fallback list here (fetchAssets above is async), so an index
+    // captured now could point at the wrong network once the API list loads.
+    // ScreenDeposit resolves the key against the live list at render time.
+    if (merchant.sourceAssetKey?.startsWith('crypto:') && merchant.amountIn === 'source') {
+      const key = merchant.sourceAssetKey.split('crypto:')[1] || null;
+      if (key) {
+        setPreSelectedChainKey(key);
         setDirection('offramp');
         setScreen('deposit');
       }
@@ -2521,6 +2690,7 @@ function WeaveCheckoutInner({
 
   useEffect(() => {
     if (!apiKey) return;
+    let cancelled = false;
     setLoadingEthPrice(true);
     fetchQuote(apiKey, {
       from: 'crypto:ETHEREUM:ETH',
@@ -2528,6 +2698,7 @@ function WeaveCheckoutInner({
       amount: 1,
       amountIn: 'source'
     }).then(q => {
+      if (cancelled) return;
       // Find the fiat rate to convert back to USD
       const fiatAsset = supportedAssets.fiat.find(f => f.key === fiatKey(merchant.currency));
       const rate = fiatAsset?.rate || 1515;
@@ -2537,9 +2708,11 @@ function WeaveCheckoutInner({
       }
       setLoadingEthPrice(false);
     }).catch(err => {
+      if (cancelled) return;
       console.warn('[WeaveCheckoutInner] Live ETH price fetch failed:', err);
       setLoadingEthPrice(false);
     });
+    return () => { cancelled = true; };
   }, [apiKey, merchant.currency, supportedAssets.fiat]);
 
   // 2. Persistence logic: Save state whenever orderId or screen changes
@@ -2652,11 +2825,14 @@ function WeaveCheckoutInner({
       await fetchQuote(apiKey, {
         from, to, amount: targetAmount, amountIn: finalAmountIn,
       });
+      // A newer chain selection superseded this one while we were quoting — bail
+      // BEFORE creating an order so a stale request doesn't leave an orphan.
+      if (depositReq.current !== myReq) return;
       // External flow: sender identity is unknown at order-creation time.
       const source: { inline: InlineWalletInstrument } = {
         inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: '' },
       };
-      pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      pendingOrderRef.current ??= newOrderRef();
       const res = await createOrder(apiKey, {
         source,
         amount: targetAmount,
@@ -2673,6 +2849,12 @@ function WeaveCheckoutInner({
         } : undefined,
       });
       if (depositReq.current !== myReq) return;
+      // Validate the API-returned address against the chain the user selected,
+      // before we render it and they irreversibly pay into it.
+      const addrErr = depositAddressError(res.nextAction.depositAddress, apiChain, {
+        resChain: res.nextAction.chain, resToken: res.nextAction.token, requestedToken: token,
+      });
+      if (addrErr) throw new Error(addrErr);
       pendingOrderRef.current = null;
       setOrderId(res.order.id);
       setDepositAddress(res.nextAction.depositAddress ?? null);
@@ -2683,6 +2865,24 @@ function WeaveCheckoutInner({
       setDepositChain(res.nextAction.chain ?? apiChain);
     } catch (e: any) {
       if (depositReq.current !== myReq) return;
+      // 409: a concurrent request already created this order for our reference.
+      // Resume from the existing order's deposit step instead of erroring out.
+      const existing = await fetchExistingOrderOn409(apiKey, e);
+      const step = existing?.steps?.[0];
+      if (depositReq.current !== myReq) return;
+      if (step?.depositAddress && !depositAddressError(step.depositAddress, apiChain)) {
+        pendingOrderRef.current = null;
+        setOrderId(existing.id);
+        setDepositAddress(step.depositAddress);
+        setDepositMemo(step.depositMemo ?? null);
+        setDepositAmount(typeof step.amountIn === 'number' ? step.amountIn : null);
+        setDepositToken(token);
+        setDepositChain(apiChain);
+        return;
+      }
+      // Clear the idempotency ref so a retry (especially on a different chain)
+      // gets a fresh reference instead of colliding with this failed attempt.
+      pendingOrderRef.current = null;
       setDepositError(e.message ?? 'Could not generate a deposit address');
       onError?.(e);
     } finally {
@@ -2786,7 +2986,7 @@ function WeaveCheckoutInner({
           bankAccountName: refundAccount.accountName,
         },
       };
-      pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      pendingOrderRef.current ??= newOrderRef();
       const res = await createOrder(apiKey, {
         source,
         amount: merchant.amount,
@@ -2810,6 +3010,8 @@ function WeaveCheckoutInner({
           'vaccount';
       setScreen(nextScreen);
     } catch (e: any) {
+      // Clear the idempotency ref so a retry gets a fresh reference.
+      pendingOrderRef.current = null;
       setApiError(e.message ?? 'Failed to create order');
       onError?.(e);
     } finally {
@@ -2824,6 +3026,10 @@ function WeaveCheckoutInner({
     // Use real wallet balance entry if in the connect-wallet flow, else fall back to mock BALANCES
     const bal = walletBalanceEntry ?? BALANCES[selectedBalance ?? 0];
     const isWalletFlow = wagmiConnected && wagmiAddress && wagmiChainId && walletBalanceEntry;
+    // Track wallet-sign entry locally. The `screen` closure is stale inside this
+    // async handler (it's whatever it was at render, e.g. 'quote'), so the catch
+    // below must NOT read `screen` to decide whether to navigate back.
+    let enteredWalletSign = false;
 
     setSubmitting(true);
     setApiError(null);
@@ -2846,7 +3052,7 @@ function WeaveCheckoutInner({
             walletAddress: isWalletFlow ? wagmiAddress! : userAddress,
           },
         };
-        pendingOrderRef.current ??= 'weave_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        pendingOrderRef.current ??= newOrderRef();
         const res = await createOrder(apiKey, {
           source,
           amount: merchant.amount,
@@ -2863,6 +3069,12 @@ function WeaveCheckoutInner({
           } : undefined,
         });
         pendingOrderRef.current = null;
+        // Validate the API-returned address against the selected chain before we
+        // sign a transfer to it.
+        const offrampAddrErr = depositAddressError(res.nextAction.depositAddress, apiChain, {
+          resChain: res.nextAction.chain, resToken: res.nextAction.token, requestedToken: token,
+        });
+        if (offrampAddrErr) throw new Error(offrampAddrErr);
         activeOrderId = res.order.id;
         activeDepositAddr = res.nextAction.depositAddress ?? null;
         activeSourceAmt = res.order.sourceAmount;
@@ -2876,6 +3088,7 @@ function WeaveCheckoutInner({
 
       if (isWalletFlow && activeDepositAddr) {
         // Self flow: prompt wallet to sign the transfer to the ChainRails intent address
+        enteredWalletSign = true;
         setScreen('walletSign');
         const token = walletToken;
         const sourceAmt = activeSourceAmt!;
@@ -2917,7 +3130,11 @@ function WeaveCheckoutInner({
       const msg = e.message ?? '';
       const rejected = msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied') || msg.toLowerCase().includes('cancelled');
       setApiError(rejected ? 'Transaction was rejected. Please try again.' : (msg || 'Failed to complete payment'));
-      if (screen === 'walletSign') setScreen('quote');
+      // Clear the idempotency ref so a retry that needs a fresh order gets a new
+      // reference. When an order was already created, orderId is set and the
+      // retry reuses it, so this only bites when creation itself failed.
+      pendingOrderRef.current = null;
+      if (enteredWalletSign) setScreen('quote');
       onError?.(e);
     } finally {
       setSubmitting(false);
@@ -2926,17 +3143,17 @@ function WeaveCheckoutInner({
 
   if (closed) {
     return (
-      <div style={{
+      <button type="button" aria-label="Reopen Weave checkout" style={{
         position: 'absolute', bottom: 24, right: 24, zIndex: 10,
-        background: WEAVE.ink, color: '#fff',
-        padding: '10px 16px', borderRadius: 999, fontSize: 13,
+        background: WEAVE.ink, color: '#fff', border: 'none',
+        padding: '10px 16px', borderRadius: 999, fontSize: 13, fontFamily: 'inherit',
         display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
         boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
         minWidth: '185px',
       }} onClick={() => setClosed(false)}>
         <WeaveMark size={16} />
         Pay with Weave
-      </div>
+      </button>
     );
   }
 
@@ -2965,17 +3182,17 @@ function WeaveCheckoutInner({
       if (screen === 'paystack_popup') return <ScreenPaystackPopup onNext={advance} details={paystackPopupDetails} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
-      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} />;
+      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} message={apiError} />;
     } else {
       if (screen === 'walletConnect') return <ScreenWalletConnect onConnected={() => setScreen('walletAsset')} onExternalFlow={() => { setDirection('offramp'); setScreen('deposit'); }} />;
       if (screen === 'walletAsset') return <ScreenWalletAsset onSelectToken={(token, bal) => advanceToWalletQuote(bal, token)} onExternalFlow={() => setScreen('deposit')} merchant={merchant} currencies={currencies} fmtCur={fmtCur} ethUsdPrice={ethUsdPrice} loadingEthPrice={loadingEthPrice} />;
       if (screen === 'walletSign') return <ScreenWalletSign onRetry={confirmOfframp} />;
-      if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainIdx={preSelectedChainIdx} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainKey={preSelectedChainKey} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'wallet') return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance} currencies={currencies} />;
       if (screen === 'quote') return <ScreenQuote merchant={merchant} balance={walletBalanceEntry ?? balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
-      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')} />;
+      if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')} message={apiError} />;
     }
     return null;
   })();
@@ -2992,11 +3209,15 @@ function WeaveCheckoutInner({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Pay ${merchant.name}`}
       className={`weave-checkout weave-theme-${theme}`}
       style={{
         '--weave-accent': ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C',
         '--weave-accent-soft': (ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C') + '15',
-        width: 400,
+        width: '100%',
+        maxWidth: 400,
         background: WEAVE.surface,
         borderRadius: borderRadius,
         boxShadow: '0 30px 80px rgba(11, 15, 14, 0.22), 0 0 0 1px rgba(0,0,0,0.04)',

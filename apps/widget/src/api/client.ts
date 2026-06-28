@@ -7,16 +7,59 @@
 // The secretKey NEVER belongs in browser code. WeaveCheckout accepts only
 // the publishable key (apiKey prop).
 
-function getApiBase() {
-  if (typeof window !== 'undefined' && (window as any).__WEAVE_API_BASE__) {
-    return (window as any).__WEAVE_API_BASE__;
+// API base resolution — security-sensitive.
+//
+// The widget is embedded on third-party merchant pages. The previous version
+// read a MUTABLE global `window.__WEAVE_API_BASE__` FIRST, so any other script
+// on the host page could point every request (carrying the api key, customer
+// PII, bank/refund details) at an attacker — who would then control the
+// depositAddress / bankDetails the user pays into. Fund-redirection vector.
+//
+// Hardened resolution, in precedence order:
+//   1. `configureApiBase(...)` — the trusted integrator value from the
+//      WeaveCheckout `apiBase` prop. Lives in module scope (NOT on window), so
+//      a foreign script on the page cannot reach or overwrite it.
+//   2. `window.__WEAVE_API_BASE__` — honored ONLY when it is a same-origin
+//      RELATIVE path (e.g. '/api/public', used by our hosted /pay page). A
+//      relative path can only ever hit the host's own origin, never an
+//      attacker's server. Absolute / protocol-relative values are ignored.
+//   3. Build-time env (`VITE_API_BASE`), then localhost default.
+//
+// Resolved once and cached so it cannot be swapped mid-session.
+
+let _configuredBase: string | null = null;
+let _resolvedBase: string | null = null;
+
+/** Configure the API base from the trusted `apiBase` prop. */
+export function configureApiBase(base: string) {
+  if (base) {
+    _configuredBase = base;
+    _resolvedBase = null; // re-resolve with the new trusted value
   }
-  return (
+}
+
+// Same-origin relative path: starts with a single '/'. Protocol-relative
+// ('//evil.com') and absolute URLs are explicitly NOT relative.
+function isSameOriginRelative(base: string): boolean {
+  return base.startsWith('/') && !base.startsWith('//');
+}
+
+function getApiBase() {
+  if (_resolvedBase) return _resolvedBase;
+
+  const envBase =
     (import.meta as any).env?.VITE_API_BASE ||
     (import.meta as any).env?.NEXT_PUBLIC_API_BASE ||
     (import.meta as any).env?.NEXT_PUBLIC_API_URL ||
-    'http://localhost:4000/api/v1'
-  );
+    'http://localhost:4000/api/v1';
+
+  const winOverride =
+    typeof window !== 'undefined' ? (window as any).__WEAVE_API_BASE__ : undefined;
+  const safeWinOverride =
+    winOverride && isSameOriginRelative(String(winOverride)) ? String(winOverride) : null;
+
+  _resolvedBase = _configuredBase || safeWinOverride || envBase;
+  return _resolvedBase;
 }
 
 async function apiFetch(path: string, publishableKey: string, options?: RequestInit, timeoutMs = 15000) {
@@ -31,9 +74,28 @@ async function apiFetch(path: string, publishableKey: string, options?: RequestI
   try {
     const res  = await fetch(`${base}${path}`, { ...options, headers, signal: controller.signal });
     if (res.status === 204) return null;
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error ?? 'API error');
-    return json.data;
+
+    // Parse defensively: gateways return non-JSON bodies on 429/502, which the
+    // old `await res.json()` turned into an opaque SyntaxError.
+    const text = await res.text();
+    let json: any = null;
+    if (text) { try { json = JSON.parse(text); } catch { /* non-JSON body */ } }
+
+    if (!res.ok || (json && json.success === false)) {
+      const message =
+        (json && json.error) ||
+        (res.status === 429 ? 'Too many requests — please wait a moment and retry.'
+          : res.status >= 500 ? 'The payment service is temporarily unavailable. Please try again.'
+            : `Request failed (${res.status})`);
+      const err: any = new Error(message);
+      err.status = res.status;
+      // Preserve any recoverable payload (e.g. the existing orderId returned with
+      // a 409 duplicate-reference) instead of discarding it.
+      if (json && json.data) err.data = json.data;
+      throw err;
+    }
+
+    return json ? json.data : null;
   } catch (err: any) {
     if (err?.name === 'AbortError') throw new Error('Request timed out — please check your connection');
     throw err;
@@ -100,7 +162,7 @@ export type InlineInstrument = InlineBankInstrument | InlineWalletInstrument;
 export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstrument };
 
 export interface NextAction {
-  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_bank_transfer' | 'paystack_popup';
+  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup';
   depositAddress?: string;
   depositMemo?:    string;
   amount?:         number;

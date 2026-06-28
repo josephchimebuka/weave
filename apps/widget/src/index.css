@@ -28,3 +28,26 @@ input[type="radio"], input[type="checkbox"] {
   border-radius: 50%;
   animation: wspin 0.8s linear infinite;
 }
+
+/* a11y: restore a visible keyboard focus ring. Many controls set inline
+   `outline: none`; !important lets this beat that for :focus-visible only, so
+   mouse users keep clean focus but keyboard users get a ring. Scoped to the
+   widget so we never restyle the host page. */
+.weave-checkout :focus-visible {
+  outline: 2px solid var(--weave-accent, #0F5D4C) !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* a11y: honour reduced-motion. Scoped to the widget so we don't disable the
+   host page's motion. Pulsing/sliding stop; spinners collapse to near-static. */
+@media (prefers-reduced-motion: reduce) {
+  .weave-checkout *,
+  .weave-checkout *::before,
+  .weave-checkout *::after,
+  .weave-checkout .weaving-spinner {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
