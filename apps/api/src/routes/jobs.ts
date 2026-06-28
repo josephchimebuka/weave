@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { qstashReceiver } from '../lib/qstash';
 import { prisma } from '../lib/prisma';
-import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder } from '../services/executor.service';
+import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 
@@ -173,7 +173,66 @@ router.post('/dispatch-outgoing', verifyQStash, async (req, res) => {
   }
 });
 
-// ── NEAR Polling Job ────────────────────────────────────────────────────────
+// ── NEAR per-step poll (event-driven) ───────────────────────────────────────
+// Scheduled by executeOrder at order creation time. Checks a single NEAR step
+// and re-enqueues itself until the step is terminal. This replaces the global
+// sweep as the primary polling mechanism; /poll-near is now a recovery sweep.
+
+router.post('/poll-near-step', verifyQStash, async (req, res) => {
+  const { depositAddress, depositMemo, attempt } = req.body as {
+    depositAddress: string;
+    depositMemo:    string | null;
+    attempt:        number;
+  };
+
+  if (!depositAddress) {
+    return res.status(400).json({ error: 'missing depositAddress' });
+  }
+
+  // Bail early if the step already reached a terminal state (e.g. webhook beat us to it).
+  const step = await prisma.routeStep.findFirst({
+    where: {
+      provider:       'nearintents',
+      depositAddress,
+      status:         { notIn: ['done', 'failed'] },
+    },
+    select: { id: true },
+  });
+
+  if (!step) {
+    return res.json({ success: true, stopped: true, reason: 'step already terminal' });
+  }
+
+  try {
+    const status  = await nearIntents.getStatus(depositAddress, depositMemo ?? undefined);
+    const outcome = classifyNearStatus(status.status);
+
+    if (outcome === 'done') {
+      const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
+      await markStepDone({ provider: 'nearintents', externalId: depositAddress, depositMemo: depositMemo ?? null, amountOut });
+      return res.json({ success: true, outcome: 'done' });
+    }
+
+    if (outcome === 'failed' || outcome === 'refunded') {
+      await markStepFailed({ provider: 'nearintents', externalId: depositAddress, depositMemo: depositMemo ?? null, isRefund: outcome === 'refunded' });
+      return res.json({ success: true, outcome });
+    }
+
+    // Still pending — re-schedule the next check.
+    await scheduleNearPoll({ depositAddress, depositMemo, attempt: attempt + 1 });
+    return res.json({ success: true, outcome: 'progress', nextAttempt: attempt + 1 });
+  } catch (err: any) {
+    // Re-schedule even on provider errors so a transient failure doesn't
+    // silently kill the polling chain for this order.
+    await scheduleNearPoll({ depositAddress, depositMemo, attempt: attempt + 1 });
+    return res.json({ success: true, rescheduled: true, error: err.message });
+  }
+});
+
+// ── NEAR sweep (recovery safety net) ────────────────────────────────────────
+// Catches any steps whose self-scheduled chain broke (e.g. QStash message
+// lost). Change the Upstash cron from */2 to */30 — this no longer needs to
+// be the primary poll; it just sweeps up stragglers.
 
 router.post('/poll-near', verifyQStash, async (req, res) => {
   const openStepsCount = await prisma.routeStep.count({
@@ -200,16 +259,16 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
 
   for (const step of openSteps) {
     try {
-      const status = await nearIntents.getStatus(step.depositAddress!, step.depositMemo ?? undefined);
+      const status  = await nearIntents.getStatus(step.depositAddress!, step.depositMemo ?? undefined);
       const outcome = classifyNearStatus(status.status);
 
       if (outcome === 'done') {
         const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
-        await markStepDone({ provider: 'nearintents', externalId: step.depositAddress!, amountOut });
+        await markStepDone({ provider: 'nearintents', externalId: step.depositAddress!, depositMemo: step.depositMemo, amountOut });
       } else if (outcome === 'failed' || outcome === 'refunded') {
-        await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress!, isRefund: outcome === 'refunded' });
+        await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress!, depositMemo: step.depositMemo, isRefund: outcome === 'refunded' });
       }
-    } catch { /* skip err for this loop */ }
+    } catch { /* skip this step */ }
   }
 
   res.json({ success: true, count: openSteps.length });

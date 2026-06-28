@@ -15,6 +15,7 @@ import { sendMerchantPaymentNotification } from './email.service';
 import { parseAsset } from '../lib/assets';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
+import { qstash } from '../lib/qstash';
 
 export interface ExecutorInput {
   orderId: string;
@@ -152,6 +153,40 @@ const SLIPPAGE_BUFFER_BPS = Number(process.env.SLIPPAGE_BUFFER_BPS ?? 200);
 // wallet instead. The user's own refundAddress still flows to NEAR Intents,
 // which needs it valid on the origin chain.
 const WEAVE_EVM_REFUND_ADDRESS = process.env.WEAVE_EVM_REFUND_ADDRESS ?? '';
+
+// ── NEAR Intents self-scheduling poll ───────────────────────────────────────
+// Instead of a global every-2-min cron that always wakes the DB, each NEAR
+// step schedules its own delayed QStash message. The message checks just that
+// one step and re-enqueues only while the step is still pending, stopping as
+// soon as it reaches a terminal state. The global /jobs/poll-near cron can
+// then be reduced to a 30-min recovery sweep.
+
+const NEAR_POLL_DELAY_S  = Math.round(Number(process.env.NEAR_POLL_INTERVAL_MS ?? 120_000) / 1000);
+const NEAR_POLL_MAX_ATTEMPTS = 150; // ~5 hours at default 2-min interval
+
+export async function scheduleNearPoll(params: {
+  depositAddress: string;
+  depositMemo:    string | null;
+  attempt:        number;
+}): Promise<void> {
+  if (params.attempt > NEAR_POLL_MAX_ATTEMPTS) return;
+
+  const apiBase = process.env.API_BASE;
+  if (!apiBase) {
+    console.warn('[executor] API_BASE not set — cannot schedule NEAR poll');
+    return;
+  }
+
+  try {
+    await qstash.publishJSON({
+      url:   `${apiBase}/jobs/poll-near-step`,
+      body:  params,
+      delay: NEAR_POLL_DELAY_S,
+    });
+  } catch (err: any) {
+    console.warn('[executor] failed to schedule NEAR poll:', err.message);
+  }
+}
 
 // ── Provider dispatchers ────────────────────────────────────────────────────
 
@@ -571,6 +606,21 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     })
   ));
 
+  // Schedule a self-driving poll for every NEAR Intents step. Each message
+  // re-enqueues itself until the step reaches a terminal state, so the global
+  // cron only needs to run as an infrequent recovery sweep.
+  if (!input.sandboxMode) {
+    for (let i = 0; i < plan.steps.length; i++) {
+      if (plan.steps[i].provider === 'nearintents' && executions[i]?.depositAddress) {
+        await scheduleNearPoll({
+          depositAddress: executions[i].depositAddress!,
+          depositMemo:    executions[i].depositMemo ?? null,
+          attempt:        1,
+        });
+      }
+    }
+  }
+
   // Sandbox: auto-complete all steps instantly — no real money moves.
   if (input.sandboxMode) {
     for (let i = 0; i < plan.steps.length; i++) {
@@ -638,9 +688,17 @@ export async function markStepDone(params: {
   provider: string;
   externalId: string;
   amountOut?: number;
+  // Memo-mode NEAR Intents chains (Stellar/XRP/TON/NEAR) share ONE deposit
+  // address across every order, so `externalId` alone is ambiguous. Pass the
+  // memo to pin the lookup to the exact step. Non-memo steps pass null.
+  depositMemo?: string | null;
 }) {
   const step = await prisma.routeStep.findFirst({
-    where: { provider: params.provider, externalId: params.externalId },
+    where: {
+      provider: params.provider,
+      externalId: params.externalId,
+      ...(params.depositMemo !== undefined ? { depositMemo: params.depositMemo } : {}),
+    },
     include: { order: { include: { steps: true } } },
   });
   if (!step) return null;
@@ -711,9 +769,13 @@ export async function markStepDone(params: {
   return { orderId: step.orderId, stepId: step.id, orderStatus: nextOrderStatus };
 }
 
-export async function markStepProgress(params: { provider: string; externalId: string }) {
+export async function markStepProgress(params: { provider: string; externalId: string; depositMemo?: string | null }) {
   const step = await prisma.routeStep.findFirst({
-    where: { provider: params.provider, externalId: params.externalId },
+    where: {
+      provider: params.provider,
+      externalId: params.externalId,
+      ...(params.depositMemo !== undefined ? { depositMemo: params.depositMemo } : {}),
+    },
   });
   if (!step) return null;
 
@@ -731,9 +793,13 @@ export async function markStepProgress(params: { provider: string; externalId: s
   return { orderId: step.orderId, stepId: step.id };
 }
 
-export async function markStepFailed(params: { provider: string; externalId: string; reason?: string; isRefund?: boolean }) {
+export async function markStepFailed(params: { provider: string; externalId: string; reason?: string; isRefund?: boolean; depositMemo?: string | null }) {
   const step = await prisma.routeStep.findFirst({
-    where: { provider: params.provider, externalId: params.externalId },
+    where: {
+      provider: params.provider,
+      externalId: params.externalId,
+      ...(params.depositMemo !== undefined ? { depositMemo: params.depositMemo } : {}),
+    },
   });
   if (!step) return null;
 
@@ -777,9 +843,9 @@ export async function syncOrder(orderId: string) {
         const outcome = classifyNearStatus(status.status);
         if (outcome === 'done') {
           const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
-          await markStepDone({ provider: 'nearintents', externalId: step.depositAddress, amountOut });
+          await markStepDone({ provider: 'nearintents', externalId: step.depositAddress, depositMemo: step.depositMemo, amountOut });
         } else if (outcome === 'failed' || outcome === 'refunded') {
-          await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, isRefund: outcome === 'refunded' });
+          await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, depositMemo: step.depositMemo, isRefund: outcome === 'refunded' });
         }
       } else if (step.provider === 'paycrest' && step.externalId) {
         console.log(`[sync] checking paycrest step ${step.id} for order ${step.externalId}`);
