@@ -688,9 +688,17 @@ export async function markStepDone(params: {
   provider: string;
   externalId: string;
   amountOut?: number;
+  // Memo-mode NEAR Intents chains (Stellar/XRP/TON/NEAR) share ONE deposit
+  // address across every order, so `externalId` alone is ambiguous. Pass the
+  // memo to pin the lookup to the exact step. Non-memo steps pass null.
+  depositMemo?: string | null;
 }) {
   const step = await prisma.routeStep.findFirst({
-    where: { provider: params.provider, externalId: params.externalId },
+    where: {
+      provider: params.provider,
+      externalId: params.externalId,
+      ...(params.depositMemo !== undefined ? { depositMemo: params.depositMemo } : {}),
+    },
     include: { order: { include: { steps: true } } },
   });
   if (!step) return null;
@@ -761,9 +769,13 @@ export async function markStepDone(params: {
   return { orderId: step.orderId, stepId: step.id, orderStatus: nextOrderStatus };
 }
 
-export async function markStepProgress(params: { provider: string; externalId: string }) {
+export async function markStepProgress(params: { provider: string; externalId: string; depositMemo?: string | null }) {
   const step = await prisma.routeStep.findFirst({
-    where: { provider: params.provider, externalId: params.externalId },
+    where: {
+      provider: params.provider,
+      externalId: params.externalId,
+      ...(params.depositMemo !== undefined ? { depositMemo: params.depositMemo } : {}),
+    },
   });
   if (!step) return null;
 
@@ -781,9 +793,13 @@ export async function markStepProgress(params: { provider: string; externalId: s
   return { orderId: step.orderId, stepId: step.id };
 }
 
-export async function markStepFailed(params: { provider: string; externalId: string; reason?: string; isRefund?: boolean }) {
+export async function markStepFailed(params: { provider: string; externalId: string; reason?: string; isRefund?: boolean; depositMemo?: string | null }) {
   const step = await prisma.routeStep.findFirst({
-    where: { provider: params.provider, externalId: params.externalId },
+    where: {
+      provider: params.provider,
+      externalId: params.externalId,
+      ...(params.depositMemo !== undefined ? { depositMemo: params.depositMemo } : {}),
+    },
   });
   if (!step) return null;
 
@@ -827,9 +843,9 @@ export async function syncOrder(orderId: string) {
         const outcome = classifyNearStatus(status.status);
         if (outcome === 'done') {
           const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
-          await markStepDone({ provider: 'nearintents', externalId: step.depositAddress, amountOut });
+          await markStepDone({ provider: 'nearintents', externalId: step.depositAddress, depositMemo: step.depositMemo, amountOut });
         } else if (outcome === 'failed' || outcome === 'refunded') {
-          await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, isRefund: outcome === 'refunded' });
+          await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, depositMemo: step.depositMemo, isRefund: outcome === 'refunded' });
         }
       } else if (step.provider === 'paycrest' && step.externalId) {
         console.log(`[sync] checking paycrest step ${step.id} for order ${step.externalId}`);
