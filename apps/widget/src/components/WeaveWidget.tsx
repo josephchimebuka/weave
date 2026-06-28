@@ -250,6 +250,15 @@ function depositAddressError(
   return null;
 }
 
+// On a 409 (an order for this reference already exists — typically a concurrent
+// duplicate submit), fetch the existing order so the caller can resume from it
+// instead of dead-ending on an error. Returns the order, or null if it's not a
+// recoverable 409 / the fetch fails.
+async function fetchExistingOrderOn409(apiKey: string, e: any): Promise<any | null> {
+  if (e?.status !== 409 || !e?.data?.orderId) return null;
+  try { return await fetchOrder(apiKey, e.data.orderId); } catch { return null; }
+}
+
 // Copy helper that resolves true ONLY when the text actually reached the
 // clipboard. navigator.clipboard is undefined in non-secure contexts, so the
 // old `navigator.clipboard?.writeText(x); setCopied(true)` flashed "Copied" on
@@ -667,7 +676,14 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
           style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
         >
           <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <IconDot bg="#F6851B" size={24}>🦊</IconDot>
+            {/* Neutral QR/scan glyph — this routes to a deposit-address flow for ANY
+                wallet, not a MetaMask connect, so we don't show the fox here. */}
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1.2" stroke={WEAVE.ink} strokeWidth="1.7" />
+              <rect x="14" y="3" width="7" height="7" rx="1.2" stroke={WEAVE.ink} strokeWidth="1.7" />
+              <rect x="3" y="14" width="7" height="7" rx="1.2" stroke={WEAVE.ink} strokeWidth="1.7" />
+              <path d="M14 14h3.5v3.5M21 14v7h-7v-3.5" stroke={WEAVE.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 500 }}>Pay with crypto</div>
@@ -898,7 +914,7 @@ function ScreenQuote({
           )}
         </button>
         <div style={{ fontSize: 11, color: WEAVE.mute, textAlign: 'center' }}>
-          Rate locked for 30s · You'll sign one transaction in your wallet
+          You'll sign one transaction in your wallet
         </div>
       </Stack>
     </Stack>
@@ -2849,6 +2865,21 @@ function WeaveCheckoutInner({
       setDepositChain(res.nextAction.chain ?? apiChain);
     } catch (e: any) {
       if (depositReq.current !== myReq) return;
+      // 409: a concurrent request already created this order for our reference.
+      // Resume from the existing order's deposit step instead of erroring out.
+      const existing = await fetchExistingOrderOn409(apiKey, e);
+      const step = existing?.steps?.[0];
+      if (depositReq.current !== myReq) return;
+      if (step?.depositAddress && !depositAddressError(step.depositAddress, apiChain)) {
+        pendingOrderRef.current = null;
+        setOrderId(existing.id);
+        setDepositAddress(step.depositAddress);
+        setDepositMemo(step.depositMemo ?? null);
+        setDepositAmount(typeof step.amountIn === 'number' ? step.amountIn : null);
+        setDepositToken(token);
+        setDepositChain(apiChain);
+        return;
+      }
       // Clear the idempotency ref so a retry (especially on a different chain)
       // gets a fresh reference instead of colliding with this failed attempt.
       pendingOrderRef.current = null;
