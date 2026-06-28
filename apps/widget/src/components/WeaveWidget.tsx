@@ -194,6 +194,31 @@ const fmtCrypto = (n: number, precision: number = 4) => {
   });
 };
 
+// USD-pegged stablecoins render with a "$" prefix to match the hosted pay page.
+const USD_STABLES = new Set(['USDC', 'USDT', 'DAI', 'USDBC', 'PYUSD', 'USDC.E']);
+
+// The headline shows what the payer is actually quoted. When a link is priced in
+// a source crypto (amountIn:'source'), display that token — NOT merchant.currency,
+// which is only the merchant's settlement corridor used for the downstream dest leg.
+const fmtHeadline = (merchant: Merchant, fmtCur: (n: number, cur: string) => string): string => {
+  if (merchant.amountIn === 'source' && merchant.sourceAssetKey) {
+    try {
+      const a = parseAsset(merchant.sourceAssetKey);
+      if (a.kind === 'crypto') {
+        // USD-pegged stablecoins read like dollars ("$100"). Everything else
+        // (SOL, STRK, ETH…) is NOT dollar-pegged, so show the token amount with
+        // enough precision to preserve fractional values (e.g. "0.0042 SOL").
+        if (USD_STABLES.has(a.token)) {
+          return `$${fmtCrypto(merchant.amount, Number.isInteger(merchant.amount) ? 0 : 2)}`;
+        }
+        const amt = merchant.amount.toLocaleString('en-US', { maximumFractionDigits: 8 });
+        return `${amt} ${a.token}`;
+      }
+    } catch { /* fall through to currency formatting */ }
+  }
+  return fmtCur(merchant.amount, merchant.currency);
+};
+
 const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string, accentColor?: string) => {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -515,7 +540,7 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
         <Stack gap={3} style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 12.5, color: WEAVE.mute }}>Pay {merchant.name}</div>
           <div style={{ fontSize: 30, fontWeight: 600, letterSpacing: -0.6, color: WEAVE.ink }}>
-            {fmtCur(merchant.amount, merchant.currency)}
+            {fmtHeadline(merchant, fmtCur)}
           </div>
           <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{merchant.description || 'Secure checkout'}</div>
         </Stack>
@@ -905,7 +930,7 @@ const TERMINAL_OK = new Set(['completed']);
 const TERMINAL_BAD = new Set(['failed', 'expired', 'refunded']);
 
 function ScreenProcessing({
-  onNext, merchant, mode, apiKey, orderId, bankDetails, currencies, fmtCur
+  onNext, merchant, mode, apiKey, orderId, bankDetails, fmtCur
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -917,7 +942,7 @@ function ScreenProcessing({
   fmtCur: (n: number, cur: string, dec?: number) => string;
 }) {
   const [stage, setStage] = useState(0);
-  const [seconds, setSeconds] = useState(0);
+  const [, setSeconds] = useState(0);
   const pollTerminated = useRef(false);
   const c = CURRENCIES[merchant.currency];
 
@@ -1284,8 +1309,8 @@ const buildDepositQRPayload = (
 };
 
 function ScreenDeposit({
-  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, ready, apiKey, orderId, preSelectedChainIdx,
-  depositChains, currencies, fmtCur,
+  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, apiKey, orderId, preSelectedChainIdx,
+  depositChains, currencies,
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -1886,7 +1911,7 @@ export interface BankDetails {
 // Payout destination logic
 
 function ScreenVirtualAccount({
-  onNext, merchant, bankDetails, apiKey, orderId, currencies, fmtCur
+  onNext, merchant, bankDetails, apiKey, orderId, fmtCur
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -2118,7 +2143,6 @@ function ScreenWalletAsset({
   onExternalFlow,
   merchant,
   currencies,
-  fmtCur,
   ethUsdPrice,
   loadingEthPrice,
 }: {
@@ -2419,7 +2443,7 @@ function WeaveCheckoutInner({
     const saved = localStorage.getItem(`weave-order-${apiKey}`);
     if (saved) {
       try {
-        const { orderId: savedId, screen: savedScreen, createdAt } = JSON.parse(saved);
+        const { orderId: savedId, createdAt } = JSON.parse(saved);
         // Don't resume orders older than 1h
         if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
           fetchOrder(apiKey, savedId).then(data => {
@@ -2624,7 +2648,8 @@ function WeaveCheckoutInner({
         targetAmount = fiatToCrypto.estimatedDest;
       }
 
-      const q = await fetchQuote(apiKey, {
+      // Validate the quote up front — throws if the route is unavailable, before we create the order.
+      await fetchQuote(apiKey, {
         from, to, amount: targetAmount, amountIn: finalAmountIn,
       });
       // External flow: sender identity is unknown at order-creation time.
@@ -2748,7 +2773,7 @@ function WeaveCheckoutInner({
     setScreen(next);
   };
 
-  const createFiatOrder = async (info?: RefundAccount) => {
+  const createFiatOrder = async (_info?: RefundAccount) => {
     setSubmitting(true);
     setApiError(null);
     try {
