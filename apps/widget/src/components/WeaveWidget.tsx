@@ -277,6 +277,31 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
+// USD-pegged stablecoins render with a "$" prefix to match the hosted pay page.
+const USD_STABLES = new Set(['USDC', 'USDT', 'DAI', 'USDBC', 'PYUSD', 'USDC.E']);
+
+// The headline shows what the payer is actually quoted. When a link is priced in
+// a source crypto (amountIn:'source'), display that token — NOT merchant.currency,
+// which is only the merchant's settlement corridor used for the downstream dest leg.
+const fmtHeadline = (merchant: Merchant, fmtCur: (n: number, cur: string) => string): string => {
+  if (merchant.amountIn === 'source' && merchant.sourceAssetKey) {
+    try {
+      const a = parseAsset(merchant.sourceAssetKey);
+      if (a.kind === 'crypto') {
+        // USD-pegged stablecoins read like dollars ("$100"). Everything else
+        // (SOL, STRK, ETH…) is NOT dollar-pegged, so show the token amount with
+        // enough precision to preserve fractional values (e.g. "0.0042 SOL").
+        if (USD_STABLES.has(a.token)) {
+          return `$${fmtCrypto(merchant.amount, Number.isInteger(merchant.amount) ? 0 : 2)}`;
+        }
+        const amt = merchant.amount.toLocaleString('en-US', { maximumFractionDigits: 8 });
+        return `${amt} ${a.token}`;
+      }
+    } catch { /* fall through to currency formatting */ }
+  }
+  return fmtCur(merchant.amount, merchant.currency);
+};
+
 const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string, accentColor?: string) => {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -598,7 +623,7 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
         <Stack gap={3} style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 12.5, color: WEAVE.mute }}>Pay {merchant.name}</div>
           <div style={{ fontSize: 30, fontWeight: 600, letterSpacing: -0.6, color: WEAVE.ink }}>
-            {fmtCur(merchant.amount, merchant.currency)}
+            {fmtHeadline(merchant, fmtCur)}
           </div>
           <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{merchant.description || 'Secure checkout'}</div>
         </Stack>
@@ -629,15 +654,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>
-              {picked === 'fiat' ? 'Setting up payment…' : 'Bank transfer'}
+              {picked === 'fiat' ? 'Setting up payment…' : `Pay with ${c?.name ?? merchant.currency}`}
             </div>
-            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{disabledMethods?.fiat || `Pay in ${c?.name ?? merchant.currency} · Instant · No fees`}</div>
+            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{disabledMethods?.fiat || `Card, bank transfer & USSD · Instant`}</div>
           </Stack>
           {picked !== 'fiat' && !disabledMethods?.fiat && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button>
 
         <button
-          onClick={() => pick('deposit')}
+          onClick={() => pick('externalDeposit')}
           disabled={!!(submitting || picked)}
           style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
         >
@@ -645,8 +670,8 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
             <IconDot bg="#F6851B" size={24}>🦊</IconDot>
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 500 }}>Pay with crypto wallet</div>
-            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>MetaMask detected · Any chain, any token</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>Pay with crypto</div>
+            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Transfer from any chain, any token, any wallet.</div>
           </Stack>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
@@ -656,15 +681,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
             background: 'transparent', border: 'none', cursor: picked ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
             fontSize: 12, color: WEAVE.mute, padding: '4px 0', textAlign: 'center', opacity: picked ? 0.5 : 1,
           }}>
-            Use a different wallet ↓
+            Connect your wallet ↓
           </button>
         ) : (
           <Stack gap={6} style={{ padding: '2px 0' }}>
-            <button onClick={() => pick('externalDeposit')} disabled={!!(submitting || picked)} style={{ ...methodCardSm, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}>
+            <button onClick={() => pick('deposit')} disabled={!!(submitting || picked)} style={{ ...methodCardSm, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}>
               <div style={{ width: 20, height: 20, borderRadius: 5, background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="14" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="3" y="14" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /></svg>
               </div>
-              <span style={{ fontSize: 12.5, fontWeight: 500 }}>Pay from mobile / hardware / exchange</span>
+              <span style={{ fontSize: 12.5, fontWeight: 500 }}>Pay from connected wallet</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 'auto' }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </Stack>
@@ -1013,7 +1038,7 @@ const TERMINAL_OK = new Set(['completed']);
 const TERMINAL_BAD = new Set(['failed', 'expired', 'refunded']);
 
 function ScreenProcessing({
-  onNext, merchant, mode, apiKey, orderId, bankDetails, currencies, fmtCur
+  onNext, merchant, mode, apiKey, orderId, bankDetails, fmtCur
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -1409,8 +1434,8 @@ const buildDepositQRPayload = (
 };
 
 function ScreenDeposit({
-  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, ready, apiKey, orderId, preSelectedChainKey,
-  depositChains, currencies, fmtCur,
+  onNext, merchant, depositAddress, depositMemo, amountToSend, sourceToken, sourceChain, loading, error, onChainChange, apiKey, orderId, preSelectedChainKey,
+  depositChains, currencies,
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -2026,7 +2051,7 @@ export interface BankDetails {
 // Payout destination logic
 
 function ScreenVirtualAccount({
-  onNext, merchant, bankDetails, apiKey, orderId, currencies, fmtCur
+  onNext, merchant, bankDetails, apiKey, orderId, fmtCur
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -2263,7 +2288,6 @@ function ScreenWalletAsset({
   onExternalFlow,
   merchant,
   currencies,
-  fmtCur,
   ethUsdPrice,
   loadingEthPrice,
 }: {
@@ -2569,7 +2593,7 @@ function WeaveCheckoutInner({
     const saved = localStorage.getItem(`weave-order-${apiKey}`);
     if (saved) {
       try {
-        const { orderId: savedId, screen: savedScreen, createdAt } = JSON.parse(saved);
+        const { orderId: savedId, createdAt } = JSON.parse(saved);
         // Don't resume orders older than 1h
         if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
           fetchOrder(apiKey, savedId).then(data => {
@@ -2743,11 +2767,11 @@ function WeaveCheckoutInner({
       setDirection('offramp');
       setScreen('wallet');
     } else if (method === 'deposit') {
-      // "Pay with crypto wallet" — go to wallet connect flow (ChainRails self flow)
+      // "Pay from connected wallet" — go to wallet connect flow (ChainRails self flow)
       setDirection('offramp');
       setScreen(wagmiConnected ? 'walletAsset' : 'walletConnect');
     } else if (method === 'externalDeposit') {
-      // "Pay from mobile / hardware / exchange" — NEAR Intents deposit address flow
+      // "Pay with crypto" — NEAR Intents deposit address flow (any chain/token/wallet)
       setDirection('offramp');
       setScreen('deposit');
     }
@@ -2781,7 +2805,8 @@ function WeaveCheckoutInner({
         targetAmount = fiatToCrypto.estimatedDest;
       }
 
-      const q = await fetchQuote(apiKey, {
+      // Validate the quote up front — throws if the route is unavailable, before we create the order.
+      await fetchQuote(apiKey, {
         from, to, amount: targetAmount, amountIn: finalAmountIn,
       });
       // A newer chain selection superseded this one while we were quoting — bail
@@ -2917,7 +2942,7 @@ function WeaveCheckoutInner({
     setScreen(next);
   };
 
-  const createFiatOrder = async (info?: RefundAccount) => {
+  const createFiatOrder = async (_info?: RefundAccount) => {
     setSubmitting(true);
     setApiError(null);
     try {

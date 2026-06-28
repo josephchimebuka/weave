@@ -27,9 +27,22 @@ export default function PayClient({ link }: { link: LinkData }) {
   const token = assetParts.pop() || '';
   const network = assetParts.length > 1 ? assetParts[1] : '';
 
+  // USD-pegged stablecoins display like dollars; other tokens (SOL, STRK, ETH…) are
+  // not dollar-pegged, so they show the bare amount + token pill with no "$" prefix.
+  const USD_STABLES = new Set(['USDC', 'USDT', 'DAI', 'USDBC', 'PYUSD', 'USDC.E']);
+  const isStable = isP2P && USD_STABLES.has(token.toUpperCase());
+
   // For fiat, get the currency code and symbol
   const currencyCode = !isP2P ? token : '';
-  const currencySymbol = currencyCode === 'NGN' ? '₦' : currencyCode === 'GHS' ? 'GH₵' : currencyCode === 'KES' ? 'KSh' : '$';
+  const currencySymbol = !isP2P
+    ? (currencyCode === 'NGN' ? '₦' : currencyCode === 'GHS' ? 'GH₵' : currencyCode === 'KES' ? 'KSh' : '$')
+    : (isStable ? '$' : '');
+
+  // Stablecoin/fiat amounts read with 2 decimals; non-pegged crypto preserves
+  // fractional precision (e.g. "0.0042 SOL") and trims trailing zeros.
+  const amountDisplay = isP2P && !isStable
+    ? link.amount.toLocaleString('en-US', { maximumFractionDigits: 8 })
+    : link.amount.toLocaleString(undefined, { minimumFractionDigits: 2 });
 
   return (
     <div className="min-h-screen bg-cream flex flex-col lg:flex-row font-body text-ink selection:bg-forest/10">
@@ -52,9 +65,9 @@ export default function PayClient({ link }: { link: LinkData }) {
             <div className="relative group pt-2 lg:pt-4">
               <div className="absolute -inset-x-4 lg:-inset-x-6 -inset-y-4 bg-forest/5 rounded-[40px] blur-2xl opacity-0 lg:group-hover:opacity-100 transition-opacity duration-700" />
               <div className="relative flex items-baseline flex-wrap gap-2">
-                <span className="text-[28px] sm:text-[36px] font-display font-medium text-ink-muted/60 mt-1 lg:mt-2">{currencySymbol}</span>
+                {currencySymbol && <span className="text-[28px] sm:text-[36px] font-display font-medium text-ink-muted/60 mt-1 lg:mt-2">{currencySymbol}</span>}
                 <span className="text-[62px] sm:text-[82px] lg:text-[96px] font-display font-bold text-ink leading-none tabular-nums tracking-tighter">
-                  {link.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  {amountDisplay}
                 </span>
                 {isP2P && (
                   <span className="text-[14px] sm:text-[18px] font-semibold text-forest-deep bg-forest/10 px-3 sm:px-4 py-1 sm:py-1.5 rounded-full border border-forest/10 self-center">
