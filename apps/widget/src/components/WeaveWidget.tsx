@@ -546,15 +546,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 500, color: WEAVE.ink }}>
-              {picked === 'fiat' ? 'Setting up payment…' : 'Bank transfer'}
+              {picked === 'fiat' ? 'Setting up payment…' : `Pay with ${c?.name ?? merchant.currency}`}
             </div>
-            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{disabledMethods?.fiat || `Pay in ${c?.name ?? merchant.currency} · Instant · No fees`}</div>
+            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>{disabledMethods?.fiat || `Card, bank transfer & USSD · Instant`}</div>
           </Stack>
           {picked !== 'fiat' && !disabledMethods?.fiat && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button>
 
         <button
-          onClick={() => pick('deposit')}
+          onClick={() => pick('externalDeposit')}
           disabled={!!(submitting || picked)}
           style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
         >
@@ -562,8 +562,8 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
             <IconDot bg="#F6851B" size={24}>🦊</IconDot>
           </div>
           <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 500 }}>Pay with crypto wallet</div>
-            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>MetaMask detected · Any chain, any token</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>Pay with crypto</div>
+            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Transfer from any chain, any token, any wallet.</div>
           </Stack>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
@@ -573,15 +573,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
             background: 'transparent', border: 'none', cursor: picked ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
             fontSize: 12, color: WEAVE.mute, padding: '4px 0', textAlign: 'center', opacity: picked ? 0.5 : 1,
           }}>
-            Use a different wallet ↓
+            Connect your wallet ↓
           </button>
         ) : (
           <Stack gap={6} style={{ padding: '2px 0' }}>
-            <button onClick={() => pick('externalDeposit')} disabled={!!(submitting || picked)} style={{ ...methodCardSm, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}>
+            <button onClick={() => pick('deposit')} disabled={!!(submitting || picked)} style={{ ...methodCardSm, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}>
               <div style={{ width: 20, height: 20, borderRadius: 5, background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="14" y="3" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /><rect x="3" y="14" width="7" height="7" stroke={WEAVE.ink} strokeWidth="2" /></svg>
               </div>
-              <span style={{ fontSize: 12.5, fontWeight: 500 }}>Pay from mobile / hardware / exchange</span>
+              <span style={{ fontSize: 12.5, fontWeight: 500 }}>Pay from connected wallet</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 'auto' }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </Stack>
@@ -2586,11 +2586,11 @@ function WeaveCheckoutInner({
       setDirection('offramp');
       setScreen('wallet');
     } else if (method === 'deposit') {
-      // "Pay with crypto wallet" — go to wallet connect flow (ChainRails self flow)
+      // "Pay from connected wallet" — go to wallet connect flow (ChainRails self flow)
       setDirection('offramp');
       setScreen(wagmiConnected ? 'walletAsset' : 'walletConnect');
     } else if (method === 'externalDeposit') {
-      // "Pay from mobile / hardware / exchange" — NEAR Intents deposit address flow
+      // "Pay with crypto" — NEAR Intents deposit address flow (any chain/token/wallet)
       setDirection('offramp');
       setScreen('deposit');
     }

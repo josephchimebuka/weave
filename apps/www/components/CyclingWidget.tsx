@@ -83,13 +83,13 @@ function StatePicker() {
                   <path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={W.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               ),
-              label: 'Bank transfer',
-              sub: 'Pay in Naira · Instant · No fees',
+              label: 'Pay with Naira',
+              sub: 'Card, bank transfer & USSD · Instant',
             },
             {
               icon: <span style={{ fontSize: 18 }}>🦊</span>,
-              label: 'Pay with crypto wallet',
-              sub: 'MetaMask detected · Any chain',
+              label: 'Pay with crypto',
+              sub: 'Transfer from any chain, any token, any wallet.',
             },
           ].map((item, i) => (
             <div key={i} style={{
