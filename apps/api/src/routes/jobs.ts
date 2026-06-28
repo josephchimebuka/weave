@@ -209,12 +209,12 @@ router.post('/poll-near-step', verifyQStash, async (req, res) => {
 
     if (outcome === 'done') {
       const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
-      await markStepDone({ provider: 'nearintents', externalId: depositAddress, amountOut });
+      await markStepDone({ provider: 'nearintents', externalId: depositAddress, depositMemo: depositMemo ?? null, amountOut });
       return res.json({ success: true, outcome: 'done' });
     }
 
     if (outcome === 'failed' || outcome === 'refunded') {
-      await markStepFailed({ provider: 'nearintents', externalId: depositAddress, isRefund: outcome === 'refunded' });
+      await markStepFailed({ provider: 'nearintents', externalId: depositAddress, depositMemo: depositMemo ?? null, isRefund: outcome === 'refunded' });
       return res.json({ success: true, outcome });
     }
 
@@ -264,9 +264,9 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
 
       if (outcome === 'done') {
         const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
-        await markStepDone({ provider: 'nearintents', externalId: step.depositAddress!, amountOut });
+        await markStepDone({ provider: 'nearintents', externalId: step.depositAddress!, depositMemo: step.depositMemo, amountOut });
       } else if (outcome === 'failed' || outcome === 'refunded') {
-        await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress!, isRefund: outcome === 'refunded' });
+        await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress!, depositMemo: step.depositMemo, isRefund: outcome === 'refunded' });
       }
     } catch { /* skip this step */ }
   }
