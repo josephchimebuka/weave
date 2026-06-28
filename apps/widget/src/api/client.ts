@@ -7,16 +7,59 @@
 // The secretKey NEVER belongs in browser code. WeaveCheckout accepts only
 // the publishable key (apiKey prop).
 
-function getApiBase() {
-  if (typeof window !== 'undefined' && (window as any).__WEAVE_API_BASE__) {
-    return (window as any).__WEAVE_API_BASE__;
+// API base resolution — security-sensitive.
+//
+// The widget is embedded on third-party merchant pages. The previous version
+// read a MUTABLE global `window.__WEAVE_API_BASE__` FIRST, so any other script
+// on the host page could point every request (carrying the api key, customer
+// PII, bank/refund details) at an attacker — who would then control the
+// depositAddress / bankDetails the user pays into. Fund-redirection vector.
+//
+// Hardened resolution, in precedence order:
+//   1. `configureApiBase(...)` — the trusted integrator value from the
+//      WeaveCheckout `apiBase` prop. Lives in module scope (NOT on window), so
+//      a foreign script on the page cannot reach or overwrite it.
+//   2. `window.__WEAVE_API_BASE__` — honored ONLY when it is a same-origin
+//      RELATIVE path (e.g. '/api/public', used by our hosted /pay page). A
+//      relative path can only ever hit the host's own origin, never an
+//      attacker's server. Absolute / protocol-relative values are ignored.
+//   3. Build-time env (`VITE_API_BASE`), then localhost default.
+//
+// Resolved once and cached so it cannot be swapped mid-session.
+
+let _configuredBase: string | null = null;
+let _resolvedBase: string | null = null;
+
+/** Configure the API base from the trusted `apiBase` prop. */
+export function configureApiBase(base: string) {
+  if (base) {
+    _configuredBase = base;
+    _resolvedBase = null; // re-resolve with the new trusted value
   }
-  return (
+}
+
+// Same-origin relative path: starts with a single '/'. Protocol-relative
+// ('//evil.com') and absolute URLs are explicitly NOT relative.
+function isSameOriginRelative(base: string): boolean {
+  return base.startsWith('/') && !base.startsWith('//');
+}
+
+function getApiBase() {
+  if (_resolvedBase) return _resolvedBase;
+
+  const envBase =
     (import.meta as any).env?.VITE_API_BASE ||
     (import.meta as any).env?.NEXT_PUBLIC_API_BASE ||
     (import.meta as any).env?.NEXT_PUBLIC_API_URL ||
-    'http://localhost:4000/api/v1'
-  );
+    'http://localhost:4000/api/v1';
+
+  const winOverride =
+    typeof window !== 'undefined' ? (window as any).__WEAVE_API_BASE__ : undefined;
+  const safeWinOverride =
+    winOverride && isSameOriginRelative(String(winOverride)) ? String(winOverride) : null;
+
+  _resolvedBase = _configuredBase || safeWinOverride || envBase;
+  return _resolvedBase;
 }
 
 async function apiFetch(path: string, publishableKey: string, options?: RequestInit, timeoutMs = 15000) {

@@ -57,7 +57,8 @@ import {
   type InlineBankInstrument,
   type InlineWalletInstrument,
   type NextAction,
-  fetchAssets
+  fetchAssets,
+  configureApiBase
 } from '../api/client';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
@@ -2345,8 +2346,11 @@ function WeaveCheckoutInner({
   apiBase,
   disabledMethods,
 }: WeaveCheckoutProps) {
-  if (apiBase && typeof window !== 'undefined') {
-    (window as any).__WEAVE_API_BASE__ = apiBase;
+  // Route the trusted `apiBase` prop through a module-scoped setter rather than
+  // the mutable `window.__WEAVE_API_BASE__` global — see client.ts for why the
+  // global is no longer trusted for absolute URLs.
+  if (apiBase) {
+    configureApiBase(apiBase);
   }
   const apiKey =
     propApiKey ??

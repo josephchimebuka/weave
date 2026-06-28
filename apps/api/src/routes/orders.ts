@@ -465,7 +465,12 @@ router.get('/:id', requireAuth, async (req, res) => {
     let nearStatus: string | null = null;
     if (!TERMINAL.has(order.status)) {
       try {
-        await syncOrder(order.id);
+        // syncOrder returns the raw provider statuses it polled. The widget
+        // keys intermediate UI on these (NEAR 'incomplete_deposit' → underpayment
+        // warning; Paycrest 'fulfilled' → advance stage), so surface them.
+        const synced = await syncOrder(order.id);
+        paycrestStatus = synced.paycrestStatus;
+        nearStatus = synced.nearStatus;
         // Refetch to get the latest state after sync
         const fresh = await prisma.order.findUnique({
           where: { id: req.params.id },

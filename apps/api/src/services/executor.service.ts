@@ -823,12 +823,24 @@ export async function markStepFailed(params: { provider: string; externalId: str
  * Manually fetches the current status of an order's steps from providers
  * and advances the state machine if it has moved.
  */
-export async function syncOrder(orderId: string) {
+export async function syncOrder(
+  orderId: string,
+): Promise<{ paycrestStatus: string | null; nearStatus: string | null }> {
+  // Raw provider statuses gathered during the sweep. The widget polls
+  // GET /orders/:id and keys intermediate UI on these — e.g. NEAR
+  // 'INCOMPLETE_DEPOSIT' drives the underpayment warning, and Paycrest
+  // 'fulfilled' advances the processing stage. Returning them here is what
+  // makes that contract real (previously they were always null).
+  const result: { paycrestStatus: string | null; nearStatus: string | null } = {
+    paycrestStatus: null,
+    nearStatus: null,
+  };
+
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: { steps: true }
   });
-  if (!order || ['completed', 'failed', 'refunded', 'expired'].includes(order.status)) return;
+  if (!order || ['completed', 'failed', 'refunded', 'expired'].includes(order.status)) return result;
 
   const { classifyNearStatus } = await import('./nearintents.service');
 
@@ -840,6 +852,7 @@ export async function syncOrder(orderId: string) {
         console.log(`[sync] checking nearintents step ${step.id} for address ${step.depositAddress}`);
         const status = await nearIntents.getStatus(step.depositAddress, step.depositMemo ?? undefined);
         console.log(`[sync] nearintents status for ${step.id}: ${status.status}`);
+        result.nearStatus = status.status;
         const outcome = classifyNearStatus(status.status);
         if (outcome === 'done') {
           const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
@@ -851,6 +864,7 @@ export async function syncOrder(orderId: string) {
         console.log(`[sync] checking paycrest step ${step.id} for order ${step.externalId}`);
         const pc = await paycrest.getOrder(step.externalId) as any;
         console.log(`[sync] paycrest status for ${step.id}: ${pc.status} (dir: ${pc.direction})`);
+        result.paycrestStatus = pc.status ?? null;
 
         const direction = pc.direction || '';
         const status = pc.status.toLowerCase();
@@ -908,6 +922,8 @@ export async function syncOrder(orderId: string) {
       console.warn(`[sync] failed to sync step ${step.id} (${step.provider}):`, err.message);
     }
   }
+
+  return result;
 }
 
 /**
