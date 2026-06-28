@@ -184,6 +184,9 @@ const fmtMoney = (n: number, cur: string, fractionDigits?: number) => {
     maximumFractionDigits: dp,
   }).format(rounded);
 
+  // No CURRENCIES entry (e.g. a crypto-denominated merchant) — don't crash on
+  // c.symbol; show the amount with its currency/token code instead.
+  if (!c) return `${formatted} ${cur}`;
   return `${c.symbol}${formatted}`;
 };
 const fmtCrypto = (n: number, precision: number = 4) => {
@@ -194,6 +197,16 @@ const fmtCrypto = (n: number, precision: number = 4) => {
     maximumFractionDigits: precision,
   });
 };
+
+// Decimal places to display per token. fmtCrypto rounds UP (so the payer never
+// underpays), but a coarse 4dp ceil on high-unit-value tokens (BTC/ETH) tells
+// the payer to send materially MORE than the locked quote. Give those tokens
+// finer precision so the rounding overcharge is negligible; stables stay compact.
+const TOKEN_DP: Record<string, number> = {
+  BTC: 8, WBTC: 8, ETH: 6, WETH: 6, BNB: 5, SOL: 5, AVAX: 5,
+  USDC: 2, USDT: 2, DAI: 2,
+};
+const tokenDp = (token?: string | null) => TOKEN_DP[(token ?? '').toUpperCase()] ?? 6;
 
 const downloadReceipt = async (merchant: Merchant, order: any, settledTo: string, accentColor?: string) => {
   const canvas = document.createElement('canvas');
@@ -1086,14 +1099,16 @@ function ScreenSuccess({
   // or if we're resuming a stored order whose merchant context has since changed.
   const onrampPaidAmount = order ? Number(order.sourceAmount) : merchant.amount;
   const paidWith = direction === 'offramp' && order
-    ? `${fmtCrypto(Number(order.sourceAmount), 4)} ${sourceToken ?? (asset as any).token}`
+    ? `${fmtCrypto(Number(order.sourceAmount), tokenDp(sourceToken ?? (asset as any).token))} ${sourceToken ?? (asset as any).token}`
     : `${fmtCur(onrampPaidAmount, merchant.currency)}`;
 
   const destBank = order?.destInstrument?.bankInstitution;
-  const settledTo = direction === 'offramp'
-    ? (destBank
-      ? institutionName(merchant.currency, destBank)
-      : (currencies[merchant.currency]?.bank || CURRENCIES[merchant.currency]?.bank))
+  const destIsCrypto = (order?.destAssetKey ?? merchant.destAssetKey ?? '').startsWith('crypto:');
+  // Only show a bank when this is a genuine fiat payout AND we actually have the
+  // destination bank. Crypto-settling merchants (or missing bank info) must NOT
+  // fall back to the hardcoded placeholder bank — show the merchant instead.
+  const settledTo = (direction === 'offramp' && !destIsCrypto && destBank)
+    ? institutionName(merchant.currency, destBank)
     : merchant.name;
 
   const completedInSec = order?.createdAt && order?.updatedAt
@@ -1620,7 +1635,7 @@ function ScreenDeposit({
                   {loading ? (
                     <span style={{ color: WEAVE.mute, fontWeight: 400 }}>Calculating…</span>
                   ) : (
-                    <>{fmtCrypto(displayAmount)} {displayToken}</>
+                    <>{fmtCrypto(displayAmount, tokenDp(displayToken))} {displayToken}</>
                   )}
                 </div>
                 <div style={{ fontSize: 11, color: WEAVE.mute }}>
@@ -2019,7 +2034,7 @@ function ScreenVirtualAccount({
       <div style={{ background: '#fff', border: `1px solid ${WEAVE.hair}`, borderRadius: 12, overflow: 'hidden' }}>
         <Row gap={10} style={{ padding: '12px 14px', background: WEAVE.panel, borderBottom: `1px solid ${WEAVE.hair}` }}>
           <div style={{ width: 28, height: 28, borderRadius: 14, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: WEAVE.ink }}>
-            {c.flag}
+            {c?.flag ?? '🏦'}
           </div>
           <Stack gap={1} style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 500 }}>{va.bank}</div>
@@ -2999,7 +3014,8 @@ function WeaveCheckoutInner({
       style={{
         '--weave-accent': ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C',
         '--weave-accent-soft': (ACCENT_MAP[accentColor as string] || accentColor || '#0F5D4C') + '15',
-        width: 400,
+        width: '100%',
+        maxWidth: 400,
         background: WEAVE.surface,
         borderRadius: borderRadius,
         boxShadow: '0 30px 80px rgba(11, 15, 14, 0.22), 0 0 0 1px rgba(0,0,0,0.04)',
