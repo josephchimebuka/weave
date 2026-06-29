@@ -76,7 +76,15 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
     return () => clearInterval(t);
   }, [view, expiresAtMs]);
 
-  const currency = parseDestCurrency(session.destAsset);
+  // `currency` is the payer-facing fiat — it drives the widget's fiat-payment path
+  // (source bank built as fiatKey(currency), the refund-screen institution list, and
+  // amount display). For a crypto-settling session the destination is NOT a fiat, so
+  // deriving currency from it would yield e.g. 'USDC' → an invalid `fiat:USDC` source.
+  // Default the payer fiat to NGN (mirrors PayClient's handling of crypto links); for a
+  // fiat-settling session the destination currency IS the payer currency.
+  const currency = session.destAsset.startsWith('crypto:')
+    ? 'NGN'
+    : parseDestCurrency(session.destAsset);
 
   function handleSuccess(txn: { orderId: string; status: string }) {
     // Server-side: POST /orders auto-links the order to the session via the

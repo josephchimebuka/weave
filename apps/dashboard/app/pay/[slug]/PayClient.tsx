@@ -16,6 +16,7 @@ type LinkData = {
   asset: string;
   merchantName: string;
   publishableKey: string;
+  settlementAssetKey?: string | null;
 };
 
 export default function PayClient({ link }: { link: LinkData }) {
@@ -127,6 +128,11 @@ export default function PayClient({ link }: { link: LinkData }) {
               currency: isP2P ? 'NGN' : token,
               description: link.title,
               amountIn: isP2P ? 'source' : 'dest',
+              // Tell the widget where the merchant settles so it can route fiat
+              // payments correctly (NGN→NGN Paystack vs NGN→crypto onramp). For a
+              // fiat link the asset IS the destination; for a crypto link the
+              // destination is the merchant's payout corridor.
+              destAssetKey: isP2P ? (link.settlementAssetKey ?? undefined) : link.asset,
               ...(isP2P
                 ? { sourceAssetKey: link.asset }  // pre-select the chain/token
                 : {}

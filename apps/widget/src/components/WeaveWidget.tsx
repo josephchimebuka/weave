@@ -2986,10 +2986,42 @@ function WeaveCheckoutInner({
           bankAccountName: refundAccount.accountName,
         },
       };
+
+      // Resolve the order amount + anchor.
+      // Default: charge merchant.amount, anchored on dest when settling to fiat.
+      let orderAmount = merchant.amount;
+      let orderAmountIn: 'source' | 'dest' | undefined =
+        merchant.destAssetKey?.startsWith('fiat:') ? 'dest' : undefined;
+
+      // Crypto-priced link/session paid with fiat: merchant.amount is denominated in the
+      // source crypto (e.g. 100 USDC), but this order is funded in fiat. Re-anchor on the
+      // merchant's settlement asset so we charge the real equivalent rather than treating
+      // "100" as ₦100. The quote's `to` is always the order's real dest, so estimatedDest
+      // is in the dest asset's own units — anchoring `dest` is unit-safe whether the
+      // merchant settles to fiat (Dewdrop → NGN) or crypto (NGN→USDC onramp).
+      const sourceIsCrypto =
+        merchant.amountIn === 'source' && !!merchant.sourceAssetKey?.startsWith('crypto:');
+      if (sourceIsCrypto && merchant.destAssetKey) {
+        if (merchant.sourceAssetKey === merchant.destAssetKey) {
+          // Priced and settled in the same crypto → merchant wants exactly this amount.
+          orderAmount = merchant.amount;
+          orderAmountIn = 'dest';
+        } else {
+          const conv = await fetchQuote(apiKey, {
+            from: merchant.sourceAssetKey!,
+            to: merchant.destAssetKey,
+            amount: merchant.amount,
+            amountIn: 'source',
+          });
+          orderAmount = conv.estimatedDest;
+          orderAmountIn = 'dest';
+        }
+      }
+
       pendingOrderRef.current ??= newOrderRef();
       const res = await createOrder(apiKey, {
         source,
-        amount: merchant.amount,
+        amount: orderAmount,
         reference: pendingOrderRef.current,
         sessionId,
         customer: customer ?? undefined,
@@ -2999,7 +3031,7 @@ function WeaveCheckoutInner({
             assetKey: merchant.destAssetKey || (merchant.destInstrument as any).assetKey,
           }
         } : undefined,
-        amountIn: merchant.destAssetKey?.startsWith('fiat:') ? 'dest' : undefined,
+        amountIn: orderAmountIn,
       });
       pendingOrderRef.current = null;
       setOrderId(res.order.id);

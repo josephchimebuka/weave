@@ -67,13 +67,25 @@ router.get('/public/:slug', apiLimiter, async (req, res) => {
       where: { id: req.params.slug },
       include: {
         merchant: {
-          select: { name: true, publishableKey: true },
+          select: { name: true, publishableKey: true, defaultPayoutInstrumentId: true },
         },
       },
     });
 
     if (!link || !link.isActive) {
       return res.status(404).json({ success: false, error: 'Payment link not found or inactive' });
+    }
+
+    // Resolve the merchant's settlement corridor (asset key only — never bank/wallet
+    // details) so the widget can route fiat payments correctly: NGN→NGN goes straight
+    // to Paystack, NGN→crypto requires the Paycrest onramp + refund account.
+    let settlementAssetKey: string | null = null;
+    if (link.merchant.defaultPayoutInstrumentId) {
+      const payout = await prisma.instrument.findUnique({
+        where: { id: link.merchant.defaultPayoutInstrumentId },
+        select: { assetKey: true },
+      });
+      settlementAssetKey = payout?.assetKey ?? null;
     }
 
     return res.json({
@@ -86,6 +98,7 @@ router.get('/public/:slug', apiLimiter, async (req, res) => {
         asset: link.asset,
         merchantName: link.merchant.name,
         publishableKey: link.merchant.publishableKey,
+        settlementAssetKey,
       },
     });
   } catch (err: any) {
