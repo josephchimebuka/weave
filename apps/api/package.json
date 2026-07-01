@@ -7,10 +7,12 @@
     "db:push": "prisma db push",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "stellar:setup-trustline": "ts-node scripts/setup-stellar-treasury.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.0.0",
+    "@stellar/stellar-sdk": "^16.0.1",
     "@upstash/qstash": "^2.10.1",
     "@upstash/redis": "^1.37.0",
     "@weave/shared": "workspace:*",

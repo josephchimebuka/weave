@@ -16,6 +16,12 @@ import { parseAsset } from '../lib/assets';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
 import { qstash } from '../lib/qstash';
+import {
+  getTreasuryPublicKey,
+  isStellarEnabled,
+  paymentMemoForOrder,
+  scheduleStellarPoll,
+} from './stellar.service';
 
 export interface ExecutorInput {
   orderId: string;
@@ -567,6 +573,20 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         exactTargetUsdc ?? undefined,
         input.appFeeBps
       );
+    } else if (step.provider === 'stellar') {
+      if (!isStellarEnabled()) throw new Error('Stellar treasury is not configured (WEAVE_STELLAR_PUBLIC_KEY)');
+      const memo = paymentMemoForOrder(input.orderId);
+      const treasury = getTreasuryPublicKey();
+      const feeUsd = amountIn * ((SENDER_FEE_BPS + APP_FEE_BPS) / 10000);
+      exec = {
+        externalId: memo,
+        amountIn,
+        amountOut: amountIn - feeUsd,
+        depositAddress: treasury,
+        depositMemo: memo,
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        feeUsd,
+      };
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');
@@ -616,6 +636,14 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
           depositAddress: executions[i].depositAddress!,
           depositMemo:    executions[i].depositMemo ?? null,
           attempt:        1,
+        });
+      }
+      if (plan.steps[i].provider === 'stellar' && executions[i]?.depositMemo) {
+        await scheduleStellarPoll({
+          orderId: input.orderId,
+          memo: executions[i].depositMemo!,
+          expectedAmount: executions[i].amountIn,
+          attempt: 1,
         });
       }
     }
@@ -916,6 +944,27 @@ export async function syncOrder(
         if (confirmedAmount != null) {
           console.log(`[sync] direct payment confirmed on-chain: ${confirmedAmount} USDC`);
           await markStepDone({ provider: 'direct', externalId: step.externalId, amountOut: confirmedAmount });
+        }
+      } else if (step.provider === 'stellar' && step.depositMemo) {
+        console.log(`[sync] checking Stellar Horizon for step ${step.id} memo ${step.depositMemo}`);
+        const { findMatchingPayment } = await import('./stellar.service');
+        const match = await findMatchingPayment({
+          memo: step.depositMemo,
+          expectedAmount: Number(step.amountIn),
+        });
+        if (match) {
+          console.log(`[sync] Stellar payment confirmed: ${match.txHash}`);
+          await markStepDone({
+            provider: 'stellar',
+            externalId: step.externalId ?? step.depositMemo,
+            depositMemo: step.depositMemo,
+            amountOut: match.amount,
+          });
+          // Persist tx hash on the step for merchant dashboard visibility.
+          await prisma.routeStep.update({
+            where: { id: step.id },
+            data: { externalId: match.txHash },
+          });
         }
       }
     } catch (err: any) {

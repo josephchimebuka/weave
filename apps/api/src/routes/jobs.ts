@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
+import { findMatchingPayment, scheduleStellarPoll, STELLAR_POLL_MAX_ATTEMPTS } from '../services/stellar.service';
 
 const router = Router();
 
@@ -272,6 +273,68 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
   }
 
   res.json({ success: true, count: openSteps.length });
+});
+
+// ── Stellar per-step poll (Horizon payment detection) ─────────────────────────
+
+router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
+  const { orderId, memo, expectedAmount, attempt } = req.body as {
+    orderId: string;
+    memo: string;
+    expectedAmount: number;
+    attempt: number;
+  };
+
+  if (!orderId || !memo) {
+    return res.status(400).json({ error: 'missing orderId or memo' });
+  }
+
+  const step = await prisma.routeStep.findFirst({
+    where: {
+      orderId,
+      provider: 'stellar',
+      depositMemo: memo,
+      status: { notIn: ['done', 'failed'] },
+    },
+    select: { id: true, amountIn: true, externalId: true },
+  });
+
+  if (!step) {
+    return res.json({ success: true, stopped: true, reason: 'step already terminal or not found' });
+  }
+
+  try {
+    const match = await findMatchingPayment({
+      memo,
+      expectedAmount: expectedAmount ?? Number(step.amountIn),
+    });
+
+    if (match) {
+      await markStepDone({
+        provider: 'stellar',
+        externalId: step.externalId ?? memo,
+        depositMemo: memo,
+        amountOut: match.amount,
+      });
+      await prisma.routeStep.update({
+        where: { id: step.id },
+        data: { externalId: match.txHash },
+      });
+      return res.json({ success: true, outcome: 'done', txHash: match.txHash });
+    }
+
+    if (attempt >= STELLAR_POLL_MAX_ATTEMPTS) {
+      return res.json({ success: true, stopped: true, reason: 'max attempts reached' });
+    }
+
+    await scheduleStellarPoll({ orderId, memo, expectedAmount: expectedAmount ?? Number(step.amountIn), attempt: attempt + 1 });
+    return res.json({ success: true, outcome: 'pending', nextAttempt: attempt + 1 });
+  } catch (err: any) {
+    if (attempt < STELLAR_POLL_MAX_ATTEMPTS) {
+      await scheduleStellarPoll({ orderId, memo, expectedAmount, attempt: attempt + 1 });
+    }
+    return res.json({ success: true, rescheduled: true, error: err.message });
+  }
 });
 
 // ── Expire Checkout Sessions ────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import jobsRouter         from './routes/jobs';
 import accessRequestsRouter from './routes/access-requests';
 import kycRouter            from './routes/kyc';
 import checkoutRouter       from './routes/checkout';
+import stellarRouter        from './routes/stellar';
 
 import { ensureMerchantDefaultInstruments } from './lib/merchant';
 import { prisma } from './lib/prisma';
@@ -63,6 +64,7 @@ app.use(cors((req: any, callback) => {
     req.path.startsWith('/api/v1/quotes') || 
     req.path.startsWith('/api/v1/orders') || 
     req.path.startsWith('/api/v1/assets') || 
+    req.path.startsWith('/api/v1/stellar') ||
     req.path.startsWith('/api/v1/links/public');
 
   // 1. If it's a public/widget route, allow the origin (browser won't send credentials unless origin is reflected)
@@ -115,6 +117,7 @@ app.use('/api/v1/jobs',           jobsRouter);
 app.use('/api/v1/access-requests', accessRequestsRouter);
 app.use('/api/v1/kyc',             kycRouter);
 app.use('/api/v1/checkout',        checkoutRouter);
+app.use('/api/v1/stellar',         stellarRouter);
 
 app.get('/',       (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));

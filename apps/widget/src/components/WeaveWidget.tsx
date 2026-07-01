@@ -60,6 +60,7 @@ import {
   fetchAssets,
   configureApiBase
 } from '../api/client';
+import { openStellarWalletModal, sendStellarUsdcPayment } from '../lib/stellar';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 
@@ -585,7 +586,7 @@ const secondaryBtn: CSSProperties = {
 
 // ── Screens ──────────────────────────────────────────────────────────────────
 
-type PathPick = 'fiat' | 'crypto' | 'deposit' | 'externalDeposit';
+type PathPick = 'fiat' | 'crypto' | 'deposit' | 'externalDeposit' | 'stellar';
 
 function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disabledMethods }: {
   onPick: (p: PathPick) => void;
@@ -690,6 +691,27 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
             <div style={{ fontSize: 11.5, color: WEAVE.mute }}>Transfer from any chain, any token, any wallet.</div>
           </Stack>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </button>
+
+        <button
+          onClick={() => pick('stellar')}
+          disabled={!!(submitting || picked)}
+          style={{ ...methodCard, opacity: (submitting || picked) ? 0.7 : 1, cursor: (submitting || picked) ? 'not-allowed' : 'pointer' }}
+        >
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden' }}>
+            {picked === 'stellar' ? (
+              <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent, animation: 'wspin 0.8s linear infinite' }} />
+            ) : (
+              <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/stellar/info/logo.png" alt="" style={{ width: 24, height: 24, borderRadius: 6 }} />
+            )}
+          </div>
+          <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>
+              {picked === 'stellar' ? 'Setting up payment…' : 'Pay with Stellar wallet'}
+            </div>
+            <div style={{ fontSize: 11.5, color: WEAVE.mute }}>USDC on Stellar · Freighter, xBull & more · ~5s</div>
+          </Stack>
+          {picked !== 'stellar' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginLeft: 4, flexShrink: 0 }}><path d="M9 6L15 12L9 18" stroke={WEAVE.mute} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>}
         </button>
 
         {!showMoreCrypto ? (
@@ -1375,6 +1397,86 @@ function ScreenError({ onNext, onBack, message }: { onNext: (s: string) => void;
         <button onClick={() => onBack('quote')} style={primaryBtn}>Try again</button>
         <button onClick={() => onNext('connect')} style={secondaryBtn}>Use a different payment method</button>
       </Stack>
+    </Stack>
+  );
+}
+
+// ── Stellar wallet pay ───────────────────────────────────────────────────────
+
+function ScreenStellarPay({
+  merchant, depositAddress, depositMemo, amountToSend, walletAddress, loading, paying, error,
+  onConnect, onPay, fmtCur,
+}: {
+  merchant: Merchant;
+  depositAddress: string | null;
+  depositMemo: string | null;
+  amountToSend: number | null;
+  walletAddress: string | null;
+  loading: boolean;
+  paying: boolean;
+  error: string | null;
+  onConnect: () => void;
+  onPay: () => void;
+  fmtCur: (n: number, cur: string) => string;
+}) {
+  const [memoCopied, setMemoCopied] = useState(false);
+  const usdcAmount = amountToSend ?? 0;
+
+  return (
+    <Stack gap={16} style={{ padding: '18px 20px 6px' }}>
+      <Stack gap={4}>
+        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>Pay with Stellar USDC</div>
+        <div style={{ fontSize: 12.5, color: WEAVE.mute }}>
+          Send exactly <strong>{usdcAmount.toFixed(2)} USDC</strong> on Stellar to complete your payment to {merchant.name}.
+        </div>
+      </Stack>
+
+      <div style={{ background: WEAVE.panel, border: `1px solid ${WEAVE.hair}`, borderRadius: 12, padding: '14px 16px' }}>
+        <Stack gap={8}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+            <span style={{ color: WEAVE.mute }}>Amount</span>
+            <span style={{ fontWeight: 600 }}>{usdcAmount.toFixed(7)} USDC</span>
+          </div>
+          {depositMemo && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, gap: 8 }}>
+              <span style={{ color: WEAVE.mute }}>Memo (required)</span>
+              <button
+                type="button"
+                onClick={() => { navigator.clipboard.writeText(depositMemo); setMemoCopied(true); setTimeout(() => setMemoCopied(false), 2000); }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600, color: WEAVE.accent }}
+              >
+                {memoCopied ? 'Copied!' : depositMemo.slice(0, 12) + '…'}
+              </button>
+            </div>
+          )}
+          {walletAddress && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+              <span style={{ color: WEAVE.mute }}>Your wallet</span>
+              <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{walletAddress.slice(0, 6)}…{walletAddress.slice(-4)}</span>
+            </div>
+          )}
+        </Stack>
+      </div>
+
+      {depositMemo && (
+        <div style={{ fontSize: 11.5, color: '#9A6700', background: '#FFF8E6', borderRadius: 8, padding: '8px 12px' }}>
+          Include the memo exactly as shown — payments without it cannot be matched to your order.
+        </div>
+      )}
+
+      {error && <div style={{ fontSize: 12.5, color: WEAVE.err }}>{error}</div>}
+
+      {loading ? (
+        <div style={{ ...primaryBtn, opacity: 0.7, justifyContent: 'center' }}>Preparing payment…</div>
+      ) : !walletAddress ? (
+        <button onClick={onConnect} disabled={paying || !depositAddress} style={{ ...primaryBtn, opacity: depositAddress ? 1 : 0.5 }}>
+          Connect Stellar wallet
+        </button>
+      ) : (
+        <button onClick={onPay} disabled={paying || !depositAddress || !amountToSend} style={{ ...primaryBtn, opacity: (paying || !depositAddress) ? 0.7 : 1 }}>
+          {paying ? 'Confirm in wallet…' : `Pay ${usdcAmount.toFixed(2)} USDC`}
+        </button>
+      )}
     </Stack>
   );
 }
@@ -2599,6 +2701,9 @@ function WeaveCheckoutInner({
   }, []);
   const [walletToken, setWalletToken] = useState<string>('USDC');
   const [walletBalanceEntry, setWalletBalanceEntry] = useState<Balance | null>(null);
+  const [stellarWalletAddress, setStellarWalletAddress] = useState<string | null>(null);
+  const [stellarPaying, setStellarPaying] = useState(false);
+  const [stellarError, setStellarError] = useState<string | null>(null);
   const [ethUsdPrice, setEthUsdPrice] = useState<number>(3400);
   const [loadingEthPrice, setLoadingEthPrice] = useState(true);
 
@@ -2649,6 +2754,13 @@ function WeaveCheckoutInner({
                   setDepositToken(parts[2] || parts[1]);
                   setDepositChain(parts[1]);
                   setScreen('deposit');
+                } else if (activeStep?.provider === 'stellar' && order.status === 'awaiting_deposit') {
+                  setDepositAddress(activeStep.depositAddress);
+                  setDepositMemo(activeStep.depositMemo);
+                  setDepositAmount(Number(activeStep.amountIn));
+                  setDepositToken('USDC');
+                  setDepositChain('STELLAR');
+                  setScreen('stellarPay');
                 } else {
                   setScreen('processing');
                 }
@@ -2790,6 +2902,91 @@ function WeaveCheckoutInner({
       // "Pay with crypto" — NEAR Intents deposit address flow (any chain/token/wallet)
       setDirection('offramp');
       setScreen('deposit');
+    } else if (method === 'stellar') {
+      setDirection('offramp');
+      initStellarCheckout();
+    }
+  };
+
+  const initStellarCheckout = async () => {
+    setSubmitting(true);
+    setDepositLoading(true);
+    setStellarError(null);
+    setStellarWalletAddress(null);
+    try {
+      const to = merchant.destAssetKey || fiatKey(merchant.currency);
+      const from = cryptoKey('STELLAR', 'USDC');
+      await fetchQuote(apiKey, {
+        from, to,
+        amount: merchant.amount,
+        amountIn: merchant.amountIn ?? 'dest',
+      });
+      pendingOrderRef.current ??= newOrderRef();
+      const res = await createOrder(apiKey, {
+        source: { inline: { kind: 'crypto_wallet', assetKey: from, walletAddress: '' } },
+        amount: merchant.amount,
+        amountIn: merchant.amountIn ?? 'dest',
+        flow: 'stellar',
+        reference: pendingOrderRef.current,
+        sessionId,
+        customer: customer ?? undefined,
+        dest: merchant.destInstrument ? {
+          inline: { ...merchant.destInstrument, assetKey: to },
+        } : undefined,
+      });
+      pendingOrderRef.current = null;
+      setOrderId(res.order.id);
+      setDepositAddress(res.nextAction.depositAddress ?? null);
+      setDepositMemo(res.nextAction.depositMemo ?? null);
+      setDepositAmount(typeof res.nextAction.amount === 'number' ? res.nextAction.amount : res.order.sourceAmount);
+      setDepositToken('USDC');
+      setDepositChain('STELLAR');
+      setScreen('stellarPay');
+    } catch (e: any) {
+      pendingOrderRef.current = null;
+      setStellarError(e.message ?? 'Could not start Stellar checkout');
+      setApiError(e.message);
+      onError?.(e);
+    } finally {
+      setSubmitting(false);
+      setDepositLoading(false);
+    }
+  };
+
+  const connectStellarWallet = async () => {
+    setStellarError(null);
+    try {
+      const addr = await openStellarWalletModal();
+      setStellarWalletAddress(addr);
+    } catch (e: any) {
+      const msg = e.message ?? 'Wallet connection failed';
+      if (!msg.toLowerCase().includes('cancel')) setStellarError(msg);
+    }
+  };
+
+  const payWithStellar = async () => {
+    if (!depositAddress || !depositMemo || !depositAmount) return;
+    setStellarPaying(true);
+    setStellarError(null);
+    try {
+      let addr = stellarWalletAddress;
+      if (!addr) {
+        addr = await openStellarWalletModal();
+        setStellarWalletAddress(addr);
+      }
+      await sendStellarUsdcPayment({
+        destination: depositAddress,
+        amount: depositAmount,
+        memo: depositMemo,
+      });
+      setScreen('processing');
+    } catch (e: any) {
+      const msg = e.message ?? '';
+      const rejected = msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied') || msg.toLowerCase().includes('cancel');
+      setStellarError(rejected ? 'Transaction was rejected. Please try again.' : (msg || 'Stellar payment failed'));
+      onError?.(e);
+    } finally {
+      setStellarPaying(false);
     }
   };
 
@@ -3203,6 +3400,8 @@ function WeaveCheckoutInner({
     setDepositError(null);
     setQuote(null);
     setWalletBalanceEntry(null);
+    setStellarWalletAddress(null);
+    setStellarError(null);
     setScreen(target);
   };
 
@@ -3217,6 +3416,7 @@ function WeaveCheckoutInner({
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} message={apiError} />;
     } else {
       if (screen === 'walletConnect') return <ScreenWalletConnect onConnected={() => setScreen('walletAsset')} onExternalFlow={() => { setDirection('offramp'); setScreen('deposit'); }} />;
+      if (screen === 'stellarPay') return <ScreenStellarPay merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} walletAddress={stellarWalletAddress} loading={depositLoading} paying={stellarPaying} error={stellarError} onConnect={connectStellarWallet} onPay={payWithStellar} fmtCur={fmtCur} />;
       if (screen === 'walletAsset') return <ScreenWalletAsset onSelectToken={(token, bal) => advanceToWalletQuote(bal, token)} onExternalFlow={() => setScreen('deposit')} merchant={merchant} currencies={currencies} fmtCur={fmtCur} ethUsdPrice={ethUsdPrice} loadingEthPrice={loadingEthPrice} />;
       if (screen === 'walletSign') return <ScreenWalletSign onRetry={confirmOfframp} />;
       if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainKey={preSelectedChainKey} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
@@ -3230,7 +3430,7 @@ function WeaveCheckoutInner({
   })();
 
   const showBack =
-    (['wallet', 'quote', 'deposit', 'walletConnect', 'walletAsset', 'walletSign'].includes(screen) && !isOnramp) ||
+    (['wallet', 'quote', 'deposit', 'stellarPay', 'walletConnect', 'walletAsset', 'walletSign'].includes(screen) && !isOnramp) ||
     (['refundAccount', 'vaccount'].includes(screen) && isOnramp);
   const backTarget =
     screen === 'quote' ? (walletBalanceEntry ? 'walletAsset' : 'wallet') :

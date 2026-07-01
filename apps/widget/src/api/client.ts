@@ -190,7 +190,7 @@ export interface NextAction {
   expiresAt?: string;
 }
 
-export type Flow = 'self' | 'external';
+export type Flow = 'self' | 'external' | 'stellar';
 
 export interface CreateOrderResponse {
   order:      { id: string; status: string; sourceAssetKey: string; destAssetKey: string; sourceAmount: number; destAmount: number | null };

@@ -6,14 +6,14 @@
 import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
 
-export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'stellar' | 'direct' | 'paystack';
 
 // Which checkout flow the caller is in. 'self' means the user signs with a
 // connected wallet (ChainRails can do this once it's fully wired). 'external'
 // means the widget shows a deposit address for a third party to pay — this
 // is what NEAR Intents is built for. Default is 'external' because CR is
 // not yet integrated.
-export type Flow = 'self' | 'external';
+export type Flow = 'self' | 'external' | 'stellar';
 
 export interface RoutePlanStep {
   provider: Provider;
@@ -106,6 +106,17 @@ const EDGES: Edge[] = [
     expectedSecs: 60,
     note: 'chainrails bridge → Base USDC',
     flows: ['self'],
+  },
+  // Stellar direct: USDC on Stellar → Weave treasury (Stellar Wallets Kit flow).
+  // Priority 1 collection rail — merchant fiat settlement follows in Tranche 2.
+  {
+    provider: 'stellar',
+    from: (a) => a.kind === 'crypto' && a.token === 'USDC' && a.chain === 'STELLAR',
+    to: (_a) => true,
+    expectedFeeBps: 5,
+    expectedSecs: 5,
+    note: 'stellar USDC → Weave treasury',
+    flows: ['stellar'],
   },
 ];
 
