@@ -588,13 +588,14 @@ const secondaryBtn: CSSProperties = {
 
 type PathPick = 'fiat' | 'crypto' | 'deposit' | 'externalDeposit' | 'stellar';
 
-function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disabledMethods }: {
+function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disabledMethods, error }: {
   onPick: (p: PathPick) => void;
   merchant: Merchant;
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string) => string;
   submitting?: boolean;
   disabledMethods?: Record<string, string>;
+  error?: string | null;
 }) {
   const c = currencies[merchant.currency] || CURRENCIES[merchant.currency];
   const [showMoreCrypto, setShowMoreCrypto] = useState(false);
@@ -733,6 +734,15 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
           </Stack>
         )}
       </Stack>
+
+      {error && (
+        <div style={{
+          fontSize: 12.5, color: WEAVE.err, background: '#FBEEE9',
+          borderRadius: 10, padding: '10px 12px', lineHeight: 1.45,
+        }}>
+          {error}
+        </div>
+      )}
     </Stack>
   );
 }
@@ -3406,7 +3416,7 @@ function WeaveCheckoutInner({
   };
 
   const body = (() => {
-    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} disabledMethods={disabledMethods} />;
+    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} disabledMethods={disabledMethods} error={apiError || stellarError} />;
     if (isOnramp) {
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;

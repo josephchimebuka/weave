@@ -383,7 +383,7 @@ export default function DemoPage() {
                   } : undefined}
                   theme="organic"
                   onSuccess={(txn) => console.log('Payment Success:', txn)}
-                  apiKey={process.env.NEXT_PUBLIC_API_KEY || ''}
+                  apiKey={process.env.NEXT_PUBLIC_API_KEY || undefined}
                   apiBase={apiUrl}
                 />
                 {merchant.amount < 700 && (

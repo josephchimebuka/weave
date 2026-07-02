@@ -51,6 +51,10 @@ router.post('/email/send', requireSession, authLimiter, async (req, res) => {
 
     await redis.set(cooldownKey, '1', { px: RESEND_COOLDOWN });
 
+    if (!process.env.RESEND_API_KEY?.trim()) {
+      console.log(`[dev] email verification OTP for ${merchant.email}: ${otpCode}`);
+    }
+
     await sendEmailVerificationEmail(merchant.email, otpCode);
 
     return res.json({ success: true, data: { sent: true, expiresInSeconds: OTP_TTL_MS / 1000 } });

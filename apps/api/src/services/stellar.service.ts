@@ -45,7 +45,9 @@ export function getNetworkPassphrase(): string {
 }
 
 export function getUsdcIssuer(): string {
-  return process.env.STELLAR_USDC_ISSUER ?? USDC_ISSUERS[getStellarNetwork()];
+  const fromEnv = process.env.STELLAR_USDC_ISSUER?.trim();
+  if (fromEnv) return fromEnv;
+  return USDC_ISSUERS[getStellarNetwork()];
 }
 
 export function getTreasuryPublicKey(): string {

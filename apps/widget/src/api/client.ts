@@ -97,6 +97,9 @@ async function apiFetch(path: string, publishableKey: string, options?: RequestI
 
     return json ? json.data : null;
   } catch (err: any) {
+    if (err?.name === 'TypeError' && /failed to fetch/i.test(err?.message ?? '')) {
+      throw new Error('Cannot reach Weave API — confirm it is running (http://localhost:4000/health) and CORS allows this page.');
+    }
     if (err?.name === 'AbortError') throw new Error('Request timed out — please check your connection');
     throw err;
   } finally {
