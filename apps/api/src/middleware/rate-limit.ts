@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { createHash } from 'crypto';
 import { redis } from '../lib/serverless-redis';
 
 interface RateLimitOptions {
@@ -26,7 +27,17 @@ export function rateLimit(options: RateLimitOptions) {
     const forwarded = req.headers['x-forwarded-for'];
     const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : (req.ip || req.socket.remoteAddress || 'unknown');
 
-    const key = `${keyPrefix}:${role}:${ip}`;
+    // Bucket identity: widget traffic is proxied through the dashboard server, so
+    // every merchant shares one IP. Key widget requests on the API key instead so
+    // each merchant gets an isolated bucket; fall back to IP for anon/other roles.
+    // Hash the key so raw secrets never land in Redis key names.
+    const apiKey = req.headers['x-api-key'];
+    const identity =
+      role === 'widget' && typeof apiKey === 'string' && apiKey
+        ? `key:${createHash('sha256').update(apiKey).digest('hex').slice(0, 16)}`
+        : ip;
+
+    const key = `${keyPrefix}:${role}:${identity}`;
 
     // ── Bypass & Special Handling ───────────────────────────────────────────
 
@@ -46,7 +57,7 @@ export function rateLimit(options: RateLimitOptions) {
     if (req.path.startsWith('/v1/orders')) {
       if (req.method === 'GET') {
         // Polling limit: 300 per 1 min (very generous for widget)
-        const pollKey = `${keyPrefix}:poll:${ip}`;
+        const pollKey = `${keyPrefix}:poll:${identity}`;
         const count = (await redis.get<number>(pollKey)) || 0;
         if (count >= 300) return res.status(429).json({ success: false, error: 'Too many polling requests' });
         await redis.incr(pollKey);

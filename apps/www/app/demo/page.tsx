@@ -2,7 +2,15 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { WeaveCheckout } from '@weave-sdk/widget';
+import dynamic from 'next/dynamic';
+
+// The widget imports @creit.tech/stellar-wallets-kit, which reads
+// globalThis.localStorage at import time and throws during SSR / static
+// prerender. Load it client-only so the module is never evaluated on the server.
+const WeaveCheckout = dynamic(
+  () => import('@weave-sdk/widget').then((m) => m.WeaveCheckout),
+  { ssr: false },
+);
 
 // Reusing design elements from landing page
 function Wordmark({ size = 26 }: { size?: number }) {

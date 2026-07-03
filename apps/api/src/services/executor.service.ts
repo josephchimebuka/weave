@@ -420,10 +420,18 @@ function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): Execute
     return s + ((e.provider === 'chainrails' || e.provider === 'nearintents') ? (e.feeUsd ?? 0) : 0);
   }, 0);
 
+  // Stellar collects USDC into treasury; keep the fiat target as destAmount when
+  // the order settles to fiat (see executeOrder for the same guard).
+  const lastToFiat = parseAsset(last.toAsset).kind === 'fiat';
+  const reconStellarFiat = last.provider === 'stellar' && lastToFiat;
+  const reconDestAmount = reconStellarFiat && input.destAmountFiat != null
+    ? input.destAmountFiat
+    : (last.amountOut ?? 0);
+
   return {
     firstStep: { sequence: 0, provider: first.provider, fromAsset: first.fromAsset, toAsset: first.toAsset },
     nextAction,
-    destAmount: last.amountOut ?? 0,
+    destAmount: reconDestAmount,
     steps: steps.map(e => ({
       sequence: e.sequence,
       externalId: e.externalId,
@@ -693,10 +701,20 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
   const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
 
+  // The Stellar rail collects USDC into the treasury, so its terminal amountOut
+  // is denominated in USDC even when the order settles to fiat. Report the fiat
+  // target (destAmountFiat) as destAmount so the receipt/email match the order's
+  // dest currency instead of showing the raw USDC figure labelled as NGN.
+  const lastToFiat = parseAsset(plan.steps[last].toAsset).kind === 'fiat';
+  const stellarFiatCollection = plan.steps[last].provider === 'stellar' && lastToFiat;
+  const destAmount = stellarFiatCollection && input.destAmountFiat != null
+    ? input.destAmountFiat
+    : executions[last].amountOut;
+
   return {
     firstStep: { sequence: 0, provider: firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
     nextAction,
-    destAmount: executions[last].amountOut,
+    destAmount,
     steps: executions.map((e, i) => ({
       sequence: i,
       externalId: e.externalId,
@@ -748,10 +766,15 @@ export async function markStepDone(params: {
 
   // On completion, overwrite destAmount with the last step's actual confirmed output
   // so merchants see what was truly settled, not the initial quote estimate.
+  // Exception: the Stellar rail collects USDC into the treasury, so its amountOut
+  // is USDC even when the order settles to fiat — keep the fiat destAmount snapshot
+  // set at creation rather than clobbering it with the USDC figure.
   const orderUpdate: Record<string, unknown> = { status: nextOrderStatus };
   if (nextOrderStatus === 'completed') {
     const lastStep = fresh[fresh.length - 1];
-    if (lastStep?.amountOut != null) {
+    const destIsFiat = step.order.destAssetKey.startsWith('fiat:');
+    const stellarFiatCollection = lastStep?.provider === 'stellar' && destIsFiat;
+    if (lastStep?.amountOut != null && !stellarFiatCollection) {
       orderUpdate.destAmount = lastStep.amountOut;
     }
   }

@@ -2775,11 +2775,13 @@ function WeaveCheckoutInner({
                   setScreen('processing');
                 }
               }
-            } else if (order.status === 'completed') {
-              setOrderId(order.id);
-              setScreen('success');
             } else {
-              // Order is expired, failed, or refunded. Clear it so it doesn't linger.
+              // Any terminal state (completed, failed, refunded, expired): the
+              // order is done. Consume the saved pointer for THIS order id so a
+              // refresh starts a fresh checkout instead of resurfacing the success
+              // (or other terminal) screen. Because resume always re-fetches live
+              // status before acting, a finished order is consumed exactly once —
+              // making resume idempotent per order id.
               localStorage.removeItem(`weave-order-${apiKey}`);
             }
           }).catch(() => {
