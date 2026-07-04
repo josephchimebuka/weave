@@ -208,6 +208,17 @@ export class PaycrestService {
         `[webhook] paycrest sig mismatch — expected ${expected.slice(0, 12)}… got ${sig.slice(0, 12)}… ` +
         `(secret len ${key.length}, body len ${rawBody.length})`,
       );
+      // TEMP DIAGNOSTIC: the secret looks base64 (len 44 = 32 bytes). Paycrest may
+      // key the HMAC with the *decoded* bytes, not the string. Report which key
+      // interpretation reproduces the received signature, then delete this block.
+      for (const variant of ['base64', 'hex'] as const) {
+        try {
+          const keyBuf = Buffer.from(key, variant);
+          if (keyBuf.length === 0) continue;
+          const alt = crypto.createHmac('sha256', keyBuf).update(rawBody, 'utf8').digest('hex');
+          console.warn(`[webhook] paycrest sig probe — key-as-${variant}: ${alt.slice(0, 12)}…${alt === sig ? '  ← MATCH' : ''}`);
+        } catch { /* invalid encoding for this variant */ }
+      }
     }
     return ok;
   }
