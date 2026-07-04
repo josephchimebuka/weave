@@ -179,10 +179,16 @@ export class PaycrestService {
     return this.request<string>('POST', '/verify-account', params);
   }
 
-  /** HMAC-SHA256(secret, rawBody), hex. Mirrors Paycrest's reference verifier:
-   *  `.trim()` the secret and `.trim().toLowerCase()` the signature so a stray
-   *  newline pasted into PAYCREST_WEBHOOK_SECRET, or a differently-cased header,
-   *  can't cause a false mismatch. Accepts an optional `sha256=` prefix. */
+  /** HMAC-SHA256(secret, rawBody), hex. Accepts an optional `sha256=` prefix.
+   *
+   *  Trailing-newline quirk: Paycrest's aggregator signs `json.Marshal(payload)`
+   *  (no trailing newline) but transmits the body via fast-shot's `AsJSON`, which
+   *  uses `json.NewEncoder(...).Encode()` — and that ALWAYS appends a trailing
+   *  '\n'. So the raw body we receive is `signedBytes + "\n"`, one byte longer
+   *  than what was signed, and a standard raw-body HMAC never matches. We verify
+   *  against the body as-received AND with a trailing newline stripped, so both
+   *  the quirky and any future fixed sender path pass. The secret is `.trim()`ed
+   *  and the signature `.trim().toLowerCase()`ed to tolerate copy-paste/casing noise. */
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
     const key = (this.webhookSecret || '').trim();
     if (!key) {
@@ -192,35 +198,32 @@ export class PaycrestService {
     const sig = (signature || '').trim().toLowerCase().replace(/^sha256=/, '');
     if (!sig) return false;
 
-    const expected = crypto.createHmac('sha256', key).update(rawBody, 'utf8').digest('hex');
-    let ok = false;
-    if (expected.length === sig.length) {
+    // Candidate bodies: exactly as received, and with a single trailing newline
+    // removed (the aggregator's fast-shot Encoder appends one after signing).
+    const candidates: Array<{ body: string; label: string }> = [{ body: rawBody, label: 'raw' }];
+    const stripped = rawBody.replace(/\r?\n$/, '');
+    if (stripped !== rawBody) candidates.push({ body: stripped, label: 'newline-stripped' });
+
+    let lastExpected = '';
+    for (const { body, label } of candidates) {
+      const expected = crypto.createHmac('sha256', key).update(body, 'utf8').digest('hex');
+      lastExpected = expected;
+      if (expected.length !== sig.length) continue;
       try {
-        ok = crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'));
-      } catch {
-        ok = false;
-      }
+        if (crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'))) {
+          if (label !== 'raw') {
+            console.log(`[webhook] paycrest sig verified against ${label} body — confirms aggregator trailing-\\n quirk`);
+          }
+          return true;
+        }
+      } catch { /* fall through to next candidate */ }
     }
-    if (!ok) {
-      // Prefixes are safe to log (not the secret). If expected ≈ received the
-      // problem is length/encoding; if they differ it's the wrong secret/body.
-      console.warn(
-        `[webhook] paycrest sig mismatch — expected ${expected.slice(0, 12)}… got ${sig.slice(0, 12)}… ` +
-        `(secret len ${key.length}, body len ${rawBody.length})`,
-      );
-      // TEMP DIAGNOSTIC: the secret looks base64 (len 44 = 32 bytes). Paycrest may
-      // key the HMAC with the *decoded* bytes, not the string. Report which key
-      // interpretation reproduces the received signature, then delete this block.
-      for (const variant of ['base64', 'hex'] as const) {
-        try {
-          const keyBuf = Buffer.from(key, variant);
-          if (keyBuf.length === 0) continue;
-          const alt = crypto.createHmac('sha256', keyBuf).update(rawBody, 'utf8').digest('hex');
-          console.warn(`[webhook] paycrest sig probe — key-as-${variant}: ${alt.slice(0, 12)}…${alt === sig ? '  ← MATCH' : ''}`);
-        } catch { /* invalid encoding for this variant */ }
-      }
-    }
-    return ok;
+
+    console.warn(
+      `[webhook] paycrest sig mismatch — expected ${lastExpected.slice(0, 12)}… got ${sig.slice(0, 12)}… ` +
+      `(secret len ${key.length}, body len ${rawBody.length})`,
+    );
+    return false;
   }
 }
 
