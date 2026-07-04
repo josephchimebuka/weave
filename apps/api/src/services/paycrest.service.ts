@@ -179,23 +179,37 @@ export class PaycrestService {
     return this.request<string>('POST', '/verify-account', params);
   }
 
-  /** HMAC-SHA256(secret, rawBody). Accepts optional `sha256=` prefix. */
+  /** HMAC-SHA256(secret, rawBody), hex. Mirrors Paycrest's reference verifier:
+   *  `.trim()` the secret and `.trim().toLowerCase()` the signature so a stray
+   *  newline pasted into PAYCREST_WEBHOOK_SECRET, or a differently-cased header,
+   *  can't cause a false mismatch. Accepts an optional `sha256=` prefix. */
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
-    if (!this.webhookSecret) {
+    const key = (this.webhookSecret || '').trim();
+    if (!key) {
       console.error('[security] PAYCREST_WEBHOOK_SECRET not set. Rejecting all webhooks.');
       return false;
     }
-    if (!signature) return false;
-    const expected = crypto.createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex');
-    const sig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-    try {
-      const sigBuf = Buffer.from(sig, 'hex');
-      const expectedBuf = Buffer.from(expected, 'hex');
-      if (sigBuf.length !== expectedBuf.length) return false;
-      return crypto.timingSafeEqual(sigBuf, expectedBuf);
-    } catch {
-      return false;
+    const sig = (signature || '').trim().toLowerCase().replace(/^sha256=/, '');
+    if (!sig) return false;
+
+    const expected = crypto.createHmac('sha256', key).update(rawBody, 'utf8').digest('hex');
+    let ok = false;
+    if (expected.length === sig.length) {
+      try {
+        ok = crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'));
+      } catch {
+        ok = false;
+      }
     }
+    if (!ok) {
+      // Prefixes are safe to log (not the secret). If expected ≈ received the
+      // problem is length/encoding; if they differ it's the wrong secret/body.
+      console.warn(
+        `[webhook] paycrest sig mismatch — expected ${expected.slice(0, 12)}… got ${sig.slice(0, 12)}… ` +
+        `(secret len ${key.length}, body len ${rawBody.length})`,
+      );
+    }
+    return ok;
   }
 }
 

@@ -52,7 +52,7 @@ router.post('/paycrest', async (req: Request, res: Response) => {
   console.log(`[webhook] paycrest received. sig: ${signature.slice(0, 12)}... len: ${rawBody.length}`);
 
   if (!paycrest.verifyWebhookSignature(rawBody, signature)) {
-    console.warn(`[webhook] paycrest signature mismatch. length: ${rawBody.length}`);
+    // verifyWebhookSignature already logs expected-vs-received prefixes for triage.
     return res.status(401).json({ success: false, error: 'Invalid signature' });
   }
 
