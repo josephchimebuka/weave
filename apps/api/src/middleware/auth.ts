@@ -43,8 +43,10 @@ export async function requireApiKey(req: Request, res: Response, next: NextFunct
 
 // ── KeyPair (secret key) ─────────────────────────────────────────────────────
 // Used by server-to-server integrations: merchant's own backend → Weave API.
-// x-public-key: pk_live_...  (identifies the key pair)
-// x-secret-key: sk_live_...  (never stored plaintext; compared via hash)
+// x-public-key: pk_live_... / pk_test_...  (identifies the key pair)
+// x-secret-key: sk_live_... / sk_test_...  (never stored plaintext; compared via hash)
+// A sandbox pair (isSandbox=true) puts the request in sandbox mode, so backend/SDK
+// integrations can drive checkout sessions and orders end-to-end against sandbox.
 export async function requireKeyPair(req: Request, res: Response, next: NextFunction) {
   const publicKey = (req.headers['x-public-key'] as string | undefined)?.trim();
   const secretKey = (req.headers['x-secret-key'] as string | undefined)?.trim();
@@ -73,7 +75,7 @@ export async function requireKeyPair(req: Request, res: Response, next: NextFunc
     }
 
     req.merchantId = keyPair.merchantId;
-    req.sandboxMode = false;
+    req.sandboxMode = keyPair.isSandbox;
     return next();
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Auth service error' });

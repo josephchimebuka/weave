@@ -109,11 +109,12 @@ model OtpChallenge {
 
 model KeyPair {
   id              String   @id @default(cuid())
-  publicKey       String   @unique  // pk_live_... (same as Merchant.publishableKey for primary pair)
+  publicKey       String   @unique  // pk_live_... (live) or pk_test_... (sandbox); matches the Merchant's live/sandbox publishable key
   hashedSecretKey String
   merchantId      String
   merchant        Merchant @relation(fields: [merchantId], references: [id])
   isActive        Boolean  @default(true)
+  isSandbox       Boolean  @default(false) // true → server-to-server auth with this pair runs in sandbox mode
   createdAt        DateTime  @default(now())
   updatedAt       DateTime @updatedAt
 

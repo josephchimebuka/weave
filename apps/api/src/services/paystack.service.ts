@@ -3,9 +3,18 @@ import { INSTITUTIONS_BY_CUR } from '@weave/shared';
 
 const BASE = 'https://api.paystack.co';
 
-const getHeaders = () => {
-  const secret = process.env.PAYSTACK_SECRET_KEY;
-  if (!secret) throw new Error('PAYSTACK_SECRET_KEY is required but missing');
+// Sandbox uses a strictly separate PAYSTACK_*_TEST key pair so a sandbox order
+// can never touch live Paystack (and vice-versa). We never fall back from test to
+// live: if the test key is missing the caller keeps the fully-mocked sandbox path.
+const getHeaders = (sandbox = false) => {
+  const secret = sandbox ? process.env.PAYSTACK_SECRET_KEY_TEST : process.env.PAYSTACK_SECRET_KEY;
+  if (!secret) {
+    throw new Error(
+      sandbox
+        ? 'PAYSTACK_SECRET_KEY_TEST is required for sandbox Paystack transactions'
+        : 'PAYSTACK_SECRET_KEY is required but missing',
+    );
+  }
   return {
     'Authorization': `Bearer ${secret}`,
     'Content-Type': 'application/json',
@@ -20,6 +29,21 @@ let bankListCachedAt = 0;
 const BANK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class PaystackService {
+  /** True when the test SECRET key is configured, so sandbox can provision a real
+   *  Paystack test transaction instead of the fully-mocked fallback. Only the secret
+   *  is load-bearing: it mints the access code (server-side) and verifies the charge.
+   *  The publishable key is NOT required — the widget resumes the popup via the access
+   *  code (`resumeTransaction`), which never reads a public key. */
+  hasTestKeys(): boolean {
+    return !!process.env.PAYSTACK_SECRET_KEY_TEST;
+  }
+
+  /** Publishable key for reference/shape parity — test key in sandbox, live otherwise.
+   *  May be '' in sandbox; the widget's `resumeTransaction(accessCode)` doesn't use it. */
+  publicKey(sandbox = false): string {
+    return (sandbox ? process.env.PAYSTACK_PUBLIC_KEY_TEST : process.env.PAYSTACK_PUBLIC_KEY) || '';
+  }
+
   /**
    * General Transactions (Cards, USSD, etc.)
    * Used when bank transfer is not the primary choice.
@@ -33,10 +57,10 @@ export class PaystackService {
     transactionCharge?: number; // flat kobo amount routed to Weave's main account
     callbackUrl?:       string;
     metadata?:          any;
-  }): Promise<{ authorization_url: string; access_code: string; reference: string }> {
+  }, opts: { sandbox?: boolean } = {}): Promise<{ authorization_url: string; access_code: string; reference: string }> {
     const res = await fetch(`${BASE}/transaction/initialize`, {
       method: 'POST',
-      headers: getHeaders(),
+      headers: getHeaders(opts.sandbox),
       body: JSON.stringify({
         email:               params.email,
         amount:              Math.round(params.amountNgn * 100), // Paystack uses kobo
@@ -117,9 +141,9 @@ export class PaystackService {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
   }
 
-  async verifyTransaction(reference: string): Promise<{ status: string; amount: number }> {
+  async verifyTransaction(reference: string, opts: { sandbox?: boolean } = {}): Promise<{ status: string; amount: number }> {
     const res = await fetch(`${BASE}/transaction/verify/${reference}`, {
-      headers: getHeaders(),
+      headers: getHeaders(opts.sandbox),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(`Paystack Verify Error: ${body.message || res.statusText}`);

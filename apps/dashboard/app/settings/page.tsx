@@ -72,6 +72,11 @@ function SettingsContent() {
   const [keysLoading, setKeysLoading]     = useState(true);
   const [regenerating, setRegenerating]   = useState(false);
 
+  // Sandbox secret is only returned once, right after (re)generation.
+  const [sandboxSecretKey, setSandboxSecretKey]       = useState<string | null>(null);
+  const [sandboxSecretVisible, setSandboxSecretVisible] = useState(false);
+  const [regeneratingSandbox, setRegeneratingSandbox] = useState(false);
+
   // Profile tab state
   const [profile, setProfile]       = useState<{ id: string; name: string; email: string; publishableKey: string | null; sandboxPublishableKey: string | null; kycLevel: string; createdAt: string } | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
@@ -216,7 +221,10 @@ function SettingsContent() {
 
   async function regenerateKeys() {
     setRegenerating(true);
-    const result = await apiFetch<{ publishableKey?: string; publicKey?: string; secretKey?: string }>('/api/merchant/api-key', { method: 'POST' });
+    const result = await apiFetch<{ publishableKey?: string; publicKey?: string; secretKey?: string }>('/api/merchant/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'live' }),
+    });
     setRegenerating(false);
     if (!result.ok) {
       toast.error(result.error);
@@ -226,6 +234,25 @@ function SettingsContent() {
     setSecretKey(result.data.secretKey ?? null);
     setCopied(null);
     toast.success('New API keys generated. Copy your secret key now — it won’t be shown again.');
+  }
+
+  async function regenerateSandboxKeys() {
+    setRegeneratingSandbox(true);
+    const result = await apiFetch<{ publishableKey?: string; secretKey?: string }>('/api/merchant/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'sandbox' }),
+    });
+    setRegeneratingSandbox(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    // Regeneration rotates the sandbox publishable key too — keep the UI in sync.
+    setProfile((p) => p ? { ...p, sandboxPublishableKey: result.data.publishableKey ?? p.sandboxPublishableKey } : p);
+    setSandboxSecretKey(result.data.secretKey ?? null);
+    setSandboxSecretVisible(true);
+    setCopied(null);
+    toast.success('New sandbox keys generated. Copy your secret key now — it won’t be shown again.');
   }
 
   async function saveName() {
@@ -822,7 +849,7 @@ export default function CheckoutPage() {
             </div>
 
             <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
-              Use the sandbox key during development. Orders created with this key never trigger real payments — they auto-complete instantly with mock amounts.
+              Use the sandbox keys during development — no real funds move. The <span className="font-mono text-ink-soft">pk_test_</span> key powers the widget; pair it with the <span className="font-mono text-ink-soft">sk_test_</span> secret to drive checkout sessions and orders server-side from your backend.
             </p>
 
             <div className="space-y-4">
@@ -833,11 +860,53 @@ export default function CheckoutPage() {
                 onCopy={() => profile?.sandboxPublishableKey && copy('sandbox-pub', profile.sandboxPublishableKey)}
                 copied={copied === 'sandbox-pub'}
               />
+
+              <div>
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Sandbox Secret Key
+                </label>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="flex-1 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 font-mono text-[13px] text-ink-soft truncate">
+                    {sandboxSecretKey
+                      ? (sandboxSecretVisible ? sandboxSecretKey : '••••••••••••••••••••')
+                      : 'Not available — regenerate to receive a new key'}
+                  </div>
+                  <button
+                    onClick={() => setSandboxSecretVisible((v) => !v)}
+                    className="w-11 h-11 rounded-xl bg-cream-deep/50 border border-hair-soft hover:border-forest/30 flex items-center justify-center text-ink-soft hover:text-forest-deep transition-all disabled:opacity-40"
+                    aria-label="Toggle visibility"
+                    disabled={!sandboxSecretKey}
+                  >
+                    {sandboxSecretVisible ? <EyeOff size={15} strokeWidth={1.9} /> : <Eye size={15} strokeWidth={1.9} />}
+                  </button>
+                  <button
+                    onClick={() => sandboxSecretKey && copy('sandbox-secret', sandboxSecretKey)}
+                    className="w-11 h-11 rounded-xl bg-cream-deep/50 border border-hair-soft hover:border-forest/30 flex items-center justify-center text-ink-soft hover:text-forest-deep transition-all disabled:opacity-40"
+                    aria-label="Copy"
+                    disabled={!sandboxSecretKey}
+                  >
+                    {copied === 'sandbox-secret' ? <Check size={15} strokeWidth={2.2} className="text-forest" /> : <Copy size={15} strokeWidth={1.9} />}
+                  </button>
+                </div>
+                {!sandboxSecretKey && (
+                  <p className="mt-2 text-[12px] text-ink-muted leading-snug">
+                    The sandbox secret is only shown once at signup or after regeneration. Regenerate to get a new one.
+                  </p>
+                )}
+              </div>
+
+              <button
+                onClick={regenerateSandboxKeys}
+                disabled={regeneratingSandbox}
+                className="w-full mt-1 py-3 rounded-full border border-amber-400/50 text-amber-700 font-semibold text-[14px] hover:bg-amber-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {regeneratingSandbox ? 'Regenerating…' : 'Regenerate Sandbox Keys'}
+              </button>
             </div>
 
             <div className="mt-5 p-4 bg-amber-50/70 border border-amber-200/60 rounded-2xl">
               <p className="text-[12px] text-amber-800 leading-relaxed">
-                <strong>Sandbox orders</strong> are isolated — they appear in your dashboard with a sandbox badge and are excluded from revenue metrics.
+                <strong>Sandbox orders</strong> are isolated — they appear in your dashboard with a sandbox badge and are excluded from revenue metrics. Regenerating rotates <em>both</em> sandbox keys and invalidates the old pair.
               </p>
             </div>
           </Card>

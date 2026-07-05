@@ -9,12 +9,12 @@ import { paystack } from '../services/paystack.service';
 
 const router = Router();
 
-function generatePublishableKey(): string {
-  return 'pk_live_' + crypto.randomBytes(24).toString('hex');
+function generatePublishableKey(sandbox = false): string {
+  return (sandbox ? 'pk_test_' : 'pk_live_') + crypto.randomBytes(24).toString('hex');
 }
 
-function generateSecretKey(): string {
-  return 'sk_live_' + crypto.randomBytes(32).toString('hex');
+function generateSecretKey(sandbox = false): string {
+  return (sandbox ? 'sk_test_' : 'sk_live_') + crypto.randomBytes(32).toString('hex');
 }
 
 function hashSecret(secret: string): string {
@@ -45,34 +45,40 @@ router.get('/keys', requireSession, async (req, res) => {
 // POST /api/v1/merchant/keys/regenerate
 // Generates a new publishable + secret key pair. The secret key is returned
 // exactly once and then discarded — the merchant must store it immediately.
+// Body: { mode?: 'live' | 'sandbox' } (default 'live'). Sandbox rotates the
+// pk_test_/sk_test_ pair so backend/SDK integrations can authenticate in sandbox.
 router.post('/keys/regenerate', requireSession, async (req, res) => {
   try {
+    const mode = req.body?.mode === 'sandbox' ? 'sandbox' : 'live';
+    const sandbox = mode === 'sandbox';
+
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
 
-    const publishableKey = generatePublishableKey();
-    const secretKey      = generateSecretKey();
+    const publishableKey = generatePublishableKey(sandbox);
+    const secretKey      = generateSecretKey(sandbox);
     const hashedSecret   = hashSecret(secretKey);
 
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      // Deactivate all previous keypairs for this merchant
+      // Deactivate previous keypairs of the SAME mode only, so rotating live
+      // keys never disturbs the sandbox pair and vice-versa.
       await tx.keyPair.updateMany({
-        where: { merchantId: merchant.id, isActive: true },
+        where: { merchantId: merchant.id, isActive: true, isSandbox: sandbox },
         data:  { isActive: false },
       });
-      // Create the new keypair
       await tx.keyPair.create({
         data: {
           publicKey:       publishableKey,
           hashedSecretKey: hashedSecret,
           merchantId:      merchant.id,
           isActive:        true,
+          isSandbox:       sandbox,
         },
       });
-      // Update the merchant's publishable key
+      // Keep the merchant's matching publishable key in sync with the new pair.
       await tx.merchant.update({
         where: { id: merchant.id },
-        data:  { publishableKey },
+        data:  sandbox ? { sandboxPublishableKey: publishableKey } : { publishableKey },
       });
     });
 
@@ -80,6 +86,7 @@ router.post('/keys/regenerate', requireSession, async (req, res) => {
       success: true,
       data: {
         merchantId:     merchant.id,
+        mode,
         publishableKey,
         secretKey, // shown exactly once
         warning:  'Store the secretKey now — it will not be shown again.',

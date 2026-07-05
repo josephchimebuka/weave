@@ -62,6 +62,10 @@ function generateSecretKey(): string {
   return 'sk_live_' + crypto.randomBytes(32).toString('hex');
 }
 
+function generateSandboxSecretKey(): string {
+  return 'sk_test_' + crypto.randomBytes(32).toString('hex');
+}
+
 function pickPublicMerchant(m: { id: string; email: string; name: string; publishableKey: string; sandboxPublishableKey?: string | null; createdAt: Date; updatedAt: Date; kycLevel: string; emailVerifiedAt: Date | null }) {
   return {
     id:                    m.id,
@@ -108,8 +112,10 @@ router.post('/signup', authLimiter, async (req, res) => {
     const sandboxPublishableKey = generateSandboxKey();
     const secretKey             = generateSecretKey();
     const hashedSecret          = hashCode(secretKey);
+    const sandboxSecretKey      = generateSandboxSecretKey();
+    const hashedSandboxSecret   = hashCode(sandboxSecretKey);
 
-    // Create Merchant + KeyPair in one transaction so signup is atomic.
+    // Create Merchant + live/sandbox KeyPairs in one transaction so signup is atomic.
     const { merchant, session } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const merchant = await tx.merchant.create({
         data: {
@@ -127,6 +133,16 @@ router.post('/signup', authLimiter, async (req, res) => {
           hashedSecretKey: hashedSecret,
           merchantId:     merchant.id,
           isActive:       true,
+        },
+      });
+      // Sandbox pair: server-to-server auth with this drives sandbox mode.
+      await tx.keyPair.create({
+        data: {
+          publicKey:       sandboxPublishableKey,
+          hashedSecretKey: hashedSandboxSecret,
+          merchantId:      merchant.id,
+          isActive:        true,
+          isSandbox:       true,
         },
       });
       const token     = createSessionToken();
@@ -156,8 +172,9 @@ router.post('/signup', authLimiter, async (req, res) => {
       data: {
         merchant: pickPublicMerchant(merchant),
         session:  { token: session.token, expiresAt: session.expiresAt },
-        // Secret key is shown exactly once — merchant must store it.
+        // Secret keys are shown exactly once — merchant must store them now.
         secretKey,
+        sandboxSecretKey,
         sandboxPublishableKey,
       },
     });

@@ -484,7 +484,37 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     console.log(`[executor] step ${i}: provider=${step.provider}, amountIn=${amountIn}`);
 
     if (input.sandboxMode) {
-      exec = sandboxDispatch(step, amountIn, orderId, i) as any;
+      if (step.provider === 'paystack' && paystack.hasTestKeys()) {
+        // Provision a REAL Paystack test transaction (test key, no subaccount) so
+        // the widget opens the genuine test popup and the order settles from an
+        // actual test-card payment — verified synchronously on poll (syncOrder),
+        // not pre-completed like the other mocked sandbox legs.
+        const merchant = await prisma.merchant.findUniqueOrThrow({ where: { id: input.merchantId } });
+        const paystackRef = `${input.orderId}-${i}`;
+        const txn = await paystack.initializeTransaction({
+          email:     merchant.email,
+          amountNgn: amountIn,
+          reference: paystackRef,
+          metadata:  { sandbox: true, orderId: input.orderId },
+        }, { sandbox: true });
+        exec = {
+          externalId: paystackRef,
+          amountIn,
+          amountOut: amountIn,
+          depositAddress: null,
+          depositMemo: null,
+          expiresAt: null,
+          feeUsd: 0,
+        };
+        (exec as any).paystackPopupDetails = {
+          accessCode: txn.access_code,
+          publicKey:  paystack.publicKey(true),
+          amount:     Math.round(amountIn * 100),
+          reference:  paystackRef,
+        };
+      } else {
+        exec = sandboxDispatch(step, amountIn, orderId, i) as any;
+      }
     } else if (step.provider === 'paystack') {
       // Guard: merchant must have a SYNCED subaccount so funds route to their bank
       const merchant = await prisma.merchant.findUniqueOrThrow({
@@ -621,9 +651,12 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     }
   }
 
-  // Sandbox: auto-complete all steps instantly — no real money moves.
+  // Sandbox: auto-complete all steps instantly — no real money moves. The one
+  // exception is a real Paystack test leg: it settles from the payer's actual
+  // test-card payment (verified on poll), so leave it awaiting the deposit.
   if (input.sandboxMode) {
     for (let i = 0; i < plan.steps.length; i++) {
+      if (plan.steps[i].provider === 'paystack' && paystack.hasTestKeys()) continue;
       const eId = executions[i].externalId;
       if (eId) {
         await markStepDone({ provider: plan.steps[i].provider, externalId: eId, amountOut: executions[i].amountOut });
@@ -892,7 +925,8 @@ export async function syncOrder(
         }
       } else if (step.provider === 'paystack' && step.externalId) {
         console.log(`[sync] checking paystack step ${step.id} for ref ${step.externalId}`);
-        const ps = await paystack.verifyTransaction(step.externalId);
+        // Sandbox orders were charged with the test key, so verify with it too.
+        const ps = await paystack.verifyTransaction(step.externalId, { sandbox: order.sandboxMode });
         console.log(`[sync] paystack status for ${step.id}: ${ps.status}`);
 
         if (ps.status === 'success') {
