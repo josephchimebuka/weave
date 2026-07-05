@@ -7,6 +7,7 @@ import { requireApiKey } from '../middleware/auth';
 import { Decimal } from 'decimal.js';
 import { parseAsset } from '../lib/assets';
 import { planRoute } from '../services/router.service';
+import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
 
 const router = Router();
 
@@ -47,9 +48,14 @@ router.get('/', requireApiKey, async (req, res) => {
     const fiatCurrency = src.kind === 'fiat' ? src.currency : dst.kind === 'fiat' ? dst.currency : null;
     let sellRate = 1, buyRate = 1;
     if (fiatCurrency) {
-      const rate = await paycrest.getRate('base', 'USDC', 1, fiatCurrency);
-      sellRate = Number(rate.sell.rate) || 1;
-      buyRate  = Number(rate.buy.rate)  || 1;
+      if (req.sandboxMode) {
+        // Sandbox quotes use the fixed rate so display matches sandbox execution.
+        sellRate = buyRate = SANDBOX_NGN_RATE;
+      } else {
+        const rate = await paycrest.getRate('base', 'USDC', 1, fiatCurrency);
+        sellRate = Number(rate.sell.rate) || 1;
+        buyRate  = Number(rate.buy.rate)  || 1;
+      }
     }
 
     // Normalize both sides of the quote into USD-equivalent (USDC) so we can

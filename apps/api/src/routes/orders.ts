@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
 import { executeOrder, syncOrder, toDepositInstruction } from '../services/executor.service';
+import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
@@ -186,10 +187,15 @@ router.post('/', requireAuth, async (req, res) => {
       const fiat = srcP.kind === 'fiat' ? srcP.currency : dstP.kind === 'fiat' ? dstP.currency : null;
       let sellRate = 1; let buyRate = 1;
       if (fiat) {
-        const r = await paycrest.getRate('base', 'USDC', 1, fiat);
-        sellRate = Number(r.sell.rate) || 1;
-        buyRate = Number(r.buy.rate) || 1;
-        quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
+        if (req.sandboxMode) {
+          // Sandbox is self-contained — use the fixed rate, never touch live Paycrest.
+          sellRate = buyRate = quoteRate = SANDBOX_NGN_RATE;
+        } else {
+          const r = await paycrest.getRate('base', 'USDC', 1, fiat);
+          sellRate = Number(r.sell.rate) || 1;
+          buyRate = Number(r.buy.rate) || 1;
+          quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
+        }
       }
 
       if (body.amountIn === 'dest') {
@@ -282,6 +288,17 @@ router.post('/', requireAuth, async (req, res) => {
       }
     } catch (err: any) {
       console.error(`[orders] calculation error:`, err.message);
+    }
+
+    // Safety net: a pure-Paystack order (same-currency NGN→NGN, single step) prices
+    // its source leg 1:1 with the target and needs no rate. If the rate snapshot above
+    // threw (common in sandbox, where live Paycrest may be unreachable), sourceAmount is
+    // still its 0 default — and Paystack rejects a 0 charge with "Invalid Amount Sent".
+    // Pin it to the requested amount so the charge is always well-formed.
+    const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
+    if (isPurePaystack && (!sourceAmount || sourceAmount <= 0)) {
+      sourceAmount = body.amount;
+      if (destAmountFiat === undefined) destAmountFiat = body.amount;
     }
 
     // 4. Create or Reuse the Order row (Idempotency)

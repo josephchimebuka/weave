@@ -1,7 +1,10 @@
 import type { RoutePlanStep } from './router.service';
 import { parseAsset } from '../lib/assets';
 
-const SANDBOX_NGN_RATE = 1600;
+// Fixed NGN-per-USD(C) rate for sandbox. Single source of truth so order
+// creation, quotes, and mock execution all price sandbox flows identically
+// without touching live Paycrest.
+export const SANDBOX_NGN_RATE = 1400;
 
 export interface SandboxExecution {
   externalId: string;
