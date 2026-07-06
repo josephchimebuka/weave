@@ -2,14 +2,12 @@
 
 import Link from 'next/link';
 import { FormEvent, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { signup, storeSessionToken } from '../../lib/auth-client';
 import { toast } from '../../components/Toaster';
 
 const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
 
 export default function SignupPage() {
-  const router = useRouter();
   const [email,           setEmail]           = useState('');
   const [password,        setPassword]        = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -31,7 +29,9 @@ export default function SignupPage() {
 
     storeSessionToken(result.data.session.token);
     toast.success('Account created.');
-    router.push('/verify-email');
+    // Hard navigation so the server-rendered root layout picks up the new
+    // session cookie instead of reusing the pre-auth (empty) RSC payload.
+    window.location.assign('/verify-email');
   }
 
   return (

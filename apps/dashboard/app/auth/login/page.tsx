@@ -41,7 +41,11 @@ export default function LoginPage() {
     }
     storeSessionToken(result.data.session.token);
     toast.success('Welcome back.');
-    router.push('/');
+    // Hard navigation (not router.push) so the server-rendered root layout
+    // re-reads the freshly-set session cookie. A soft nav would reuse the
+    // stale RSC payload rendered before login, briefly showing the default
+    // "My Business" / "Verify email" sidebar to an already-verified merchant.
+    window.location.assign('/');
   }
 
   return (

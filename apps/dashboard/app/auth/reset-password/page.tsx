@@ -2,14 +2,13 @@
 
 import Link from 'next/link';
 import { FormEvent, useState, useEffect, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { resetPassword, storeSessionToken } from '../../lib/auth-client';
 import { toast } from '../../components/Toaster';
 
 const INPUT = 'w-full border border-zinc-200 rounded-lg px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-400 focus:border-zinc-400';
 
 function ResetPasswordForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   
   const [resetToken,      setResetToken]      = useState('');
@@ -42,7 +41,9 @@ function ResetPasswordForm() {
 
     storeSessionToken(result.data.session.token);
     toast.success('Password reset. Welcome back.');
-    router.push('/');
+    // Hard navigation so the server-rendered root layout picks up the new
+    // session cookie instead of reusing the pre-auth (empty) RSC payload.
+    window.location.assign('/');
   }
 
   return (
