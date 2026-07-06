@@ -717,7 +717,7 @@ function ApiPlayground() {
   }
 
   async function send() {
-    if (!apiKey.trim()) { setError('Enter an API key (pk_test_… or pk_live_…) to send requests.'); return; }
+    if (!apiKey.trim()) { setError('Enter a key to send requests — pk_test_…/pk_live_… (publishable) or sk_test_…/sk_live_… (secret, for server-to-server endpoints).'); return; }
     setLoading(true);
     setResult(null);
     setError(null);
@@ -780,7 +780,7 @@ function ApiPlayground() {
       <header>
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">API Playground</h1>
         <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
-          Send live requests against the Weave API. Use <code className="bg-cream-deep px-1.5 py-0.5 rounded-md font-mono text-[12px] text-forest-deep">pk_test_…</code> to test without moving real funds.
+          Send live requests against the Weave API. Use <code className="bg-cream-deep px-1.5 py-0.5 rounded-md font-mono text-[12px] text-forest-deep">pk_test_…</code> to test without moving real funds. Server-to-server endpoints also accept a <code className="bg-cream-deep px-1.5 py-0.5 rounded-md font-mono text-[12px] text-forest-deep">sk_…</code> secret key on its own.
         </p>
       </header>
 
@@ -790,7 +790,7 @@ function ApiPlayground() {
           <KeyRound size={15} className="text-ink-muted shrink-0" strokeWidth={1.9} />
           <input
             type="password"
-            placeholder="pk_test_… or pk_live_…"
+            placeholder="pk_test_… / sk_test_… / pk_live_… / sk_live_…"
             value={apiKey}
             onChange={(e) => { setApiKey(e.target.value); setError(null); }}
             className="flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none font-mono"
@@ -798,9 +798,9 @@ function ApiPlayground() {
           />
           {apiKey && (
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
-              apiKey.startsWith('pk_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
+              apiKey.includes('_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
             }`}>
-              {apiKey.startsWith('pk_test_') ? 'Sandbox' : 'Live'}
+              {apiKey.includes('_test_') ? 'Sandbox' : 'Live'}
             </span>
           )}
         </div>
@@ -939,8 +939,8 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
           </div>
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
             <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Server-to-server</p>
-            <code className="text-[11.5px] font-mono text-ink">x-public-key + x-secret-key</code>
-            <p className="text-[11.5px] text-ink-muted leading-relaxed">Secret keypair. Required for anything that should not be possible from the browser. Never expose either header in client code.</p>
+            <code className="text-[11.5px] font-mono text-ink">x-secret-key: sk_live_…</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Secret key — authenticates on its own. Required for anything that should not be possible from the browser. Never expose it in client code. (Optionally pair with <IC>x-public-key</IC>.)</p>
           </div>
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
             <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Sandbox</p>
@@ -1583,7 +1583,7 @@ function SecurityPage({ copy, copied }: { copy: (id: string, text: string) => vo
           {[
             { tag: 'pk_live_…',  label: 'Publishable (live)',  hdr: 'x-api-key',                       use: 'Browser widget, public payment pages. Scoped to creating orders + reading your own resources. Never grants account read access.' },
             { tag: 'pk_test_…',  label: 'Publishable (test)',  hdr: 'x-api-key',                       use: 'Sandbox traffic. Orders auto-complete instantly, real providers are not called, and outgoing webhooks are suppressed.' },
-            { tag: 'sk_live_…',  label: 'Secret',              hdr: 'x-public-key + x-secret-key',     use: 'Server-to-server only. Required for any flow that should not be possible from the browser. Sent alongside the matching publishable key as a pair; the server compares a hash, never the plaintext.' },
+            { tag: 'sk_live_…',  label: 'Secret',              hdr: 'x-secret-key',                    use: 'Server-to-server only. Authenticates on its own — the server matches a hash of the key, never the plaintext. Required for any flow that should not be possible from the browser. You may optionally also send x-public-key; if you do, it must match this secret.' },
             { tag: 'whsec_…',    label: 'Webhook secret',      hdr: '— (used to sign deliveries)',     use: 'HMAC key for verifying incoming webhook deliveries. Rotate from Settings → Developer → Webhooks; the new value is shown exactly once.' },
           ].map(({ tag, label, hdr, use }, i, arr) => (
             <div key={tag} className={`px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''} space-y-1.5`}>
@@ -1597,9 +1597,8 @@ function SecurityPage({ copy, copied }: { copy: (id: string, text: string) => vo
           ))}
         </div>
         <CodeBlock id="sec-keypair" copy={copy} copied={copied} lang="bash">
-{`# Server-only — uses the secret keypair (never expose either header in the browser).
+{`# Server-only — the secret key authenticates on its own (never expose it in the browser).
 curl https://api.paywithweave.com/api/v1/orders \\
-  -H "x-public-key: pk_live_..." \\
   -H "x-secret-key: sk_live_..." \\
   -H "Content-Type: application/json"`}
         </CodeBlock>
@@ -1826,7 +1825,7 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
       <section className="space-y-5">
         <SectionHeading icon={<Terminal size={17} />} title="Create a session" />
         <p className="text-[13.5px] text-ink-muted leading-relaxed">
-          <IC>POST /checkout/sessions</IC>. Required: <IC>amount</IC>, <IC>destAsset</IC>, <IC>redirectUrl</IC>. Auth via <IC>x-api-key</IC> or keypair.
+          <IC>POST /checkout/sessions</IC>. Required: <IC>amount</IC>, <IC>destAsset</IC>, <IC>redirectUrl</IC>. Auth via <IC>x-api-key</IC> (publishable) or <IC>x-secret-key</IC> (server-to-server).
         </p>
         <CodeBlock id="cs-create-req" copy={copy} copied={copied} lang="bash">
 {`curl https://api.paywithweave.com/api/v1/checkout/sessions \\
@@ -1986,13 +1985,13 @@ function AgentsPage({ copy, copied }: { copy: (id: string, text: string) => void
       <section className="space-y-5">
         <SectionHeading icon={<KeyRound size={18} />} title="Authentication" />
         <p className="text-[14px] text-ink-muted leading-relaxed">
-          Agents calling from a trusted backend should use the keypair pattern — both headers must be present and belong to the same merchant account.
+          Agents calling from a trusted backend should authenticate with the secret key — send it as <IC>x-secret-key</IC>; it authenticates on its own.
           The publishable key alone is enough for read-only calls and for creating orders when the flow starts in a user's browser.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-2">
-            <p className="text-[12px] font-bold uppercase tracking-widest text-forest-deep">Server-side (agent) — keypair</p>
-            <p className="text-[12.5px] text-ink-muted leading-relaxed">Pass both <IC>x-public-key</IC> and <IC>x-secret-key</IC>. Never expose the secret key to a browser or end-user.</p>
+            <p className="text-[12px] font-bold uppercase tracking-widest text-forest-deep">Server-side (agent) — secret key</p>
+            <p className="text-[12.5px] text-ink-muted leading-relaxed">Pass <IC>x-secret-key</IC> on its own. Never expose the secret key to a browser or end-user.</p>
           </div>
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-2">
             <p className="text-[12px] font-bold uppercase tracking-widest text-ink-faint">Browser / widget — publishable key</p>
@@ -2000,9 +1999,8 @@ function AgentsPage({ copy, copied }: { copy: (id: string, text: string) => void
           </div>
         </div>
         <CodeBlock id="ag-auth" copy={copy} copied={copied} lang="bash">
-{`# Keypair auth (server-side agent)
+{`# Secret-key auth (server-side agent)
 curl https://api.paywithweave.com/api/v1/quotes \\
-  -H "x-public-key: pk_live_..." \\
   -H "x-secret-key: sk_live_..." \\
   -G -d "from=fiat:NGN&to=crypto:BASE:USDC&amount=5000&amountIn=source"`}
         </CodeBlock>
@@ -2166,7 +2164,6 @@ async function waitForOrder(orderId: string, apiKey: string, timeoutMs = 300_000
         <CodeBlock id="ag-customer" copy={copy} copied={copied} lang="bash">
 {`curl https://api.paywithweave.com/api/v1/orders \\
   -X POST \\
-  -H "x-public-key: pk_live_..." \\
   -H "x-secret-key: sk_live_..." \\
   -H "Content-Type: application/json" \\
   -d '{

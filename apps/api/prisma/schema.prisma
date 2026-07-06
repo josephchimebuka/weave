@@ -119,6 +119,8 @@ model KeyPair {
   updatedAt       DateTime @updatedAt
 
   @@index([merchantId])
+  // Secret key auth resolves the pair by hashed secret (see requireKeyPair).
+  @@index([hashedSecretKey])
 }
 
 // ── Instruments ─────────────────────────────────────────────────────────────

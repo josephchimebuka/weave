@@ -18,9 +18,16 @@ export async function POST(req: Request) {
       }
     }
 
+    // A secret key (sk_live_/sk_test_) authenticates standalone via x-secret-key;
+    // a publishable key (pk_…) goes in x-api-key. Same input field, either path.
+    const isSecret = apiKey.startsWith('sk_');
+    const authHeader: Record<string, string> = isSecret
+      ? { 'x-secret-key': apiKey }
+      : { 'x-api-key': apiKey };
+
     const fetchOptions: RequestInit = {
       method: method ?? 'GET',
-      headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+      headers: { ...authHeader, 'Content-Type': 'application/json' },
     };
     if (body && method !== 'GET') {
       fetchOptions.body = JSON.stringify(body);

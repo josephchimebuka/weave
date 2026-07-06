@@ -2,7 +2,7 @@
 //
 // Auth pattern:
 //   • Browser widget  → x-api-key: pk_live_... (publishable key, safe in JS)
-//   • Merchant server → x-public-key + x-secret-key headers (server-side only)
+//   • Merchant server → x-secret-key: sk_live_... header (server-side only)
 //
 // The secretKey NEVER belongs in browser code. WeaveCheckout accepts only
 // the publishable key (apiKey prop).

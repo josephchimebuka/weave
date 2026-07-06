@@ -163,7 +163,7 @@ The hosted payment link page (`app/pay/[slug]/PayClient.tsx`) collects customer 
 
 Sandbox routing is fully wired. Two credentials enter sandbox mode (`req.sandboxMode = true`):
 - **Publishable key** (`x-api-key: pk_test_...`) — the browser/widget path (`Merchant.sandboxPublishableKey`).
-- **Sandbox keypair** (`x-public-key: pk_test_...` + `x-secret-key: sk_test_...`) — the server-to-server path. `KeyPair.isSandbox = true` drives `req.sandboxMode`, so backend/SDK integrations (incl. **checkout sessions**) can be exercised end-to-end against sandbox. Signup mints both a live and a sandbox pair; existing merchants get one via `POST /merchant/keys/regenerate { mode: 'sandbox' }`.
+- **Sandbox secret key** (`x-secret-key: sk_test_...`) — the server-to-server path. The secret key authenticates **standalone** (`requireKeyPair` resolves the pair by `sha256(secret)` → `hashedSecretKey`); `x-public-key` is optional and, if sent, must match the resolved pair. `KeyPair.isSandbox = true` drives `req.sandboxMode`, so backend/SDK integrations (incl. **checkout sessions**) can be exercised end-to-end against sandbox. Signup mints both a live and a sandbox pair; existing merchants get one via `POST /merchant/keys/regenerate { mode: 'sandbox' }`.
 
 Execution:
 - `executor.service.ts` branches to `sandboxDispatch` in `sandbox-executor.ts`; crypto legs are mocked and auto-completed at creation — no real funds move.
