@@ -3,7 +3,7 @@ import { paycrest } from '../services/paycrest.service';
 import { chainRails } from '../services/chainrails.service';
 import { nearIntents } from '../services/nearintents.service';
 import { paystack } from '../services/paystack.service';
-import { requireApiKey } from '../middleware/auth';
+import { requireAuth } from '../middleware/auth';
 import { Decimal } from 'decimal.js';
 import { parseAsset } from '../lib/assets';
 import { planRoute } from '../services/router.service';
@@ -29,7 +29,7 @@ function ceilToSigFigs(n: number, sig = 3): number {
 
 // GET /api/v1/quotes?from=crypto:BASE:USDC&to=fiat:NGN&amount=100
 // Optional: amountIn=source|dest (default: source)
-router.get('/', requireApiKey, async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   const from     = String(req.query.from ?? '');
   const to       = String(req.query.to   ?? '');
   const amount   = Number(req.query.amount);
