@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { requireSession } from '../middleware/auth';
 import { sendDeletionRequestEmail } from '../services/email.service';
-import { syncPaystackSubaccount } from '../lib/merchant';
+import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import { paystack } from '../services/paystack.service';
 
 const router = Router();
@@ -133,8 +133,9 @@ router.patch('/profile', requireSession, async (req, res) => {
       data:  { name },
     });
 
-    // Mirror to Paystack (async)
-    syncPaystackSubaccount(merchant.id).catch(() => {});
+    // Mirror to Paystack (async). On failure, kick off a backoff-retry chain so a
+    // transient error doesn't leave the merchant stuck at FAILED until checkout.
+    syncPaystackSubaccount(merchant.id).catch(() => schedulePaystackSyncRetry({ merchantId: merchant.id, attempt: 1 }));
 
     return res.json({
       success: true,
@@ -281,8 +282,9 @@ router.put('/payouts', requireSession, async (req, res) => {
       data:  { defaultPayoutInstrumentId: newInst.id },
     });
 
-    // Mirror to Paystack (async)
-    syncPaystackSubaccount(merchant.id).catch(() => {});
+    // Mirror to Paystack (async). On failure, kick off a backoff-retry chain so a
+    // transient error doesn't leave the merchant stuck at FAILED until checkout.
+    syncPaystackSubaccount(merchant.id).catch(() => schedulePaystackSyncRetry({ merchantId: merchant.id, attempt: 1 }));
 
     return res.json({
       success: true,

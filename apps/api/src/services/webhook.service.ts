@@ -79,10 +79,13 @@ class WebhookService {
       .update(`${timestamp}.${body}`)
       .digest('hex');
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+    // Cold-starting serverless endpoints can take >10s to first-respond, so keep
+    // this generous. Delivery isn't lost on timeout — we re-throw and QStash retries.
+    const TIMEOUT_MS = Number(process.env.WEBHOOK_DISPATCH_TIMEOUT_MS ?? 20000);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
+    try {
       const res = await fetch(merchant.webhookUrl, {
         method: 'POST',
         headers: {
@@ -96,16 +99,22 @@ class WebhookService {
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
-
       if (!res.ok) {
         throw new Error(`Merchant webhook responded with ${res.status}`);
       }
 
       console.log(`[webhook] dispatched ${event.event} to merchant ${merchantId}`);
     } catch (err: any) {
-      console.error(`[webhook] failed to dispatch to merchant ${merchantId}:`, err.message);
-      throw err;
+      // Normalize undici's opaque "This operation was aborted" into an actionable
+      // reason so the logs say what actually happened. QStash retries on the throw.
+      const isAbort = err?.name === 'AbortError' || /abort/i.test(err?.message ?? '');
+      const reason = isAbort
+        ? `merchant endpoint did not respond within ${TIMEOUT_MS}ms`
+        : err.message;
+      console.error(`[webhook] failed to dispatch to merchant ${merchantId}: ${reason}`);
+      throw new Error(reason);
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

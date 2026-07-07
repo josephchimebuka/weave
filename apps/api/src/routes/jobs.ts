@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
+import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 
 const router = Router();
 
@@ -272,6 +273,38 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
   }
 
   res.json({ success: true, count: openSteps.length });
+});
+
+// ── Paystack subaccount re-sync (background retry) ──────────────────────────
+// Scheduled by schedulePaystackSyncRetry when a setup-time sync fails, so a
+// transient Paystack blip self-heals before any customer reaches checkout.
+// Re-enqueues itself on the backoff schedule until SYNCED or the schedule runs out.
+
+router.post('/retry-paystack-sync', verifyQStash, async (req, res) => {
+  const { merchantId, attempt } = req.body as { merchantId: string; attempt: number };
+  if (!merchantId) {
+    return res.status(400).json({ error: 'missing merchantId' });
+  }
+
+  const merchant = await prisma.merchant.findUnique({
+    where:  { id: merchantId },
+    select: { paystackSubaccountStatus: true },
+  });
+  if (!merchant) {
+    return res.json({ success: true, stopped: true, reason: 'merchant not found' });
+  }
+  if (merchant.paystackSubaccountStatus === 'SYNCED') {
+    return res.json({ success: true, stopped: true, reason: 'already synced' });
+  }
+
+  try {
+    await syncPaystackSubaccount(merchantId);
+    return res.json({ success: true, synced: true, attempt });
+  } catch (err: any) {
+    // syncPaystackSubaccount already persisted FAILED + logged; back off and retry.
+    await schedulePaystackSyncRetry({ merchantId, attempt: (attempt ?? 1) + 1 });
+    return res.json({ success: true, rescheduled: true, nextAttempt: (attempt ?? 1) + 1, error: err.message });
+  }
 });
 
 // ── Expire Checkout Sessions ────────────────────────────────────────────────

@@ -301,6 +301,18 @@ router.post('/', requireAuth, async (req, res) => {
       if (destAmountFiat === undefined) destAmountFiat = body.amount;
     }
 
+    // Minimum for crypto-funded payments. Sub-dollar crypto legs get swallowed by
+    // provider dust floors and swap/bridge fees (NEAR Intents especially), so a
+    // $0.20 payment would "succeed" but deliver nothing. Reject up-front with a
+    // clear, payer-actionable message rather than letting it fail mid-route.
+    const MIN_CRYPTO_PAYMENT_USD = Number(process.env.MIN_CRYPTO_PAYMENT_USD ?? 0.5);
+    if (srcP.kind === 'crypto' && usdEquivalent < MIN_CRYPTO_PAYMENT_USD) {
+      return res.status(400).json({
+        success: false,
+        error: `This amount is below the $${MIN_CRYPTO_PAYMENT_USD.toFixed(2)} minimum for crypto payments.`,
+      });
+    }
+
     // 4. Create or Reuse the Order row (Idempotency)
     // If the merchant provided a reference, check for an existing order first.
     let order: any;

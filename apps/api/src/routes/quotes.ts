@@ -114,6 +114,16 @@ router.get('/', requireAuth, async (req, res) => {
       return amount * srcPrice;
     })();
 
+    // Reject sub-minimum crypto-funded quotes up-front so the widget can warn the
+    // payer before they attempt the order (mirrors the guard in POST /orders).
+    const MIN_CRYPTO_PAYMENT_USD = Number(process.env.MIN_CRYPTO_PAYMENT_USD ?? 0.5);
+    if (src.kind === 'crypto' && usdEquivalent < MIN_CRYPTO_PAYMENT_USD) {
+      return res.status(400).json({
+        success: false,
+        error: `This amount is below the $${MIN_CRYPTO_PAYMENT_USD.toFixed(2)} minimum for crypto payments.`,
+      });
+    }
+
     const plan = planRoute({ sourceAsset: from, destAsset: to, amount: usdEquivalent });
 
     // Bridge-fee snapshot. ChainRails gives us a live figure; for NEAR Intents

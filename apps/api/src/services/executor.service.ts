@@ -13,6 +13,7 @@ import { nearIntents } from './nearintents.service';
 import { paystack } from './paystack.service';
 import { sendMerchantPaymentNotification } from './email.service';
 import { parseAsset } from '../lib/assets';
+import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
 import { qstash } from '../lib/qstash';
@@ -516,14 +517,35 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         exec = sandboxDispatch(step, amountIn, orderId, i) as any;
       }
     } else if (step.provider === 'paystack') {
-      // Guard: merchant must have a SYNCED subaccount so funds route to their bank
-      const merchant = await prisma.merchant.findUniqueOrThrow({
+      // Guard: merchant must have a SYNCED subaccount so funds route to their bank.
+      let merchant = await prisma.merchant.findUniqueOrThrow({
         where: { id: input.merchantId },
       });
+
+      // Self-heal: the subaccount is normally synced fire-and-forget when the
+      // merchant sets up their payout, so a transient Paystack blip there leaves
+      // the merchant stuck at FAILED and unable to ever check out. Retry the sync
+      // inline (it's idempotent) and re-read before deciding to fail the payment.
       if (merchant.paystackSubaccountStatus !== 'SYNCED') {
-        throw new Error(
-          `Merchant ${input.merchantId} Paystack subaccount not synced. Status: ${merchant.paystackSubaccountStatus}`
+        console.warn(
+          `[executor] paystack subaccount not synced for ${input.merchantId} (status=${merchant.paystackSubaccountStatus}); attempting inline re-sync`
         );
+        try {
+          await syncPaystackSubaccount(input.merchantId);
+          merchant = await prisma.merchant.findUniqueOrThrow({ where: { id: input.merchantId } });
+        } catch (syncErr: any) {
+          console.error(`[executor] inline paystack re-sync failed for ${input.merchantId}:`, syncErr.message);
+          // Hand off to the backoff-retry chain so it keeps trying to heal in the
+          // background even though this particular checkout can't proceed.
+          schedulePaystackSyncRetry({ merchantId: input.merchantId, attempt: 1 }).catch(() => {});
+        }
+      }
+
+      if (merchant.paystackSubaccountStatus !== 'SYNCED' || !merchant.paystackSubaccountCode) {
+        // Recovery exhausted — this is a merchant-config problem (e.g. an invalid
+        // bank account), not something the payer can fix. Surface a clean,
+        // non-leaky message; internal detail stays in the logs above.
+        throw new Error('This store cannot accept payments right now. Please contact the merchant to complete their payout setup.');
       }
 
       // Gross-up: payer pays net + Paystack fee so the merchant receives exactly amountIn
@@ -743,6 +765,21 @@ export async function markStepDone(params: {
       completedAt: new Date(),
       ...(params.amountOut != null ? { amountOut: params.amountOut } : {}),
     },
+  });
+
+  // Forward-completion: funds can only reach this hop if every earlier hop
+  // already delivered them. Provider status APIs for those earlier hops (e.g.
+  // NEAR Intents' /status) can lag behind the physical settlement, which would
+  // otherwise pin the order in 'processing' — and the widget on "settling…" —
+  // even though the money has already reached the final leg. Mark any earlier,
+  // still-open steps done so the rollup below reflects reality.
+  await prisma.routeStep.updateMany({
+    where: {
+      orderId:  step.orderId,
+      sequence: { lt: step.sequence },
+      status:   { notIn: ['done', 'failed'] },
+    },
+    data: { status: 'done', completedAt: new Date() },
   });
 
   // Refetch steps to get the latest statuses.

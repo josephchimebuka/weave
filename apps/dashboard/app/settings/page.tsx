@@ -740,7 +740,7 @@ export default function CheckoutPage() {
                     }`} />
                     {activePayout.paystackSubaccountStatus === 'SYNCED' && 'Paystack settlement active — NGN payments route directly to your bank (T+1 business day)'}
                     {activePayout.paystackSubaccountStatus === 'PENDING' && 'Paystack sync pending — save your payout details to activate NGN settlements'}
-                    {activePayout.paystackSubaccountStatus === 'FAILED' && 'Paystack sync failed — re-save your payout details to retry'}
+                    {activePayout.paystackSubaccountStatus === 'FAILED' && 'Paystack sync failed — we’re retrying automatically in the background. If it doesn’t clear shortly, double-check your account details and re-save.'}
                   </div>
                 )}
 
