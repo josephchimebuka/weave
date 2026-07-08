@@ -10,11 +10,12 @@ import {
   Shield
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
+import WebhookDeliveries from '../components/WebhookDeliveries';
 
 type ThemePreset = 'organic' | 'minimal';
 type AccentKey   = 'forest' | 'tan' | 'ink';
 type CodeTab     = 'html' | 'react';
-type SettingsTab = 'developer' | 'profile' | 'payouts';
+type SettingsTab = 'developer' | 'profile' | 'payouts' | 'webhooks';
 
 import { WeaveCheckout } from '@weave-sdk/widget';
 import { apiFetch } from '../lib/api-fetch';
@@ -56,7 +57,7 @@ function SettingsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const initialTabUrl = searchParams.get('tab');
-  const initialTab: SettingsTab = ['profile', 'payouts'].includes(initialTabUrl ?? '') ? (initialTabUrl as SettingsTab) : 'developer';
+  const initialTab: SettingsTab = ['profile', 'payouts', 'webhooks'].includes(initialTabUrl ?? '') ? (initialTabUrl as SettingsTab) : 'developer';
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
 
@@ -129,6 +130,7 @@ function SettingsContent() {
     const tab = searchParams.get('tab');
     if (tab === 'profile') setActiveTab('profile');
     else if (tab === 'payouts') setActiveTab('payouts');
+    else if (tab === 'webhooks') setActiveTab('webhooks');
     else if (tab === 'developer' || !tab) setActiveTab('developer');
   }, [searchParams]);
 
@@ -185,8 +187,11 @@ function SettingsContent() {
     fetch('/api/merchant/webhook')
       .then(r => r.ok ? r.json() : null)
       .then(resp => {
-        if (resp?.success && resp.data) {
-          setWebhookUrl(resp.data.url || '');
+        // The proxy unwraps the envelope and returns { url, hasSecret } directly;
+        // tolerate either shape so a stored URL always pre-fills the field.
+        const data = resp?.data ?? resp;
+        if (data && typeof data.url !== 'undefined') {
+          setWebhookUrl(data.url || '');
         }
       })
       .catch(() => {})
@@ -446,6 +451,7 @@ export default function CheckoutPage() {
         {([
           { id: 'profile',   label: 'Profile',    icon: User },
           { id: 'payouts',   label: 'Payouts',    icon: Landmark },
+          { id: 'webhooks',  label: 'Webhooks',   icon: Webhook },
           { id: 'developer', label: 'Developer',  icon: KeyRound },
         ] as const).map(({ id, label, icon: Icon }) => (
           <button
@@ -766,6 +772,82 @@ export default function CheckoutPage() {
         </div>
       )}
 
+      {/* ── Webhooks tab ─────────────────────────────────────────────────── */}
+      {activeTab === 'webhooks' && (
+        <div className="space-y-6">
+          {/* Endpoint configuration */}
+          <Card delay={60}>
+            <div className="flex items-center gap-2.5 mb-2 text-forest-deep">
+              <Webhook size={18} strokeWidth={1.9} />
+              <h2 className="font-display text-[22px] font-semibold text-ink">Webhooks</h2>
+            </div>
+            <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
+              Weave sends a POST request with an HMAC-SHA256 signature to this URL whenever an order status
+              changes. Add a URL to start receiving events, or clear it to turn webhooks off. Failed deliveries
+              are retried automatically.
+            </p>
+
+            <div className="space-y-6">
+              <div>
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Endpoint URL
+                </label>
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  <input
+                    type="url"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://your-api.com/webhooks/weave"
+                    disabled={webhookUrlLoading}
+                    className="flex-1 min-w-0 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
+                  />
+                  <button
+                    onClick={saveWebhook}
+                    disabled={savingWebhook || webhookUrlLoading}
+                    className="h-11 px-5 rounded-xl bg-forest text-cream-soft hover:bg-forest-deep flex items-center justify-center transition-all disabled:opacity-40 text-[13px] font-medium"
+                  >
+                    {webhookSaved ? <Check size={16} strokeWidth={2.3} /> : (savingWebhook ? 'Saving...' : 'Save')}
+                  </button>
+                  <button
+                    onClick={sendTestEvent}
+                    disabled={sendingTest || !webhookUrl || webhookUrlLoading}
+                    className="h-11 px-5 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-medium transition-all disabled:opacity-40 flex items-center gap-2"
+                  >
+                    {sendingTest ? 'Sending...' : 'Send Test'}
+                  </button>
+                  {testResult !== null && (
+                    <span className={`text-[12px] font-medium px-3 py-1.5 rounded-lg ${testResult.ok ? 'bg-forest-surface text-forest-deep' : 'bg-terracotta-soft text-terracotta'}`}>
+                      {testResult.ok ? `Delivered · ${testResult.status}` : `Failed · ${testResult.status || 'no response'}`}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-5 border-t border-hair-soft">
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Signing Secret
+                </label>
+                <div className="mt-2 flex flex-col sm:flex-row items-center gap-3">
+                  <div className="flex-1 w-full bg-cream-deep/30 border border-hair-soft border-dashed rounded-xl px-4 py-3 text-[13px] text-ink-muted flex items-center gap-2">
+                    <Shield size={14} />
+                    <span>HMAC-SHA256 signature active</span>
+                  </div>
+                  <button
+                    onClick={rotateSecret}
+                    disabled={rotatingSecret}
+                    className="w-full sm:w-auto px-5 py-3 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-semibold transition-all"
+                  >
+                    {rotatingSecret ? 'Rotating...' : 'Rotate Secret'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <WebhookDeliveries />
+        </div>
+      )}
+
       {/* ── Developer tab ────────────────────────────────────────────────── */}
       {activeTab === 'developer' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -987,76 +1069,6 @@ export default function CheckoutPage() {
                     onError={() => {}}
                     onClose={() => {}}
                   />
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Webhooks */}
-          <Card delay={160}>
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2.5 text-forest-deep">
-                <Webhook size={18} strokeWidth={1.9} />
-                <h2 className="font-display text-[22px] font-semibold text-ink">Webhooks</h2>
-              </div>
-            </div>
-
-            <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
-              Weave will send a POST request with HMAC-SHA256 signature to this URL whenever an order status changes.
-            </p>
-
-            <div className="space-y-6">
-              <div>
-                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
-                  Endpoint URL
-                </label>
-                <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  <input
-                    type="url"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    placeholder="https://your-api.com/webhooks/weave"
-                    disabled={webhookUrlLoading}
-                    className="flex-1 min-w-0 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
-                  />
-                  <button
-                    onClick={saveWebhook}
-                    disabled={savingWebhook || webhookUrlLoading}
-                    className="h-11 px-5 rounded-xl bg-forest text-cream-soft hover:bg-forest-deep flex items-center justify-center transition-all disabled:opacity-40 text-[13px] font-medium"
-                  >
-                    {webhookSaved ? <Check size={16} strokeWidth={2.3} /> : (savingWebhook ? 'Saving...' : 'Save')}
-                  </button>
-                  <button
-                    onClick={sendTestEvent}
-                    disabled={sendingTest || !webhookUrl || webhookUrlLoading}
-                    className="h-11 px-5 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-medium transition-all disabled:opacity-40 flex items-center gap-2"
-                  >
-                    {sendingTest ? 'Sending...' : 'Send Test'}
-                  </button>
-                  {testResult !== null && (
-                    <span className={`text-[12px] font-medium px-3 py-1.5 rounded-lg ${testResult.ok ? 'bg-forest-surface text-forest-deep' : 'bg-terracotta-soft text-terracotta'}`}>
-                      {testResult.ok ? `Delivered · ${testResult.status}` : `Failed · ${testResult.status || 'no response'}`}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="pt-5 border-t border-hair-soft">
-                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
-                  Signing Secret
-                </label>
-                <div className="mt-2 flex flex-col sm:flex-row items-center gap-3">
-                  <div className="flex-1 w-full bg-cream-deep/30 border border-hair-soft border-dashed rounded-xl px-4 py-3 text-[13px] text-ink-muted flex items-center gap-2">
-                    <Shield size={14} />
-                    <span>HMAC-SHA256 signature active</span>
-                  </div>
-                  <button
-                    onClick={rotateSecret}
-                    disabled={rotatingSecret}
-                    className="w-full sm:w-auto px-5 py-3 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-semibold transition-all"
-                  >
-                    {rotatingSecret ? 'Rotating...' : 'Rotate Secret'}
-                  </button>
                 </div>
               </div>
             </div>

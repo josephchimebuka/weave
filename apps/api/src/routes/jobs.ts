@@ -163,10 +163,33 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
 // ── Outgoing Webhook Job ────────────────────────────────────────────────────
 
 router.post('/dispatch-outgoing', verifyQStash, async (req, res) => {
-  const { merchantId, event } = req.body;
+  const { deliveryId, merchantId, event } = req.body;
 
   try {
-    await webhookService.dispatch(merchantId, event);
+    if (deliveryId) {
+      await webhookService.dispatch(deliveryId);
+    } else if (merchantId && event) {
+      // Back-compat: messages enqueued before delivery tracking carried the raw
+      // { merchantId, event }. Materialize a delivery row, then dispatch it.
+      const merchant = await prisma.merchant.findUnique({
+        where: { id: merchantId },
+        select: { webhookUrl: true, webhookSecret: true },
+      });
+      if (merchant?.webhookUrl && merchant.webhookSecret) {
+        const d = await prisma.webhookDelivery.create({
+          data: {
+            merchantId,
+            orderId: event?.data?.id ?? null,
+            event:   event.event,
+            url:     merchant.webhookUrl,
+            payload: event,
+            status:  'retrying',
+            attempts: 0,
+          },
+        });
+        await webhookService.dispatch(d.id);
+      }
+    }
     res.json({ success: true });
   } catch (error: any) {
     // Return 500 so QStash automatically retries based on your QStash configuration

@@ -17,8 +17,11 @@ export async function GET(
     });
     if (!res.ok) return Response.json({ error: 'Not found' }, { status: res.status });
 
+    // Return the full envelope { success, data, paycrestStatus, nearStatus } so
+    // fetchOrderClient's `json.data ?? null` resolves to the order (and provider
+    // status siblings survive). The orders-list proxy passes the envelope too.
     const json = await res.json();
-    return Response.json(json.data ?? json);
+    return Response.json(json);
   } catch {
     return Response.json({ error: 'Internal server error' }, { status: 500 });
   }

@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { requireSession } from '../middleware/auth';
 import { sendDeletionRequestEmail } from '../services/email.service';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
+import { webhookService, WEBHOOK_MAX_ATTEMPTS, isSafeWebhookUrl } from '../services/webhook.service';
 import { paystack } from '../services/paystack.service';
 
 const router = Router();
@@ -350,6 +351,11 @@ router.post('/webhook/test', requireSession, async (req, res) => {
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
     if (!merchant.webhookUrl) return res.status(400).json({ success: false, error: 'no webhook URL configured' });
+    // Same SSRF guard the real dispatcher enforces — a test send must not be a
+    // path to probe loopback/internal hosts.
+    if (!isSafeWebhookUrl(merchant.webhookUrl)) {
+      return res.status(400).json({ success: false, error: 'Webhook URL must be a public HTTPS address' });
+    }
 
     const payload = {
       event: 'order.completed' as const,
@@ -397,6 +403,54 @@ router.post('/webhook/secret', requireSession, async (req, res) => {
       success: true,
       data: { secret, warning: 'Store this secret now — it will not be shown again.' },
     });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Shape a WebhookDelivery row for the dashboard. Includes full request/response
+// bodies so the detail slide-over can render them without a second round-trip.
+function serializeDelivery(d: any) {
+  return {
+    id:         d.id,
+    event:      d.event,
+    url:        d.url,
+    status:     d.status,               // 'success' | 'failed' | 'retrying'
+    statusCode: d.statusCode ?? null,
+    attempts:   d.attempts,
+    maxAttempts: WEBHOOK_MAX_ATTEMPTS,
+    orderId:    d.orderId ?? null,
+    payload:    d.payload ?? null,
+    response:   d.response ?? null,
+    createdAt:  d.createdAt,
+    updatedAt:  d.updatedAt,
+  };
+}
+
+// GET /api/v1/merchant/webhook/deliveries — recent outgoing webhook deliveries
+router.get('/webhook/deliveries', requireSession, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where:   { merchantId: req.merchantId },
+      orderBy: { createdAt: 'desc' },
+      take:    limit,
+    });
+    return res.json({ success: true, data: deliveries.map(serializeDelivery) });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/v1/merchant/webhook/deliveries/:id/resend — manually re-send a delivery
+router.post('/webhook/deliveries/:id/resend', requireSession, async (req, res) => {
+  try {
+    const updated = await webhookService.resend(req.params.id, req.merchantId);
+    if (updated === 'no_endpoint') {
+      return res.status(400).json({ success: false, error: 'No webhook endpoint is configured. Add one under Settings → Webhooks first.' });
+    }
+    if (!updated) return res.status(404).json({ success: false, error: 'delivery not found' });
+    return res.json({ success: true, data: serializeDelivery(updated) });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
