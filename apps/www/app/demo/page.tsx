@@ -203,7 +203,7 @@ export default function DemoPage() {
           <div className="bg-white border border-[#E8EAE6] rounded-2xl p-6 shadow-sm flex flex-col gap-4">
             <div className="flex flex-col gap-1">
               <span className="text-[10px] text-[#6B7572] uppercase tracking-widest font-bold">Step 1</span>
-              <h3 className="text-lg font-semibold tracking-tight">Your business</h3>
+              <h2 className="text-lg font-semibold tracking-tight">Your business</h2>
             </div>
             <div className='flex flex-col lg: gap-4 items-center w-full'>
               <Field label="Business name" hint="Shown in widget header">
@@ -240,7 +240,7 @@ export default function DemoPage() {
 
             <div className="flex flex-col gap-1">
               <span className="text-[10px] text-[#6B7572] uppercase tracking-widest font-bold">Step 2</span>
-              <h3 className="text-lg font-semibold tracking-tight">How would you like to receive {merchant.amount > 0 ? `₦${merchant.amount.toLocaleString()}` : 'payment'}?</h3>
+              <h2 className="text-lg font-semibold tracking-tight">How would you like to receive {merchant.amount > 0 ? `₦${merchant.amount.toLocaleString()}` : 'payment'}?</h2>
             </div>
 
             <div className="grid grid-cols lg:grid-cols-2 gap-3">

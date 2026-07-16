@@ -12,22 +12,20 @@ const outfit = Outfit({
   variable: "--font-display",
 });
 
+const baseUrl = "https://paywithweave.com";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(baseUrl),
   title: "Weave | Bridge Fiat & Crypto Seamlessly",
   description: "Accept global crypto payments and settle instantly in local fiat. The ultimate bridge between traditional banking and the future of finance.",
+  alternates: {
+    canonical: "/",
+  },
   openGraph: {
     title: "Weave | Bridge Fiat & Crypto Seamlessly",
     description: "Accept global crypto payments and settle instantly in local fiat.",
-    url: "https://weave.finance",
+    url: baseUrl,
     siteName: "Weave",
-    images: [
-      {
-        url: "/og-image.png",
-        width: 1200,
-        height: 630,
-        alt: "Weave - Financial Connectivity, Seamlessly Interwoven",
-      },
-    ],
     locale: "en_US",
     type: "website",
   },
@@ -35,8 +33,29 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Weave | Bridge Fiat & Crypto Seamlessly",
     description: "Accept global crypto payments and settle instantly in local fiat.",
-    images: ["/og-image.png"],
   },
+};
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": `${baseUrl}/#organization`,
+      name: "Weave",
+      url: baseUrl,
+      logo: `${baseUrl}/icon`,
+      description: "A product by Dewdrop Labs.",
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${baseUrl}/#website`,
+      url: baseUrl,
+      name: "Weave",
+      description: "Accept global crypto payments and settle instantly in local fiat.",
+      publisher: { "@id": `${baseUrl}/#organization` },
+    },
+  ],
 };
 
 export default function RootLayout({
@@ -47,6 +66,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} ${outfit.variable} antialiased`} suppressHydrationWarning>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
         {children}
       </body>
     </html>
