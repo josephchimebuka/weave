@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma';
 import { resend } from '../lib/resend';
+import { parseAsset, assetMeta } from '../lib/assets';
 import jwt from 'jsonwebtoken';
 
 const API_URL = process.env.API_URL || 'http://localhost:4000/api/v1';
@@ -9,6 +10,26 @@ function getAdminSecret(): string {
   const s = process.env.ADMIN_SECRET;
   if (!s) throw new Error('[security] ADMIN_SECRET is not set — cannot sign admin tokens');
   return s;
+}
+
+const PAYSTACK_CHANNEL_LABELS: Record<string, string> = {
+  card: 'Card',
+  bank: 'Bank Transfer',
+  bank_transfer: 'Bank Transfer',
+  ussd: 'USSD',
+  qr: 'QR Code',
+  mobile_money: 'Mobile Money',
+  eft: 'EFT',
+};
+
+function paymentMethodLabel(assetKey: string, paystackChannel?: string | null): string {
+  const parsed = parseAsset(assetKey);
+  if (parsed.kind === 'fiat') {
+    const channelLabel = paystackChannel ? PAYSTACK_CHANNEL_LABELS[paystackChannel] : null;
+    return channelLabel ? `${channelLabel} (${parsed.currency})` : `Bank transfer (${parsed.currency})`;
+  }
+  const meta = assetMeta(assetKey);
+  return `${parsed.token} on ${meta?.name ?? parsed.chain}`;
 }
 
 function escHtml(s: string | null | undefined): string {
@@ -426,6 +447,94 @@ export async function sendMerchantPaymentNotification(orderId: string) {
 
   } catch (err: any) {
     console.error(`[email] failed to send merchant notification:`, err.message);
+  }
+}
+
+/**
+ * Sends a payment receipt to the end customer, if they supplied an email.
+ * `order.customer` is merchant-supplied and unverified — this is a best-effort
+ * courtesy receipt, not a KYC-grade confirmation.
+ */
+export async function sendCustomerReceiptEmail(orderId: string) {
+  try {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        merchant: true,
+        steps: { where: { sequence: 0 }, select: { paymentChannel: true } }
+      }
+    });
+
+    const customer = (order?.customer ?? null) as { email?: string; name?: string } | null;
+    if (!order || !customer?.email) {
+      return;
+    }
+
+    const isCrypto = order.sourceAssetKey.startsWith('crypto:');
+    const amount = Number(order.sourceAmount);
+    const symbol = order.sourceAssetKey.split(':').pop();
+    const amountStr = isCrypto
+      ? `${amount.toFixed(4)} ${symbol}`
+      : `${Math.round(amount).toLocaleString()} ${symbol}`;
+    const paidAt = order.updatedAt.toLocaleString('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+    const methodLabel = paymentMethodLabel(order.sourceAssetKey, order.steps[0]?.paymentChannel);
+
+    const { data, error } = await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL || 'Weave <receipts@weave.com>',
+      to: [customer.email],
+      subject: `Receipt: your payment to ${order.merchant.name}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #0B0F0E;">
+          <h2 style="color: #0F5D4C;">Payment Receipt</h2>
+          <p>Hi ${escHtml(customer.name || 'there')},</p>
+          <p>This confirms your payment to <strong>${escHtml(order.merchant.name)}</strong> was successful.</p>
+
+          <div style="background: #FDFDFB; border: 1px solid #E8EAE6; border-radius: 12px; padding: 24px; margin: 24px 0;">
+            <div style="font-size: 14px; color: #6B7572; margin-bottom: 4px;">Amount Paid</div>
+            <div style="font-size: 32px; font-weight: 700;">${amountStr}</div>
+
+            <hr style="border: none; border-top: 1px solid #E8EAE6; margin: 20px 0;" />
+
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <tr>
+                <td style="color: #6B7572; padding-bottom: 12px;">Paid To</td>
+                <td style="font-weight: 600; text-align: right; padding-bottom: 12px;">${escHtml(order.merchant.name)}</td>
+              </tr>
+              <tr>
+                <td style="color: #6B7572; padding-bottom: 12px;">Payment Method</td>
+                <td style="font-weight: 600; text-align: right; padding-bottom: 12px;">${escHtml(methodLabel)}</td>
+              </tr>
+              <tr>
+                <td style="color: #6B7572; padding-bottom: 12px;">Date</td>
+                <td style="font-weight: 600; text-align: right; padding-bottom: 12px;">${paidAt}</td>
+              </tr>
+              <tr>
+                <td style="color: #6B7572;">Reference</td>
+                <td style="font-weight: 600; text-align: right;">${escHtml(order.reference || order.id.slice(0, 8).toUpperCase())}</td>
+              </tr>
+            </table>
+          </div>
+
+          <p style="font-size: 13px; color: #6B7572; margin-top: 40px; border-top: 1px solid #E8EAE6; padding-top: 20px;">
+            This is an automated receipt from Weave, the payment processor for ${escHtml(order.merchant.name)}. Please do not reply to this email — contact ${escHtml(order.merchant.name)} directly with any questions about this purchase.
+          </p>
+          <p style="font-size: 11px; color: #9B9FA1; text-align: center; margin-top: 24px;">
+            Weave is a product of <strong>Dewdrop Labs</strong>.
+          </p>
+        </div>
+      `
+    });
+
+    if (error) {
+      console.error(`[email-receipt] Resend error for order ${orderId}:`, error);
+    } else {
+      console.log(`[email-receipt] sent to ${customer.email} for order ${orderId} (resend_id: ${data?.id})`);
+    }
+  } catch (err: any) {
+    console.error(`[email-receipt] failed to send customer receipt:`, err.message);
   }
 }
 

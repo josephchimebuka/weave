@@ -11,7 +11,7 @@ import { paycrest } from './paycrest.service';
 import { chainRails } from './chainrails.service';
 import { nearIntents } from './nearintents.service';
 import { paystack } from './paystack.service';
-import { sendMerchantPaymentNotification } from './email.service';
+import { sendMerchantPaymentNotification, sendCustomerReceiptEmail } from './email.service';
 import { parseAsset } from '../lib/assets';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import type { RoutePlan, RoutePlanStep } from './router.service';
@@ -747,6 +747,9 @@ export async function markStepDone(params: {
   // address across every order, so `externalId` alone is ambiguous. Pass the
   // memo to pin the lookup to the exact step. Non-memo steps pass null.
   depositMemo?: string | null;
+  // Paystack channel actually used by the payer (card/bank/ussd/...), for
+  // accurate "how did they pay" labeling on the customer receipt.
+  paymentChannel?: string | null;
 }) {
   const step = await prisma.routeStep.findFirst({
     where: {
@@ -764,6 +767,7 @@ export async function markStepDone(params: {
       status: 'done',
       completedAt: new Date(),
       ...(params.amountOut != null ? { amountOut: params.amountOut } : {}),
+      ...(params.paymentChannel != null ? { paymentChannel: params.paymentChannel } : {}),
     },
   });
 
@@ -830,6 +834,7 @@ export async function markStepDone(params: {
     // Fire and forget so we don't block the webhook worker
     Promise.all([
       sendMerchantPaymentNotification(step.orderId),
+      sendCustomerReceiptEmail(step.orderId),
       webhookService.triggerPaymentSucceeded(step.orderId)
     ]).catch(err => {
       console.error(`[executor] failed to trigger merchant notifications:`, err.message);
@@ -967,7 +972,7 @@ export async function syncOrder(
         console.log(`[sync] paystack status for ${step.id}: ${ps.status}`);
 
         if (ps.status === 'success') {
-          await markStepDone({ provider: 'paystack', externalId: step.externalId, amountOut: ps.amount / 100 });
+          await markStepDone({ provider: 'paystack', externalId: step.externalId, amountOut: ps.amount / 100, paymentChannel: ps.channel });
         } else if (['failed', 'abandoned'].includes(ps.status)) {
           await markStepFailed({ provider: 'paystack', externalId: step.externalId });
         }

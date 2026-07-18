@@ -219,6 +219,7 @@ model RouteStep {
   depositAddress String?   // for crypto steps: where funds should be sent
   depositMemo    String?   // required on XRP, TON, XLM, NEAR
   depositBankDetails Json? // for fiat-source (Paycrest onramp) steps: { institution, accountIdentifier, accountName, amountToTransfer, currency }
+  paymentChannel String?   // Paystack channel actually used by the payer: "card" | "bank" | "ussd" | "bank_transfer" | "mobile_money" | "qr" | "eft"
   startedAt      DateTime?
   completedAt    DateTime?
 

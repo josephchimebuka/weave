@@ -141,7 +141,7 @@ export class PaystackService {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
   }
 
-  async verifyTransaction(reference: string, opts: { sandbox?: boolean } = {}): Promise<{ status: string; amount: number }> {
+  async verifyTransaction(reference: string, opts: { sandbox?: boolean } = {}): Promise<{ status: string; amount: number; channel: string | null }> {
     const res = await fetch(`${BASE}/transaction/verify/${reference}`, {
       headers: getHeaders(opts.sandbox),
     });
@@ -150,6 +150,7 @@ export class PaystackService {
     return {
       status: body.data.status, // 'success', 'failed', 'abandoned', 'ongoing'
       amount: body.data.amount, // in kobo
+      channel: body.data.channel ?? null, // 'card' | 'bank' | 'ussd' | 'bank_transfer' | 'mobile_money' | 'qr' | 'eft'
     };
   }
 

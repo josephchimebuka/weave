@@ -83,7 +83,7 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
 
     if (!step) return res.status(200).json({ skipped: true, reason: 'no step found' });
 
-    await markStepDone({ provider: 'paystack', externalId: step.externalId! });
+    await markStepDone({ provider: 'paystack', externalId: step.externalId!, paymentChannel: data?.channel ?? null });
 
     await prisma.webhookLog.upsert({
       where: logKey,
