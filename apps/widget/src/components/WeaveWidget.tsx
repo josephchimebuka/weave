@@ -2635,6 +2635,14 @@ function WeaveCheckoutInner({
                     });
                   }
                   setScreen('vaccount');
+                } else if (activeStep?.provider === 'paystack' && activeStep.paystackAccessCode) {
+                  setPaystackPopupDetails({
+                    accessCode: activeStep.paystackAccessCode,
+                    publicKey: '',
+                    amount: Number(activeStep.amountIn ?? order.sourceAmount),
+                    reference: activeStep.externalId ?? '',
+                  });
+                  setScreen('paystack_popup');
                 } else {
                   setScreen('processing');
                 }

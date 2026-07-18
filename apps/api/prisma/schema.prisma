@@ -220,6 +220,7 @@ model RouteStep {
   depositMemo    String?   // required on XRP, TON, XLM, NEAR
   depositBankDetails Json? // for fiat-source (Paycrest onramp) steps: { institution, accountIdentifier, accountName, amountToTransfer, currency }
   paymentChannel String?   // Paystack channel actually used by the payer: "card" | "bank" | "ussd" | "bank_transfer" | "mobile_money" | "qr" | "eft"
+  paystackAccessCode String? // Paystack inline popup access code, persisted so a refreshed widget can relaunch the popup
   startedAt      DateTime?
   completedAt    DateTime?
 

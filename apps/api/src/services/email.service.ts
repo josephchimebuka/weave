@@ -352,8 +352,10 @@ export async function sendSupportEmail(payload: { name: string; email: string; t
 
 /**
  * Handles all transactional email notifications for the Weave platform via Resend.
+ * Returns whether the email was actually sent, so a durable caller (the QStash
+ * notify job) can tell a real failure (worth retrying) apart from a no-op.
  */
-export async function sendMerchantPaymentNotification(orderId: string) {
+export async function sendMerchantPaymentNotification(orderId: string): Promise<boolean> {
   try {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -366,7 +368,7 @@ export async function sendMerchantPaymentNotification(orderId: string) {
 
     if (!order || !order.merchant.email) {
       console.warn(`[email] could not find order ${orderId} or merchant email`);
-      return;
+      return false;
     }
 
     const m = order.merchant;
@@ -441,12 +443,14 @@ export async function sendMerchantPaymentNotification(orderId: string) {
 
     if (error) {
       console.error(`[email] Resend error for order ${orderId}:`, error);
-    } else {
-      console.log(`[email] payment notification sent to ${m.email} for order ${orderId} (resend_id: ${data?.id})`);
+      return false;
     }
+    console.log(`[email] payment notification sent to ${m.email} for order ${orderId} (resend_id: ${data?.id})`);
+    return true;
 
   } catch (err: any) {
     console.error(`[email] failed to send merchant notification:`, err.message);
+    return false;
   }
 }
 
@@ -454,8 +458,12 @@ export async function sendMerchantPaymentNotification(orderId: string) {
  * Sends a payment receipt to the end customer, if they supplied an email.
  * `order.customer` is merchant-supplied and unverified — this is a best-effort
  * courtesy receipt, not a KYC-grade confirmation.
+ * Returns whether the call was handled successfully — true both when an email
+ * was sent AND when there was legitimately nothing to send (no customer email),
+ * false only on a real failure (DB/Resend), so a durable caller knows whether
+ * a retry is warranted.
  */
-export async function sendCustomerReceiptEmail(orderId: string) {
+export async function sendCustomerReceiptEmail(orderId: string): Promise<boolean> {
   try {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -465,9 +473,14 @@ export async function sendCustomerReceiptEmail(orderId: string) {
       }
     });
 
-    const customer = (order?.customer ?? null) as { email?: string; name?: string } | null;
-    if (!order || !customer?.email) {
-      return;
+    if (!order) {
+      console.warn(`[email-receipt] could not find order ${orderId}`);
+      return false;
+    }
+
+    const customer = (order.customer ?? null) as { email?: string; name?: string } | null;
+    if (!customer?.email) {
+      return true; // nothing to send — not a failure
     }
 
     const isCrypto = order.sourceAssetKey.startsWith('crypto:');
@@ -530,11 +543,13 @@ export async function sendCustomerReceiptEmail(orderId: string) {
 
     if (error) {
       console.error(`[email-receipt] Resend error for order ${orderId}:`, error);
-    } else {
-      console.log(`[email-receipt] sent to ${customer.email} for order ${orderId} (resend_id: ${data?.id})`);
+      return false;
     }
+    console.log(`[email-receipt] sent to ${customer.email} for order ${orderId} (resend_id: ${data?.id})`);
+    return true;
   } catch (err: any) {
     console.error(`[email-receipt] failed to send customer receipt:`, err.message);
+    return false;
   }
 }
 

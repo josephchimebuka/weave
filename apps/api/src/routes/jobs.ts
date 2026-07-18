@@ -3,6 +3,7 @@ import { qstashReceiver } from '../lib/qstash';
 import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
+import { sendMerchantPaymentNotification, sendCustomerReceiptEmail } from '../services/email.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 
@@ -195,6 +196,37 @@ router.post('/dispatch-outgoing', verifyQStash, async (req, res) => {
     // Return 500 so QStash automatically retries based on your QStash configuration
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// ── Order-completed notifications (merchant email + customer receipt + webhook) ──
+// Fired once by executor.service.ts right after an order transitions to
+// 'completed'. Runs through QStash (rather than in-process fire-and-forget) so a
+// transient DB blip during any of the three steps gets a real retry instead of
+// silently dropping the notification forever.
+router.post('/notify-order-completed', verifyQStash, async (req, res) => {
+  const { orderId } = req.body as { orderId: string };
+  if (!orderId) return res.status(400).json({ error: 'missing orderId' });
+
+  const [merchantEmailOk, customerEmailOk] = await Promise.all([
+    sendMerchantPaymentNotification(orderId),
+    sendCustomerReceiptEmail(orderId),
+  ]);
+
+  let webhookOk = true;
+  try {
+    await webhookService.triggerPaymentSucceeded(orderId);
+  } catch (err: any) {
+    webhookOk = false;
+    console.error(`[jobs] notify-order-completed: webhook trigger failed for order ${orderId}:`, err.message);
+  }
+
+  if (!merchantEmailOk || !customerEmailOk || !webhookOk) {
+    // Return 500 so QStash retries the whole job. Steps that already succeeded
+    // are cheap/harmless to re-run (at worst, a duplicate transactional email) —
+    // far preferable to the previous silent, permanent drop.
+    return res.status(500).json({ success: false, merchantEmailOk, customerEmailOk, webhookOk });
+  }
+  res.json({ success: true });
 });
 
 // ── NEAR per-step poll (event-driven) ───────────────────────────────────────

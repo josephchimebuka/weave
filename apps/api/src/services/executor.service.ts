@@ -11,7 +11,6 @@ import { paycrest } from './paycrest.service';
 import { chainRails } from './chainrails.service';
 import { nearIntents } from './nearintents.service';
 import { paystack } from './paystack.service';
-import { sendMerchantPaymentNotification, sendCustomerReceiptEmail } from './email.service';
 import { parseAsset } from '../lib/assets';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import type { RoutePlan, RoutePlanStep } from './router.service';
@@ -201,6 +200,7 @@ interface StepExecution {
   feeUsd: number;
   bankDetails?: FirstStepAction['bankDetails'];
   note?: string;
+  paystackAccessCode?: string;
 }
 
 async function runPaycrestOfframp(
@@ -506,6 +506,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
           depositMemo: null,
           expiresAt: null,
           feeUsd: 0,
+          paystackAccessCode: txn.access_code,
         };
         (exec as any).paystackPopupDetails = {
           accessCode: txn.access_code,
@@ -573,6 +574,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         depositMemo: null,
         expiresAt: null,
         feeUsd,
+        paystackAccessCode: txn.access_code,
       };
 
       (exec as any).paystackPopupDetails = {
@@ -651,6 +653,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         depositAddress: e.depositAddress,
         depositMemo: e.depositMemo,
         depositBankDetails: e.bankDetails ?? undefined,
+        paystackAccessCode: e.paystackAccessCode ?? undefined,
         status: i === 0 ? 'awaiting_deposit' : 'pending',
         feeUsd: e.feeUsd,
         startedAt: new Date(),
@@ -829,16 +832,21 @@ export async function markStepDone(params: {
   }
 
   // ── Notify Merchant ───────────────────────────────────────────────────────
+  // Routed through QStash (rather than called in-process) so a transient DB
+  // blip hitting any of the three notification steps gets a real retry instead
+  // of silently dropping the merchant email / customer receipt / webhook.
   if (transitioned > 0 && nextOrderStatus === 'completed' && !step.order.sandboxMode) {
-    const { webhookService } = await import('./webhook.service');
-    // Fire and forget so we don't block the webhook worker
-    Promise.all([
-      sendMerchantPaymentNotification(step.orderId),
-      sendCustomerReceiptEmail(step.orderId),
-      webhookService.triggerPaymentSucceeded(step.orderId)
-    ]).catch(err => {
-      console.error(`[executor] failed to trigger merchant notifications:`, err.message);
-    });
+    const apiBase = process.env.API_BASE;
+    if (!apiBase) {
+      console.warn('[executor] API_BASE not set — cannot enqueue order-completed notifications');
+    } else {
+      qstash.publishJSON({
+        url:  `${apiBase}/jobs/notify-order-completed`,
+        body: { orderId: step.orderId },
+      }).catch(err => {
+        console.error(`[executor] failed to enqueue order-completed notifications:`, err.message);
+      });
+    }
   }
 
   return { orderId: step.orderId, stepId: step.id, orderStatus: nextOrderStatus };
