@@ -68,6 +68,22 @@ export interface CreateOnrampParams {
   reference:       string;
 }
 
+// Institutions (bank lists) change rarely — cache per currency.
+const institutionsCache = new Map<string, { data: PCInstitution[]; cachedAt: number }>();
+const INSTITUTIONS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Rates: stale-while-revalidate. Paycrest's /rates endpoint was observed taking
+// 1.3–7s, and it sits on the hot path of every quote and every fiat order. A
+// plain TTL cache would serve stale rates silently; instead:
+//   age < FRESH_MS      → serve cached, no fetch
+//   age < MAX_STALE_MS  → serve cached instantly, refresh in background (deduped)
+//   older / no entry    → blocking fetch (fails loudly if Paycrest is down —
+//                         we never quote money off an old rate when it's truly old)
+interface RateCacheEntry { data: PCRate; fetchedAt: number; revalidating: Promise<unknown> | null }
+const rateCache = new Map<string, RateCacheEntry>();
+const RATE_FRESH_MS     = Number(process.env.PAYCREST_RATE_FRESH_MS     ?? 10_000);
+const RATE_MAX_STALE_MS = Number(process.env.PAYCREST_RATE_MAX_STALE_MS ?? 60_000);
+
 // ── Service ──────────────────────────────────────────────────────────────────
 
 export class PaycrestService {
@@ -103,24 +119,59 @@ export class PaycrestService {
     }
   }
 
-  /** GET /v2/rates/{network}/{token}/{amount}/{fiat} — no auth. */
+  /** GET /v2/rates/{network}/{token}/{amount}/{fiat} — no auth.
+   *  Stale-while-revalidate (see rateCache above): instant answer within the
+   *  stale window, blocking fetch beyond it. */
   async getRate(network: string, token: string, amount: number | string, fiat: string): Promise<PCRate> {
-    return this.request<PCRate>(
+    const key = `${network}/${token}/${amount}/${fiat.toUpperCase()}`;
+    const cached = rateCache.get(key);
+    const age = cached ? Date.now() - cached.fetchedAt : Infinity;
+
+    if (cached && age < RATE_FRESH_MS) return cached.data;
+
+    if (cached && age < RATE_MAX_STALE_MS) {
+      if (!cached.revalidating) {
+        cached.revalidating = this.fetchRate(key, network, token, amount, fiat)
+          .catch((err: any) => {
+            // Keep serving the stale entry; the next call past a failed refresh retries.
+            console.warn(`[paycrest] background rate refresh failed for ${key}:`, err.message);
+          })
+          .finally(() => {
+            const entry = rateCache.get(key);
+            if (entry) entry.revalidating = null;
+          });
+      }
+      return cached.data;
+    }
+
+    return this.fetchRate(key, network, token, amount, fiat);
+  }
+
+  private async fetchRate(key: string, network: string, token: string, amount: number | string, fiat: string): Promise<PCRate> {
+    const data = await this.request<PCRate>(
       'GET',
       `/rates/${network}/${token}/${amount}/${fiat}`,
       undefined,
       false,
     );
+    rateCache.set(key, { data, fetchedAt: Date.now(), revalidating: null });
+    return data;
   }
 
-  /** GET /v2/institutions/{currency} — no auth. */
+  /** GET /v2/institutions/{currency} — no auth. Cached 24h per currency. */
   async getInstitutions(currency: string): Promise<PCInstitution[]> {
-    return this.request<PCInstitution[]>(
+    const key = currency.toUpperCase();
+    const cached = institutionsCache.get(key);
+    if (cached && Date.now() - cached.cachedAt < INSTITUTIONS_CACHE_TTL_MS) return cached.data;
+
+    const data = await this.request<PCInstitution[]>(
       'GET',
-      `/institutions/${currency.toUpperCase()}`,
+      `/institutions/${key}`,
       undefined,
       false,
     );
+    institutionsCache.set(key, { data, cachedAt: Date.now() });
+    return data;
   }
 
   /** POST /v2/sender/orders — offramp (crypto → fiat). */

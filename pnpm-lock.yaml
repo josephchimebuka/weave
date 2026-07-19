@@ -8,6 +8,8 @@ overrides:
   '@types/react': ^19
   '@types/react-dom': ^19
 
+packageExtensionsChecksum: sha256-vHo/W+V5p8ylo6J9e8wUe2TYyydm6QghrcinbuqsUD8=
+
 importers:
 
   .:
@@ -91,15 +93,15 @@ importers:
       '@vercel/analytics':
         specifier: ^2.0.1
         version: 2.0.1(next@15.5.15(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(react@19.2.5)
+      '@weave-sdk/widget':
+        specifier: workspace:*
+        version: link:../widget
       '@weave/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@weave/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@weave-sdk/widget':
-        specifier: workspace:*
-        version: link:../widget
       clsx:
         specifier: ^2.0.0
         version: 2.1.1
@@ -216,15 +218,15 @@ importers:
 
   apps/www:
     dependencies:
+      '@weave-sdk/widget':
+        specifier: workspace:*
+        version: link:../widget
       '@weave/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@weave/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@weave-sdk/widget':
-        specifier: workspace:*
-        version: link:../widget
       clsx:
         specifier: ^2.0.0
         version: 2.1.1
@@ -4730,6 +4732,7 @@ snapshots:
       abitype: 1.0.6(typescript@5.9.3)(zod@3.25.76)
       axios: 1.13.6
       axios-retry: 4.5.0(axios@1.13.6)
+      bs58: 6.0.0
       jose: 6.2.2
       md5: 2.3.0
       uncrypto: 0.1.3

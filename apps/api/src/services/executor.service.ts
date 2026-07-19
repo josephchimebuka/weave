@@ -7,6 +7,7 @@
 // the destination back to the user-facing entry point.
 
 import { prisma } from '../lib/prisma';
+import type { RouteStep } from '@prisma/client';
 import { paycrest } from './paycrest.service';
 import { chainRails } from './chainrails.service';
 import { nearIntents } from './nearintents.service';
@@ -664,14 +665,17 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   // Schedule a self-driving poll for every NEAR Intents step. Each message
   // re-enqueues itself until the step reaches a terminal state, so the global
   // cron only needs to run as an infrequent recovery sweep.
+  // Fire-and-forget: this is pure background bookkeeping (scheduleNearPoll
+  // already catches its own errors and logs), no reason to make the customer
+  // wait for a QStash publish before they see their deposit address.
   if (!input.sandboxMode) {
     for (let i = 0; i < plan.steps.length; i++) {
       if (plan.steps[i].provider === 'nearintents' && executions[i]?.depositAddress) {
-        await scheduleNearPoll({
+        scheduleNearPoll({
           depositAddress: executions[i].depositAddress!,
           depositMemo:    executions[i].depositMemo ?? null,
           attempt:        1,
-        });
+        }).catch(() => {});
       }
     }
   }
@@ -764,30 +768,34 @@ export async function markStepDone(params: {
   });
   if (!step) return null;
 
-  await prisma.routeStep.update({
-    where: { id: step.id },
-    data: {
-      status: 'done',
-      completedAt: new Date(),
-      ...(params.amountOut != null ? { amountOut: params.amountOut } : {}),
-      ...(params.paymentChannel != null ? { paymentChannel: params.paymentChannel } : {}),
-    },
-  });
-
-  // Forward-completion: funds can only reach this hop if every earlier hop
-  // already delivered them. Provider status APIs for those earlier hops (e.g.
-  // NEAR Intents' /status) can lag behind the physical settlement, which would
-  // otherwise pin the order in 'processing' — and the widget on "settling…" —
-  // even though the money has already reached the final leg. Mark any earlier,
-  // still-open steps done so the rollup below reflects reality.
-  await prisma.routeStep.updateMany({
-    where: {
-      orderId:  step.orderId,
-      sequence: { lt: step.sequence },
-      status:   { notIn: ['done', 'failed'] },
-    },
-    data: { status: 'done', completedAt: new Date() },
-  });
+  // These two writes target disjoint rows (this exact step vs. strictly-earlier
+  // ones) and neither depends on the other's result, so they run concurrently
+  // instead of as two sequential round trips.
+  await Promise.all([
+    prisma.routeStep.update({
+      where: { id: step.id },
+      data: {
+        status: 'done',
+        completedAt: new Date(),
+        ...(params.amountOut != null ? { amountOut: params.amountOut } : {}),
+        ...(params.paymentChannel != null ? { paymentChannel: params.paymentChannel } : {}),
+      },
+    }),
+    // Forward-completion: funds can only reach this hop if every earlier hop
+    // already delivered them. Provider status APIs for those earlier hops (e.g.
+    // NEAR Intents' /status) can lag behind the physical settlement, which would
+    // otherwise pin the order in 'processing' — and the widget on "settling…" —
+    // even though the money has already reached the final leg. Mark any earlier,
+    // still-open steps done so the rollup below reflects reality.
+    prisma.routeStep.updateMany({
+      where: {
+        orderId:  step.orderId,
+        sequence: { lt: step.sequence },
+        status:   { notIn: ['done', 'failed'] },
+      },
+      data: { status: 'done', completedAt: new Date() },
+    }),
+  ]);
 
   // Refetch steps to get the latest statuses.
   const fresh = await prisma.routeStep.findMany({ where: { orderId: step.orderId }, orderBy: { sequence: 'asc' } });
@@ -905,21 +913,28 @@ export async function markStepFailed(params: { provider: string; externalId: str
 /**
  * Manually fetches the current status of an order's steps from providers
  * and advances the state machine if it has moved.
+ *
+ * `preloaded` lets a caller that already has the order (with steps) in hand
+ * — e.g. GET /orders/:id, which just fetched it — skip a redundant DB
+ * round trip here. Omit it to fetch fresh (used by the QStash sync jobs,
+ * which only ever have an orderId).
  */
 export async function syncOrder(
   orderId: string,
-): Promise<{ paycrestStatus: string | null; nearStatus: string | null }> {
+  preloaded?: { status: string; sandboxMode: boolean; steps: RouteStep[] },
+): Promise<{ paycrestStatus: string | null; nearStatus: string | null; changed: boolean }> {
   // Raw provider statuses gathered during the sweep. The widget polls
   // GET /orders/:id and keys intermediate UI on these — e.g. NEAR
   // 'INCOMPLETE_DEPOSIT' drives the underpayment warning, and Paycrest
   // 'fulfilled' advances the processing stage. Returning them here is what
   // makes that contract real (previously they were always null).
-  const result: { paycrestStatus: string | null; nearStatus: string | null } = {
+  const result: { paycrestStatus: string | null; nearStatus: string | null; changed: boolean } = {
     paycrestStatus: null,
     nearStatus: null,
+    changed: false,
   };
 
-  const order = await prisma.order.findUnique({
+  const order = preloaded ?? await prisma.order.findUnique({
     where: { id: orderId },
     include: { steps: true }
   });
@@ -927,8 +942,14 @@ export async function syncOrder(
 
   const { classifyNearStatus } = await import('./nearintents.service');
 
-  for (const step of order.steps) {
-    if (step.status === 'done' || step.status === 'failed') continue;
+  // Each step polls a DIFFERENT provider by a different externalId — independent
+  // work, safe to run concurrently. markStepDone/markStepFailed already have to
+  // tolerate concurrent callers today (a webhook and a poll can race the same
+  // step), so parallelizing checks *within* one sync is no riskier than that
+  // existing race, and turns a 2+ hop order's poll cost from N serial provider
+  // round trips into 1.
+  await Promise.all(order.steps.map(async (step) => {
+    if (step.status === 'done' || step.status === 'failed') return;
 
     try {
       if (step.provider === 'nearintents' && step.depositAddress) {
@@ -940,8 +961,10 @@ export async function syncOrder(
         if (outcome === 'done') {
           const amountOut = Number(status.swapDetails?.amountOutFormatted) || undefined;
           await markStepDone({ provider: 'nearintents', externalId: step.depositAddress, depositMemo: step.depositMemo, amountOut });
+          result.changed = true;
         } else if (outcome === 'failed' || outcome === 'refunded') {
           await markStepFailed({ provider: 'nearintents', externalId: step.depositAddress, depositMemo: step.depositMemo, isRefund: outcome === 'refunded' });
+          result.changed = true;
         }
       } else if (step.provider === 'paycrest' && step.externalId) {
         console.log(`[sync] checking paycrest step ${step.id} for order ${step.externalId}`);
@@ -970,8 +993,10 @@ export async function syncOrder(
             finalAmount = Number(pc.amount) * Number(pc.rate);
           }
           await markStepDone({ provider: 'paycrest', externalId: step.externalId, amountOut: finalAmount });
+          result.changed = true;
         } else if (isFailed || isRefund) {
           await markStepFailed({ provider: 'paycrest', externalId: step.externalId, isRefund });
+          result.changed = true;
         }
       } else if (step.provider === 'paystack' && step.externalId) {
         console.log(`[sync] checking paystack step ${step.id} for ref ${step.externalId}`);
@@ -981,8 +1006,10 @@ export async function syncOrder(
 
         if (ps.status === 'success') {
           await markStepDone({ provider: 'paystack', externalId: step.externalId, amountOut: ps.amount / 100, paymentChannel: ps.channel });
+          result.changed = true;
         } else if (['failed', 'abandoned'].includes(ps.status)) {
           await markStepFailed({ provider: 'paystack', externalId: step.externalId });
+          result.changed = true;
         }
       } else if (step.provider === 'chainrails' && step.externalId) {
         console.log(`[sync] checking chainrails step ${step.id} for intent ${step.externalId}`);
@@ -991,8 +1018,10 @@ export async function syncOrder(
 
         if (intent.intent_status === 'COMPLETED') {
           await markStepDone({ provider: 'chainrails', externalId: step.externalId });
+          result.changed = true;
         } else if (intent.intent_status === 'FAILED') {
           await markStepFailed({ provider: 'chainrails', externalId: step.externalId });
+          result.changed = true;
         }
       } else if (step.provider === 'direct' && step.externalId) {
         console.log(`[sync] checking on-chain for direct step ${step.id} (dest: ${step.depositAddress})`);
@@ -1000,19 +1029,25 @@ export async function syncOrder(
         if (confirmedAmount != null) {
           console.log(`[sync] direct payment confirmed on-chain: ${confirmedAmount} USDC`);
           await markStepDone({ provider: 'direct', externalId: step.externalId, amountOut: confirmedAmount });
+          result.changed = true;
         }
       }
     } catch (err: any) {
       console.warn(`[sync] failed to sync step ${step.id} (${step.provider}):`, err.message);
     }
-  }
+  }));
 
   return result;
 }
 
 /**
  * Utility to sweep all "processing" orders from the last 24h and fix them.
+ * Runs with bounded concurrency — each order does its own provider round
+ * trip(s), so processing them strictly one-at-a-time made this sweep's
+ * wall-clock time scale linearly with the stuck-order count for no reason.
  */
+const SYNC_ALL_CONCURRENCY = 8;
+
 export async function syncAllOpenOrders() {
   const stuck = await prisma.order.findMany({
     where: {
@@ -1022,12 +1057,15 @@ export async function syncAllOpenOrders() {
     select: { id: true }
   });
 
-  for (const order of stuck) {
-    try {
-      await syncOrder(order.id);
-    } catch (err: any) {
-      console.error(`[sync] failed for order ${order.id}:`, err.message);
-    }
+  for (let i = 0; i < stuck.length; i += SYNC_ALL_CONCURRENCY) {
+    const batch = stuck.slice(i, i + SYNC_ALL_CONCURRENCY);
+    await Promise.all(batch.map(async (order) => {
+      try {
+        await syncOrder(order.id);
+      } catch (err: any) {
+        console.error(`[sync] failed for order ${order.id}:`, err.message);
+      }
+    }));
   }
 }
 
@@ -1047,13 +1085,17 @@ async function checkOnChainDirect(step: { toAsset: string; depositAddress: strin
     const merchantHex = '0x' + merchantAddress.toLowerCase().replace('0x', '').padStart(64, '0');
 
     const rpc = 'https://mainnet.base.org';
+    const RPC_TIMEOUT_MS = 10000;
 
     // Get current block to look back
+    const blockController = new AbortController();
+    const blockTimeoutId = setTimeout(() => blockController.abort(), RPC_TIMEOUT_MS);
     const blockRes = await fetch(rpc, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] })
-    });
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+      signal: blockController.signal,
+    }).finally(() => clearTimeout(blockTimeoutId));
     const blockData = await blockRes.json();
     const currentBlock = parseInt(blockData.result, 16);
     const fromBlock = '0x' + (currentBlock - 500).toString(16); // Look back ~500 blocks
@@ -1074,11 +1116,14 @@ async function checkOnChainDirect(step: { toAsset: string; depositAddress: strin
       }]
     };
 
+    const logsController = new AbortController();
+    const logsTimeoutId = setTimeout(() => logsController.abort(), RPC_TIMEOUT_MS);
     const res = await fetch(rpc, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+      body: JSON.stringify(body),
+      signal: logsController.signal,
+    }).finally(() => clearTimeout(logsTimeoutId));
     const data = await res.json();
     const logs = data.result || [];
 

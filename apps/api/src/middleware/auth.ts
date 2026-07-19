@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import type { Merchant } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
 declare global {
@@ -7,6 +8,10 @@ declare global {
     interface Request {
       merchantId: string;
       sandboxMode: boolean;
+      // Set only when the auth strategy already loaded the full Merchant row
+      // (API key, session) — route handlers can reuse it to skip a redundant
+      // re-fetch. Not set for secret-key auth, which only loads a KeyPair.
+      merchant?: Merchant;
     }
   }
 }
@@ -25,6 +30,7 @@ export async function requireApiKey(req: Request, res: Response, next: NextFunct
     if (liveMerchant) {
       req.merchantId = liveMerchant.id;
       req.sandboxMode = false;
+      req.merchant = liveMerchant;
       return next();
     }
 
@@ -32,6 +38,7 @@ export async function requireApiKey(req: Request, res: Response, next: NextFunct
     if (sandboxMerchant) {
       req.merchantId = sandboxMerchant.id;
       req.sandboxMode = true;
+      req.merchant = sandboxMerchant;
       return next();
     }
 
@@ -107,6 +114,7 @@ export async function requireSession(req: Request, res: Response, next: NextFunc
 
     req.merchantId = session.merchantId;
     req.sandboxMode = false;
+    req.merchant = session.merchant;
     return next();
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Auth service error' });

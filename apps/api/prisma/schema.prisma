@@ -198,6 +198,10 @@ model Order {
 
   @@index([merchantId])
   @@index([status])
+  // Covers GET /orders (merchantId + sandboxMode equality, createdAt sort + limit)
+  // and the basic-tier monthly limit count (merchantId + createdAt range) without
+  // falling back to an unordered scan over every one of the merchant's orders.
+  @@index([merchantId, sandboxMode, createdAt])
   // Prevents duplicate orders for the same merchant+reference under concurrent requests.
   // NULL reference values are exempt (PostgreSQL treats NULL != NULL for unique constraints).
   @@unique([merchantId, reference])

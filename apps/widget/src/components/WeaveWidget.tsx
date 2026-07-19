@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   type AssetKey,
   parseAsset,
@@ -608,6 +608,11 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
   const pick = (method: PathPick) => {
     if (submitting || picked) return;
     setPicked(method);
+    // Fire-and-forget: warm the Paystack inline SDK now, while the order-creation
+    // round trip is in flight, so it's already loaded by the time (if) the route
+    // resolves to a Paystack popup — instead of fetching+parsing it right when
+    // the customer is staring at the popup screen waiting for it to appear.
+    if (method === 'fiat') loadPaystackSdk().catch(() => {});
     onPick(method);
   };
 
@@ -2696,6 +2701,17 @@ function WeaveCheckoutInner({
     }
   }, [apiKey]); // Run once on mount
 
+  // supportedAssets.fiat starts as the SUPPORTED_FIAT constant, then gets
+  // replaced by a NEW array reference once fetchAssets resolves — even when
+  // the actual rate is unchanged. Depending on the array itself made the
+  // effect below re-fire (and double-fetch the ETH quote) a moment after
+  // mount for no reason; depending on the resolved primitive rate instead
+  // only re-runs it when the rate value genuinely changes.
+  const ngnRate = useMemo(() => {
+    const fiatAsset = supportedAssets.fiat.find(f => f.key === fiatKey(merchant.currency));
+    return fiatAsset?.rate || 1515;
+  }, [supportedAssets.fiat, merchant.currency]);
+
   useEffect(() => {
     if (!apiKey) return;
     let cancelled = false;
@@ -2707,10 +2723,7 @@ function WeaveCheckoutInner({
       amountIn: 'source'
     }).then(q => {
       if (cancelled) return;
-      // Find the fiat rate to convert back to USD
-      const fiatAsset = supportedAssets.fiat.find(f => f.key === fiatKey(merchant.currency));
-      const rate = fiatAsset?.rate || 1515;
-      const price = q.estimatedDest / rate;
+      const price = q.estimatedDest / ngnRate;
       if (!isNaN(price) && price > 0) {
         setEthUsdPrice(price);
       }
@@ -2721,7 +2734,7 @@ function WeaveCheckoutInner({
       setLoadingEthPrice(false);
     });
     return () => { cancelled = true; };
-  }, [apiKey, merchant.currency, supportedAssets.fiat]);
+  }, [apiKey, merchant.currency, ngnRate]);
 
   // 2. Persistence logic: Save state whenever orderId or screen changes
   useEffect(() => {

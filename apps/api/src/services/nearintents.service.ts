@@ -187,14 +187,22 @@ export class NearIntentsService {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (auth && this.jwt) headers['Authorization'] = `Bearer ${this.jwt}`;
 
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`NEAR Intents ${res.status}: ${text}`);
-    return JSON.parse(text) as T;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`NEAR Intents ${res.status}: ${text}`);
+      return JSON.parse(text) as T;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   /** GET /v0/tokens — cached for 10 min. */

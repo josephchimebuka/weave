@@ -5,10 +5,6 @@
   "exports": {
     "./theme.css": "./src/theme.css"
   },
-  "scripts": {
-    "dev": "echo 'No build step for CSS-only package'",
-    "build": "echo 'No build step for CSS-only package'"
-  },
   "devDependencies": {
     "tailwindcss": "^4.0.0"
   }

@@ -46,17 +46,6 @@ router.get('/', requireAuth, async (req, res) => {
     // Probe Paycrest when any side touches fiat. The live rate drives both
     // the conversion below and the figure the widget displays.
     const fiatCurrency = src.kind === 'fiat' ? src.currency : dst.kind === 'fiat' ? dst.currency : null;
-    let sellRate = 1, buyRate = 1;
-    if (fiatCurrency) {
-      if (req.sandboxMode) {
-        // Sandbox quotes use the fixed rate so display matches sandbox execution.
-        sellRate = buyRate = SANDBOX_NGN_RATE;
-      } else {
-        const rate = await paycrest.getRate('base', 'USDC', 1, fiatCurrency);
-        sellRate = Number(rate.sell.rate) || 1;
-        buyRate  = Number(rate.buy.rate)  || 1;
-      }
-    }
 
     // Normalize both sides of the quote into USD-equivalent (USDC) so we can
     // stack per-hop bridge fees cleanly, then reproject. For dest-anchored
@@ -66,31 +55,46 @@ router.get('/', requireAuth, async (req, res) => {
     // spread (absorbed by SLIPPAGE_BUFFER_BPS).
     const feeRate        = (SENDER_FEE_BPS + APP_FEE_BPS) / 10000;
     const slippageBuffer = SLIPPAGE_BUFFER_BPS / 10000;
-    // 1. Get prices for all assets involved
-    let srcPrice = 1;
-    if (src.kind === 'crypto') {
+
+    // The fiat rate (Paycrest) and the source asset's USD price (Coinbase/NEAR)
+    // are independent lookups — neither reads the other's result — so fetch
+    // them concurrently instead of one after the other.
+    async function fetchFiatRate(): Promise<{ sellRate: number; buyRate: number }> {
+      if (!fiatCurrency) return { sellRate: 1, buyRate: 1 };
+      if (req.sandboxMode) {
+        // Sandbox quotes use the fixed rate so display matches sandbox execution.
+        return { sellRate: SANDBOX_NGN_RATE, buyRate: SANDBOX_NGN_RATE };
+      }
+      const rate = await paycrest.getRate('base', 'USDC', 1, fiatCurrency);
+      return { sellRate: Number(rate.sell.rate) || 1, buyRate: Number(rate.buy.rate) || 1 };
+    }
+
+    async function fetchSrcPrice(): Promise<number> {
+      if (src.kind !== 'crypto') return 1;
       const sym = src.token.toUpperCase();
-      if (sym === 'USDC' || sym === 'USDT') {
-        srcPrice = 1;
-      } else {
+      if (sym === 'USDC' || sym === 'USDT') return 1;
+      try {
+        // Try Coinbase public API first for common assets
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const cb = await fetch(`https://api.coinbase.com/v2/prices/${sym}-USD/spot`, { signal: controller.signal })
+          .then(r => r.json())
+          .finally(() => clearTimeout(timeoutId));
+        if (cb?.data?.amount) return Number(cb.data.amount);
+        // Fallback to Near Intents
+        const token = await nearIntents.resolveToken(from);
+        return token.price > 0 ? token.price : 1;
+      } catch {
         try {
-          // Try Coinbase public API first for common assets
-          const cb = await fetch(`https://api.coinbase.com/v2/prices/${sym}-USD/spot`).then(r => r.json());
-          if (cb?.data?.amount) {
-            srcPrice = Number(cb.data.amount);
-          } else {
-            // Fallback to Near Intents
-            const token = await nearIntents.resolveToken(from);
-            if (token.price > 0) srcPrice = token.price;
-          }
-        } catch (err) {
-          try {
-            const token = await nearIntents.resolveToken(from);
-            if (token.price > 0) srcPrice = token.price;
-          } catch {}
+          const token = await nearIntents.resolveToken(from);
+          return token.price > 0 ? token.price : 1;
+        } catch {
+          return 1;
         }
       }
     }
+
+    const [{ sellRate, buyRate }, srcPrice] = await Promise.all([fetchFiatRate(), fetchSrcPrice()]);
 
     const usdEquivalent = (() => {
       if (src.kind === 'crypto' && dst.kind === 'fiat') {
@@ -129,13 +133,15 @@ router.get('/', requireAuth, async (req, res) => {
     // Bridge-fee snapshot. ChainRails gives us a live figure; for NEAR Intents
     // we book the slippage buffer as bridge fee so the breakdown reflects the
     // gross-up we just applied.
+    // Each step's fee lookup targets a different provider/hop and doesn't
+    // depend on any other step's result — safe to fetch concurrently.
     let bridgeFeeUsd = 0;
-    for (const step of plan.steps) {
+    await Promise.all(plan.steps.map(async (step) => {
       if (step.provider === 'chainrails') {
         try {
           const from = parseAsset(step.fromAsset);
           const to   = parseAsset(step.toAsset);
-          if (from.kind !== 'crypto' || to.kind !== 'crypto') continue;
+          if (from.kind !== 'crypto' || to.kind !== 'crypto') return;
           const q = await chainRails.getBestQuote({
             sourceChain:      from.chain,
             sourceToken:      from.token,
@@ -150,7 +156,7 @@ router.get('/', requireAuth, async (req, res) => {
       } else if (step.provider === 'nearintents') {
         bridgeFeeUsd += usdEquivalent * slippageBuffer;
       }
-    }
+    }));
 
     const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
 

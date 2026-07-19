@@ -114,7 +114,9 @@ router.post('/', requireAuth, async (req, res) => {
       // the route requires a Paycrest refund account.
     }
 
-    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    // Auth already loaded the merchant for API-key/session requests — only
+    // secret-key (server-to-server) auth needs this extra round trip.
+    const merchant = req.merchant ?? await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(401).json({ success: false, error: 'Unknown merchant' });
 
     // Unverified merchants (no email verification) cannot place orders.
@@ -143,18 +145,23 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    const sourceInstrument = await resolveInstrument(body.source, merchant.id);
-
-    let destInstrument;
-    if (body.dest) {
-      destInstrument = await resolveInstrument(body.dest, merchant.id);
-    } else {
-      if (!merchant.defaultPayoutInstrumentId) {
-        return res.status(400).json({ success: false, error: 'No dest instrument and merchant has no default payout configured' });
-      }
-      destInstrument = await prisma.instrument.findUnique({ where: { id: merchant.defaultPayoutInstrumentId } });
-      if (!destInstrument) return res.status(500).json({ success: false, error: 'Default payout instrument missing' });
+    if (!body.dest && !merchant.defaultPayoutInstrumentId) {
+      return res.status(400).json({ success: false, error: 'No dest instrument and merchant has no default payout configured' });
     }
+
+    // Independent reads (none depends on another's result) — run concurrently
+    // instead of as three separate sequential round trips. checkoutSession is
+    // pulled forward from where it's used further below for the same reason.
+    const [sourceInstrument, destInstrument, checkoutSession] = await Promise.all([
+      resolveInstrument(body.source, merchant.id),
+      body.dest
+        ? resolveInstrument(body.dest, merchant.id)
+        : prisma.instrument.findUnique({ where: { id: merchant.defaultPayoutInstrumentId! } }),
+      body.sessionId
+        ? prisma.checkoutSession.findUnique({ where: { id: body.sessionId, merchantId: merchant.id } })
+        : Promise.resolve(null),
+    ]);
+    if (!destInstrument) return res.status(500).json({ success: false, error: 'Default payout instrument missing' });
 
     // 2. Plan route across provider edges. Flow defaults to 'external' so
     //    NEAR Intents handles the cross-chain leg via deposit address; pass
@@ -315,15 +322,8 @@ router.post('/', requireAuth, async (req, res) => {
 
     // 4. Create or Reuse the Order row (Idempotency)
     // If the merchant provided a reference, check for an existing order first.
+    // (sourceInstrument, destInstrument, checkoutSession already resolved above.)
     let order: any;
-
-    // Auto-link to Checkout Session if provided
-    let checkoutSession = null;
-    if (body.sessionId) {
-      checkoutSession = await prisma.checkoutSession.findUnique({
-        where: { id: body.sessionId, merchantId: merchant.id }
-      });
-    }
 
     if (body.reference) {
       order = await prisma.order.findFirst({
@@ -497,15 +497,19 @@ router.get('/:id', requireAuth, async (req, res) => {
         // syncOrder returns the raw provider statuses it polled. The widget
         // keys intermediate UI on these (NEAR 'incomplete_deposit' → underpayment
         // warning; Paycrest 'fulfilled' → advance stage), so surface them.
-        const synced = await syncOrder(order.id);
+        // Pass the order we already fetched above so syncOrder doesn't re-query
+        // it, and only pay for a refetch when a step actually transitioned —
+        // most polls land between provider updates and change nothing.
+        const synced = await syncOrder(order.id, { status: order.status, sandboxMode: order.sandboxMode, steps: order.steps });
         paycrestStatus = synced.paycrestStatus;
         nearStatus = synced.nearStatus;
-        // Refetch to get the latest state after sync
-        const fresh = await prisma.order.findUnique({
-          where: { id: req.params.id },
-          include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
-        });
-        if (fresh) order = fresh;
+        if (synced.changed) {
+          const fresh = await prisma.order.findUnique({
+            where: { id: req.params.id },
+            include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
+          });
+          if (fresh) order = fresh;
+        }
       } catch (err: any) {
         console.warn(`[orders] sync failed for ${order.id}:`, err.message);
       }

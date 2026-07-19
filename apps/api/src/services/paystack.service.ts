@@ -21,6 +21,15 @@ const getHeaders = (sandbox = false) => {
   };
 };
 
+// All Paystack calls go through this so a slow/hung endpoint can't stall a
+// request indefinitely — mirrors the AbortController pattern already used in
+// paycrest.service.ts and chainrails.service.ts.
+function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
+}
+
 interface PaystackBank { name: string; code: string; slug: string; }
 
 // Module-level bank list cache — fetched once per process, refreshed every 24 h.
@@ -58,7 +67,7 @@ export class PaystackService {
     callbackUrl?:       string;
     metadata?:          any;
   }, opts: { sandbox?: boolean } = {}): Promise<{ authorization_url: string; access_code: string; reference: string }> {
-    const res = await fetch(`${BASE}/transaction/initialize`, {
+    const res = await fetchWithTimeout(`${BASE}/transaction/initialize`, {
       method: 'POST',
       headers: getHeaders(opts.sandbox),
       body: JSON.stringify({
@@ -88,7 +97,7 @@ export class PaystackService {
     settlementBank: string;
     accountNumber: string;
   }): Promise<string> {
-    const res = await fetch(`${BASE}/subaccount`, {
+    const res = await fetchWithTimeout(`${BASE}/subaccount`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
@@ -110,7 +119,7 @@ export class PaystackService {
     subaccountCode: string,
     params: { businessName: string; settlementBank: string; accountNumber: string }
   ): Promise<void> {
-    const res = await fetch(`${BASE}/subaccount/${subaccountCode}`, {
+    const res = await fetchWithTimeout(`${BASE}/subaccount/${subaccountCode}`, {
       method: 'PUT',
       headers: getHeaders(),
       body: JSON.stringify({
@@ -142,7 +151,7 @@ export class PaystackService {
   }
 
   async verifyTransaction(reference: string, opts: { sandbox?: boolean } = {}): Promise<{ status: string; amount: number; channel: string | null }> {
-    const res = await fetch(`${BASE}/transaction/verify/${reference}`, {
+    const res = await fetchWithTimeout(`${BASE}/transaction/verify/${reference}`, {
       headers: getHeaders(opts.sandbox),
     });
     const body = await res.json();
@@ -161,7 +170,7 @@ export class PaystackService {
     if (bankListCache && (Date.now() - bankListCachedAt) < BANK_CACHE_TTL_MS) {
       return bankListCache;
     }
-    const res = await fetch(`${BASE}/bank?currency=NGN&type=nuban`, {
+    const res = await fetchWithTimeout(`${BASE}/bank?currency=NGN&type=nuban`, {
       headers: getHeaders(),
     });
     const body = await res.json();
@@ -254,7 +263,7 @@ export class PaystackService {
    * Returns the account name as held by the bank.
    */
   async resolveAccount(accountNumber: string, bankCode: string): Promise<{ account_name: string; account_number: string }> {
-    const res = await fetch(`${BASE}/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`, {
+    const res = await fetchWithTimeout(`${BASE}/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`, {
       headers: getHeaders(),
     });
     const body = await res.json();
@@ -267,7 +276,7 @@ export class PaystackService {
    * Fetches the list of settlements for a specific subaccount.
    */
   async getSettlements(subaccountCode: string): Promise<any[]> {
-    const res  = await fetch(`${BASE}/settlement?perPage=100`, { headers: getHeaders() });
+    const res  = await fetchWithTimeout(`${BASE}/settlement?perPage=100`, { headers: getHeaders() });
     const body = await res.json();
     if (!res.ok) throw new Error(`Paystack /settlement error: ${body.message || res.statusText}`);
     // Paystack's ?subaccount= filter expects a numeric ID, not the code, so we filter
