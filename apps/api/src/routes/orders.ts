@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireApiKey } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
 import { executeOrder, syncOrder, toDepositInstruction } from '../services/executor.service';
+import { recordServerEvent, recordOrderEvent } from '../services/order-event.service';
 import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
@@ -363,6 +364,12 @@ router.post('/', requireAuth, async (req, res) => {
           },
         });
         console.log(`[orders] created new order: ${order.id}`);
+        recordServerEvent(order.id, 'order.created', 'Order created', {
+          sourceAsset: sourceInstrument.assetKey,
+          destAsset: destInstrument.assetKey,
+          amount: sourceAmount,
+          sandbox: req.sandboxMode ?? false,
+        });
 
         // Link to checkout session if it exists and isn't already linked
         if (checkoutSession && !checkoutSession.orderId) {
@@ -516,6 +523,97 @@ router.get('/:id', requireAuth, async (req, res) => {
     }
 
     res.json({ success: true, data: { ...serializeOrder(order), paycrestStatus, nearStatus } });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/v1/orders/:id/events — the payment session timeline for the merchant
+// dashboard. Merchant-scoped; returns events (oldest-first) + a derived summary.
+router.get('/:id/events', requireAuth, async (req, res) => {
+  try {
+    const order = await prisma.order.findFirst({
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
+      select: { id: true, createdAt: true, updatedAt: true },
+    });
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+
+    const events = await prisma.orderEvent.findMany({
+      where: { orderId: order.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Derived summary (computed, never stored) — mirrors the Paystack-style tiles.
+    const attempts = events.filter((e) => e.type === 'auth_window.opened' || e.type === 'retry').length;
+    const errors = events.filter((e) => e.type === 'error.shown' || e.type === 'order.failed').length;
+    const first = events[0]?.createdAt ?? order.createdAt;
+    const last = events.length ? events[events.length - 1].createdAt : order.updatedAt;
+    const durationSec = Math.max(0, Math.round((new Date(last).getTime() - new Date(first).getTime()) / 1000));
+
+    res.json({
+      success: true,
+      data: { events, summary: { eventCount: events.length, attempts, errors, durationSec } },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Whitelisted client event types → server-owned label builders. The server
+// controls the label (clients can't inject arbitrary text); only bounded,
+// sanitized bits of metadata flow through.
+const CLIENT_EVENT_LABELS: Record<string, (m: Record<string, unknown>) => string> = {
+  'checkout.opened':    () => 'Checkout opened',
+  'method.selected':    (m) => `Set payment method to: ${clip(m.method, 40) || 'unknown'}`,
+  'chain.selected':     (m) => `Selected ${clip(m.chain, 40) || 'chain'}`,
+  'auth_window.opened': () => 'Third-party authentication window opened',
+  'auth_window.closed': () => 'Third-party authentication window closed',
+  'retry':              () => 'Payment retried',
+  'error.shown':        (m) => `Error shown${m.message ? `: ${clip(m.message, 120)}` : ''}`,
+};
+
+function clip(v: unknown, max: number): string {
+  if (v == null) return '';
+  return String(v).slice(0, max);
+}
+
+// POST /api/v1/orders/:id/events — the widget appends client-side session events
+// (method chosen, auth window open/close, retries). Untrusted: forced to
+// source="client", server-owned labels, type-whitelisted, batch-capped.
+router.post('/:id/events', requireApiKey, async (req, res) => {
+  try {
+    const order = await prisma.order.findFirst({
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
+      select: { id: true },
+    });
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+
+    const raw = Array.isArray(req.body?.events) ? req.body.events : [];
+    if (raw.length === 0) return res.status(400).json({ success: false, error: 'events array required' });
+    if (raw.length > 50) return res.status(400).json({ success: false, error: 'too many events (max 50)' });
+
+    let recorded = 0;
+    for (const ev of raw) {
+      const type = String(ev?.type ?? '');
+      const build = CLIENT_EVENT_LABELS[type];
+      if (!build) continue; // silently drop unknown types
+      const metadata = (ev?.metadata && typeof ev.metadata === 'object' && !Array.isArray(ev.metadata))
+        ? ev.metadata as Record<string, unknown>
+        : {};
+      // Client-reported timestamp is informational; server createdAt is authoritative.
+      const occurredAt = ev?.occurredAt ? new Date(ev.occurredAt) : new Date();
+      recordOrderEvent({
+        orderId: order.id,
+        type,
+        label: build(metadata),
+        source: 'client',
+        metadata,
+        occurredAt: isNaN(occurredAt.getTime()) ? new Date() : occurredAt,
+      });
+      recorded++;
+    }
+
+    res.json({ success: true, data: { recorded } });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

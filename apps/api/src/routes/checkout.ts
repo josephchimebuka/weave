@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { requireAuth, requireApiKey } from '../middleware/auth';
 import { apiLimiter, linkCreationLimiter } from '../middleware/rate-limit';
+import { recordAudit } from '../services/audit.service';
 
 const router = Router();
 
@@ -123,6 +124,18 @@ router.post('/sessions', requireAuth, linkCreationLimiter, async (req, res) => {
         status: 'open',
         sandboxMode: req.sandboxMode ?? false,
       },
+    });
+
+    recordAudit({
+      merchantId: req.merchantId,
+      actorType: 'merchant',
+      actorId: req.merchantId,
+      action: 'checkout_session.created',
+      targetType: 'checkout_session',
+      targetId: session.id,
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { amount: amt, destAsset, reference: reference ?? null, sandbox: req.sandboxMode ?? false },
     });
 
     return res.json({
@@ -256,6 +269,18 @@ router.patch('/sessions/:id/complete', requireApiKey, async (req, res) => {
     const updated = await prisma.checkoutSession.update({
       where: { id: session.id },
       data: { status: 'complete' },
+    });
+
+    recordAudit({
+      merchantId: session.merchantId,
+      actorType: 'merchant',
+      actorId: session.merchantId,
+      action: 'checkout_session.completed',
+      targetType: 'checkout_session',
+      targetId: session.id,
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { orderId: session.orderId ?? null },
     });
 
     return res.json({ success: true, data: serializeSession(updated) });

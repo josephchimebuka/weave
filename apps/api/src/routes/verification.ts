@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { requireAuth } from '../middleware/auth';
 import { sendAdminKYBNotification } from '../services/email.service';
+import { recordMerchantAudit } from '../services/audit.service';
 
 const router = Router();
 
@@ -69,6 +70,11 @@ router.post('/submit', requireAuth, async (req, res) => {
     await prisma.merchant.update({
       where: { id: req.merchantId },
       data: { kycLevel: 'pending' }
+    });
+
+    recordMerchantAudit(req, 'kyb.submitted', {
+      targetType: 'verification',
+      targetId: verification.id,
     });
 
     // Notify company admin via email with approve/reject magic links

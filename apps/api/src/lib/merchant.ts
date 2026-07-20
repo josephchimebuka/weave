@@ -6,6 +6,7 @@ import { prisma } from './prisma';
 import { cryptoKey, fiatKey } from './assets';
 import { paystack } from '../services/paystack.service';
 import { qstash } from './qstash';
+import { reportError } from './report';
 
 // Backoff schedule (seconds) for background re-sync of a merchant's Paystack
 // subaccount after the initial setup-time sync fails. attempt is 1-indexed; when
@@ -20,7 +21,12 @@ const PAYSTACK_SYNC_RETRY_DELAYS_S = [30, 120, 300, 900, 1800, 3600];
 export async function schedulePaystackSyncRetry(params: { merchantId: string; attempt: number }): Promise<void> {
   const delay = PAYSTACK_SYNC_RETRY_DELAYS_S[params.attempt - 1];
   if (delay === undefined) {
-    console.error(`[paystack-sync] retries exhausted for merchant ${params.merchantId} after ${PAYSTACK_SYNC_RETRY_DELAYS_S.length} attempts`);
+    // Terminal: this merchant's payout subaccount never synced, so they can't
+    // receive Paystack settlements. Page on it — it needs manual intervention.
+    reportError(new Error('Paystack subaccount sync exhausted all retries'), {
+      area: 'paystack.sync-exhausted',
+      extra: { merchantId: params.merchantId, attempts: PAYSTACK_SYNC_RETRY_DELAYS_S.length },
+    });
     return;
   }
   const apiBase = process.env.API_BASE;

@@ -12,6 +12,7 @@ import {
   LogOut,
   Link as LinkIcon,
   Landmark,
+  ScrollText,
   X,
   Mail,
 } from 'lucide-react';
@@ -28,6 +29,7 @@ const PRIMARY: NavItem[] = [
   { href: '/transactions',   label: 'Transactions', icon: Receipt },
   { href: '/payouts',        label: 'Payouts',      icon: Landmark },
   { href: '/links',          label: 'Payment Links', icon: LinkIcon },
+  { href: '/audit-log',      label: 'Audit log',    icon: ScrollText },
   { href: '/onboarding/kyb', label: 'KYB',          icon: ShieldCheck, match: ['/onboarding', '/compliance'] },
   { href: '/settings',       label: 'Settings',     icon: Settings2 },
 ];

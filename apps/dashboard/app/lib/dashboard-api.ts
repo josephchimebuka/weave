@@ -58,6 +58,38 @@ export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<Or
   }
 }
 
+export type OrderEvent = {
+  id: string;
+  type: string;
+  label: string;
+  source: 'server' | 'client';
+  metadata: Record<string, unknown> | null;
+  occurredAt: string;
+  createdAt: string;
+};
+
+export type OrderTimeline = {
+  events: OrderEvent[];
+  summary: { eventCount: number; attempts: number; errors: number; durationSec: number };
+};
+
+export async function fetchOrderEvents(id: string, revalidateSeconds = 10): Promise<OrderTimeline | null> {
+  try {
+    const cacheOptions = getCacheOptions(revalidateSeconds);
+    const token = await getSessionToken();
+    if (!token) return null;
+    const res = await fetch(`${API_BASE}/orders/${id}/events`, {
+      headers: { 'x-session-token': token },
+      ...cacheOptions,
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchMerchantProfile(): Promise<{
   id: string;
   name: string;

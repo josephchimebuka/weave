@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import { sendMerchantKYBApprovalEmail, sendMerchantKYBRejectionEmail } from '../services/email.service';
 import { signedDeliveryUrl, parseCloudinaryUrl } from '../services/cloudinary.service';
+import { recordAudit } from '../services/audit.service';
 
 const router = Router();
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
@@ -153,6 +154,20 @@ router.get('/verify/review/doc', async (req, res) => {
 
   console.log(`[admin-review-doc] id=${id} idx=${i} ip=${req.ip}`);
 
+  // Compliance: record which KYB document an admin accessed. `v` was fetched
+  // above with only documentUrls; merchantId isn't loaded here, so scope the
+  // event to the verification record.
+  recordAudit({
+    actorType: 'admin',
+    actorId: decoded.sub,
+    action: 'kyb.document_viewed',
+    targetType: 'verification',
+    targetId: id,
+    ip: req.ip ?? null,
+    userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    metadata: { docIndex: i, docType: docs[i]?.type ?? null },
+  });
+
   try {
     const upstream = await fetch(signed);
     if (!upstream.ok || !upstream.body) {
@@ -239,6 +254,17 @@ router.get('/verify', async (req, res) => {
           data: { kycLevel: 'verified' }
         })
       ]);
+
+      recordAudit({
+        merchantId: verification.merchantId,
+        actorType: 'admin',
+        actorId: decoded.sub,
+        action: 'kyb.approved',
+        targetType: 'verification',
+        targetId: id,
+        ip: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
 
       // 4. Notify the merchant
       sendMerchantKYBApprovalEmail(verification.merchantId).catch(err => {
@@ -328,6 +354,18 @@ router.post('/verify', async (req, res) => {
         data: { kycLevel: 'basic' }
       })
     ]);
+
+    recordAudit({
+      merchantId: v.merchantId,
+      actorType: 'admin',
+      actorId: decoded.sub,
+      action: 'kyb.rejected',
+      targetType: 'verification',
+      targetId: id,
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { reason: reason.slice(0, 500) },
+    });
 
     sendMerchantKYBRejectionEmail(v.merchantId, reason).catch(err => {
       console.error('[admin-verify] failed to notify merchant of rejection:', err.message);

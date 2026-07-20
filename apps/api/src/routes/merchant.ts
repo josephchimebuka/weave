@@ -7,6 +7,7 @@ import { sendDeletionRequestEmail } from '../services/email.service';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import { webhookService, WEBHOOK_MAX_ATTEMPTS, isSafeWebhookUrl } from '../services/webhook.service';
 import { paystack } from '../services/paystack.service';
+import { recordMerchantAudit, isPlatformAdmin } from '../services/audit.service';
 
 const router = Router();
 
@@ -83,6 +84,8 @@ router.post('/keys/regenerate', requireSession, async (req, res) => {
       });
     });
 
+    recordMerchantAudit(req, 'key.regenerated', { metadata: { mode } });
+
     return res.json({
       success: true,
       data: {
@@ -133,6 +136,8 @@ router.patch('/profile', requireSession, async (req, res) => {
       where: { id: req.merchantId },
       data:  { name },
     });
+
+    recordMerchantAudit(req, 'profile.updated', { metadata: { name } });
 
     // Mirror to Paystack (async). On failure, kick off a backoff-retry chain so a
     // transient error doesn't leave the merchant stuck at FAILED until checkout.
@@ -283,6 +288,20 @@ router.put('/payouts', requireSession, async (req, res) => {
       data:  { defaultPayoutInstrumentId: newInst.id },
     });
 
+    // Audit the most sensitive account change: where the money goes. Store only
+    // non-sensitive identifiers (bank name + masked tail), never the full number.
+    recordMerchantAudit(req, 'payout.updated', {
+      targetType: 'instrument',
+      targetId: newInst.id,
+      metadata: {
+        kind,
+        assetKey,
+        bankInstitution: kind === 'bank_account' ? bankInstitution : undefined,
+        accountLast4: kind === 'bank_account' ? String(bankAccountIdentifier).slice(-4) : undefined,
+        walletTail: kind === 'crypto_wallet' ? String(walletAddress).slice(-6) : undefined,
+      },
+    });
+
     // Mirror to Paystack (async). On failure, kick off a backoff-retry chain so a
     // transient error doesn't leave the merchant stuck at FAILED until checkout.
     syncPaystackSubaccount(merchant.id).catch(() => schedulePaystackSyncRetry({ merchantId: merchant.id, attempt: 1 }));
@@ -339,6 +358,10 @@ router.patch('/webhook', requireSession, async (req, res) => {
 
   try {
     await prisma.merchant.update({ where: { id: req.merchantId }, data: { webhookUrl: url } });
+    recordMerchantAudit(req, 'webhook.config_updated', {
+      targetType: 'webhook',
+      metadata: { url: url ?? null },
+    });
     return res.json({ success: true, data: { url } });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
@@ -399,6 +422,7 @@ router.post('/webhook/secret', requireSession, async (req, res) => {
   try {
     const secret = 'whsec_' + crypto.randomBytes(32).toString('hex');
     await prisma.merchant.update({ where: { id: req.merchantId }, data: { webhookSecret: secret } });
+    recordMerchantAudit(req, 'webhook.secret_rotated', { targetType: 'webhook' });
     return res.json({
       success: true,
       data: { secret, warning: 'Store this secret now — it will not be shown again.' },
@@ -456,6 +480,85 @@ router.post('/webhook/deliveries/:id/resend', requireSession, async (req, res) =
   }
 });
 
+// GET /api/v1/merchant/audit-events — this merchant's own activity log.
+// Newest first, capped. Optional `?before=<ISO>` for simple cursor pagination.
+router.get('/audit-events', requireSession, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const before = req.query.before ? new Date(String(req.query.before)) : null;
+
+    const events = await prisma.auditEvent.findMany({
+      where: {
+        merchantId: req.merchantId,
+        ...(before && !isNaN(before.getTime()) ? { createdAt: { lt: before } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      // Deliberately omit `ip`/`userAgent` from the merchant-facing view — those
+      // are for internal security review, not the merchant's own activity feed.
+      select: {
+        id: true,
+        action: true,
+        actorType: true,
+        targetType: true,
+        targetId: true,
+        metadata: true,
+        createdAt: true,
+      },
+    });
+
+    return res.json({ success: true, data: events });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/v1/merchant/audit-events/all — platform-wide audit log.
+// Restricted to platform-admin merchants (Dewdrop Labs). Returns full detail
+// (which merchant, IP, user-agent) that the self-serve merchant view omits,
+// plus optional filtering by action / merchantId.
+router.get('/audit-events/all', requireSession, async (req, res) => {
+  try {
+    if (!isPlatformAdmin(req.merchant?.email)) {
+      // Same 404 shape a non-existent route would give — don't advertise the
+      // endpoint's existence to non-admin merchants.
+      return res.status(404).json({ success: false, error: 'Not found' });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const before = req.query.before ? new Date(String(req.query.before)) : null;
+    const action = req.query.action ? String(req.query.action) : null;
+    const merchantId = req.query.merchantId ? String(req.query.merchantId) : null;
+
+    const events = await prisma.auditEvent.findMany({
+      where: {
+        ...(action ? { action } : {}),
+        ...(merchantId ? { merchantId } : {}),
+        ...(before && !isNaN(before.getTime()) ? { createdAt: { lt: before } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    // Attach merchant identity for readability. Batch-fetch (no FK relation on
+    // AuditEvent by design), map, and tolerate null/deleted merchants.
+    const ids = [...new Set(events.map((e) => e.merchantId).filter(Boolean))] as string[];
+    const merchants = ids.length
+      ? await prisma.merchant.findMany({ where: { id: { in: ids } }, select: { id: true, email: true, name: true } })
+      : [];
+    const byId = new Map(merchants.map((m) => [m.id, m]));
+
+    const data = events.map((e) => ({
+      ...e,
+      merchant: e.merchantId ? byId.get(e.merchantId) ?? null : null,
+    }));
+
+    return res.json({ success: true, data });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/v1/merchant/request-deletion
 // Submits an account deletion request to the admin support team
 router.post('/request-deletion', requireSession, async (req, res) => {
@@ -465,6 +568,10 @@ router.post('/request-deletion', requireSession, async (req, res) => {
     if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
 
     await sendDeletionRequestEmail(merchant.id, merchant.email, merchant.name, reason || '');
+
+    recordMerchantAudit(req, 'merchant.deletion_requested', {
+      metadata: { reason: reason ? String(reason).slice(0, 500) : null },
+    });
 
     return res.json({ success: true });
   } catch (err: any) {

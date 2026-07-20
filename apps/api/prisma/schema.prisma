@@ -195,6 +195,7 @@ model Order {
 
   steps              RouteStep[]
   webhookLogs        WebhookLog[]
+  events             OrderEvent[]
 
   @@index([merchantId])
   @@index([status])
@@ -234,6 +235,46 @@ model RouteStep {
   @@unique([orderId, sequence])
   @@index([externalId])
   @@index([provider, externalId])
+}
+
+// ── Order events (payment session timeline) ──────────────────────────────────
+// Per-transaction event log — the payer's checkout journey (method chosen,
+// auth-window open/close, retries, provider transitions). Telemetry, NOT
+// compliance: high-volume and prunable, unlike AuditEvent. `source` marks
+// whether the event is server-authoritative or client-reported (untrusted).
+model OrderEvent {
+  id         String   @id @default(uuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type       String   // e.g. "order.created", "deposit.detected", "method.selected"
+  label      String   // human line, e.g. "Set payment method to: opay"
+  source     String   // "server" (authoritative) | "client" (informational)
+  metadata   Json?
+  occurredAt DateTime // client-reported time when source=client; else = createdAt
+  createdAt  DateTime @default(now()) // server receive time — sort/display by this
+
+  @@index([orderId, createdAt])
+}
+
+// ── Audit log ────────────────────────────────────────────────────────────────
+// Append-only record of security/compliance-sensitive actions ("who did what").
+// Deliberately NOT related to Merchant with a cascade — audit rows must survive
+// account deletion. Written best-effort via audit.service; never blocks a request.
+model AuditEvent {
+  id         String   @id @default(uuid())
+  merchantId String?  // whose account this concerns (null for pre-auth/system events)
+  actorType  String   // "merchant" | "admin" | "system"
+  actorId    String?  // merchant id, admin token subject, or null for system
+  action     String   // e.g. "payout.updated", "key.regenerated", "kyb.approved"
+  targetType String?  // "instrument" | "merchant" | "webhook" | ...
+  targetId   String?
+  ip         String?
+  userAgent  String?
+  metadata   Json?    // action-specific context (never secrets/PANs)
+  createdAt  DateTime @default(now())
+
+  @@index([merchantId, createdAt])
+  @@index([action, createdAt])
 }
 
 // ── Webhooks ────────────────────────────────────────────────────────────────

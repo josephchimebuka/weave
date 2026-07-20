@@ -231,3 +231,28 @@ export async function fetchCountries(publishableKey: string) {
 export async function fetchAssets(publishableKey: string) {
   return apiFetch('/assets', publishableKey);
 }
+
+// ── Session timeline events ────────────────────────────────────────────────
+// Best-effort client telemetry for the transaction "Payment activity" view.
+// Never disrupts checkout: swallow all errors. Server whitelists/relabels these.
+export interface ClientOrderEvent {
+  type: string;
+  metadata?: Record<string, unknown>;
+  occurredAt?: string;
+}
+
+export async function postOrderEvents(
+  publishableKey: string,
+  orderId: string,
+  events: ClientOrderEvent[],
+): Promise<void> {
+  if (!orderId || events.length === 0) return;
+  try {
+    await apiFetch(`/orders/${orderId}/events`, publishableKey, {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    }, 5000);
+  } catch {
+    /* telemetry is best-effort — never surface to the payer */
+  }
+}

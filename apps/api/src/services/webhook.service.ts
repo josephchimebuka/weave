@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { URL } from 'url';
 import { prisma } from '../lib/prisma';
+import { reportError } from '../lib/report';
 
 export function isSafeWebhookUrl(urlStr: string): boolean {
   let parsed: URL;
@@ -173,7 +174,9 @@ class WebhookService {
         body: { deliveryId },
       });
     } catch (err: any) {
-      console.error(`[webhook] failed to enqueue delivery ${deliveryId}:`, err.message);
+      // Enqueue failed → the delivery is never attempted and nothing retries it
+      // (unlike a failed *attempt*, which QStash retries). Terminal drop — page.
+      reportError(err, { area: 'webhook.enqueue-dropped', extra: { deliveryId } });
       await prisma.webhookDelivery.update({
         where: { id: deliveryId },
         data:  { status: 'failed', response: `enqueue failed: ${err.message}` },

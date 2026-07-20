@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import { fetchOrder } from '../../lib/dashboard-api';
+import { fetchOrder, fetchOrderEvents, type OrderEvent } from '../../lib/dashboard-api';
 import { assetLabel, parseAsset, institutionName } from '../../types';
 import { WalletAddress } from '../../../components/WalletAddress';
 
@@ -31,9 +31,33 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+// Timeline event tone by type — dot color for the activity feed.
+const EVENT_TONE: Record<string, string> = {
+  'order.created':        'bg-ink-faint',
+  'method.selected':      'bg-forest',
+  'chain.selected':       'bg-forest',
+  'auth_window.opened':   'bg-tan',
+  'auth_window.closed':   'bg-tan',
+  'deposit.detected':     'bg-forest',
+  'step.completed':       'bg-forest',
+  'channel.confirmed':    'bg-forest',
+  'retry':                'bg-tan',
+  'error.shown':          'bg-terracotta',
+  'order.completed':      'bg-forest',
+  'order.failed':         'bg-terracotta',
+  'order.refunded':       'bg-ink-muted',
+};
+
+function fmtDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}m ${s}s`;
+}
+
 export default async function TransactionReceiptPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const order = await fetchOrder(id, 10);
+  const [order, timeline] = await Promise.all([fetchOrder(id, 10), fetchOrderEvents(id, 10)]);
 
   if (!order) {
     return (
@@ -200,6 +224,40 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Payment activity — the payer's session timeline */}
+      {timeline && timeline.events.length > 0 && (
+        <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '240ms' }}>
+          <div className="px-7 py-5 border-b border-hair-soft flex items-center justify-between gap-4">
+            <h2 className="font-display text-[20px] font-semibold text-ink">Payment activity</h2>
+            <div className="flex items-center gap-5 text-[12px] text-ink-muted">
+              <span>Duration <span className="font-semibold text-ink tabular-nums">{fmtDuration(timeline.summary.durationSec)}</span></span>
+              <span>Attempts <span className="font-semibold text-ink tabular-nums">{timeline.summary.attempts}</span></span>
+              <span>Errors <span className={`font-semibold tabular-nums ${timeline.summary.errors ? 'text-terracotta' : 'text-ink'}`}>{timeline.summary.errors}</span></span>
+            </div>
+          </div>
+          <div className="px-7 py-6">
+            <ol className="relative border-l border-hair-soft ml-2">
+              {timeline.events.map((e: OrderEvent) => (
+                <li key={e.id} className="relative pl-6 pb-5 last:pb-0">
+                  <span className={`absolute -left-[5px] top-1.5 w-2.5 h-2.5 rounded-full ring-2 ring-cream-soft ${EVENT_TONE[e.type] ?? 'bg-ink-faint'}`} />
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="text-[13.5px] text-ink">
+                      {e.label}
+                      {e.source === 'client' && (
+                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">reported</span>
+                      )}
+                    </p>
+                    <span className="text-[12px] text-ink-muted tabular-nums shrink-0">
+                      {new Date(e.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { qstashReceiver } from '../lib/qstash';
 import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll } from '../services/executor.service';
@@ -221,6 +222,14 @@ router.post('/notify-order-completed', verifyQStash, async (req, res) => {
   }
 
   if (!merchantEmailOk || !customerEmailOk || !webhookOk) {
+    // This handler returns 500 itself (for QStash retry) rather than throwing,
+    // so it never reaches Sentry's Express handler — capture explicitly. This
+    // is exactly the class of silent failure that dropped notifications before.
+    Sentry.captureMessage('notify-order-completed: a notification step failed', {
+      level: 'error',
+      tags: { job: 'notify-order-completed' },
+      extra: { orderId, merchantEmailOk, customerEmailOk, webhookOk },
+    });
     // Return 500 so QStash retries the whole job. Steps that already succeeded
     // are cheap/harmless to re-run (at worst, a duplicate transactional email) —
     // far preferable to the previous silent, permanent drop.

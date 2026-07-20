@@ -1,7 +1,13 @@
-import 'dotenv/config';
+// MUST be first: initializes Sentry (and loads dotenv) before any other module
+// so auto-instrumentation can patch Express/Prisma/HTTP as they load.
+import { Sentry } from './instrument';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import crypto from 'crypto';
+import pinoHttp from 'pino-http';
+import { logger, patchConsole } from './lib/logger';
+import { requestContext } from './lib/request-context';
 
 import quotesRouter       from './routes/quotes';
 import ordersRouter       from './routes/orders';
@@ -42,6 +48,11 @@ if (process.env.NODE_ENV === 'production') {
     process.exit(1);
   }
 }
+
+// Route all console.* through pino from here on. (The startup guards above run
+// before this and keep raw console, so their fail-fast messages always print
+// even though those paths call process.exit before a transport could flush.)
+patchConsole();
 
 const app = express();
 
@@ -84,6 +95,38 @@ app.use(cors((req: any, callback) => {
   callback(new Error('Not allowed by CORS'));
 }));
 
+// ── Request logging ───────────────────────────────────────────────────────────
+// Structured per-request log (method, url, status, latency, request id) for
+// every API call. Placed before rate limiting so even throttled requests are
+// recorded. Health checks are skipped to avoid noise.
+app.use(pinoHttp({
+  logger,
+  genReqId: (req, res) => {
+    const existing = req.headers['x-request-id'];
+    const id = (Array.isArray(existing) ? existing[0] : existing) || crypto.randomUUID();
+    res.setHeader('x-request-id', id);
+    return id;
+  },
+  customLogLevel: (_req, res, err) => {
+    if (err || res.statusCode >= 500) return 'error';
+    if (res.statusCode >= 400) return 'warn';
+    return 'info';
+  },
+  autoLogging: {
+    ignore: (req) => req.url === '/health' || req.url === '/',
+  },
+  // Keep request logs compact — full headers/bodies stay out of the sink.
+  serializers: {
+    req: (req) => ({ id: req.id, method: req.method, url: req.url }),
+    res: (res) => ({ statusCode: res.statusCode }),
+  },
+}));
+
+// Seed the async-local request context so every downstream log (service-layer,
+// console-routed, audit) carries the same requestId as the request-completed
+// line — letting you pull one request's entire log trail by requestId in Axiom.
+app.use((req, _res, next) => requestContext.run({ requestId: String((req as any).id) }, next));
+
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 import { apiLimiter } from './middleware/rate-limit';
 app.use('/api', apiLimiter);
@@ -119,6 +162,13 @@ app.use('/api/v1/checkout',        checkoutRouter);
 app.get('/',       (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 
+// ── Sentry error handler ──────────────────────────────────────────────────────
+// Must come AFTER all routes and BEFORE the custom error handler. Captures any
+// error that reaches Express (thrown in a handler or passed to next(err)), then
+// falls through to the handler below to shape the client response. No-op when
+// Sentry isn't initialized.
+Sentry.setupExpressErrorHandler(app);
+
 // ── Global error handler ──────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -139,10 +189,27 @@ const server = app.listen(PORT, async () => {
   }
 });
 
+// ── Last-resort error capture ─────────────────────────────────────────────────
+// Nothing caught these before — a stray unhandled rejection (e.g. in a
+// fire-and-forget background task) or uncaught exception would vanish or crash
+// silently. Report to Sentry so they're never invisible again.
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[unhandledRejection]', reason);
+  Sentry.captureException(reason);
+});
+process.on('uncaughtException', (err: Error) => {
+  console.error('[uncaughtException]', err);
+  Sentry.captureException(err);
+  // An uncaught exception leaves the process in an undefined state — flush and
+  // exit so the platform restarts us cleanly rather than limping on.
+  Sentry.flush(2000).finally(() => process.exit(1));
+});
+
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 async function shutdown(signal: string) {
   console.log(`[shutdown] received ${signal}; closing…`);
   server.close(async () => {
+    try { await Sentry.flush(2000); } catch {}
     try { await prisma.$disconnect(); } catch {}
     process.exit(0);
   });

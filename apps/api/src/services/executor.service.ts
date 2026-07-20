@@ -17,6 +17,8 @@ import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/mercha
 import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
 import { qstash } from '../lib/qstash';
+import * as Sentry from '@sentry/node';
+import { recordServerEvent } from './order-event.service';
 
 export interface ExecutorInput {
   orderId: string;
@@ -797,6 +799,17 @@ export async function markStepDone(params: {
     }),
   ]);
 
+  // Timeline: this hop delivered. Channel confirmation (opay/ussd/card) is
+  // surfaced separately since it's the payer-facing "how they paid".
+  recordServerEvent(step.orderId, 'step.completed', `${step.provider} step completed`, {
+    provider: step.provider, sequence: step.sequence,
+  });
+  if (params.paymentChannel) {
+    recordServerEvent(step.orderId, 'channel.confirmed', `Payment method confirmed: ${params.paymentChannel}`, {
+      channel: params.paymentChannel,
+    });
+  }
+
   // Refetch steps to get the latest statuses.
   const fresh = await prisma.routeStep.findMany({ where: { orderId: step.orderId }, orderBy: { sequence: 'asc' } });
   const allDone = fresh.every((s: any) => s.id === step.id ? true : s.status === 'done');
@@ -823,6 +836,12 @@ export async function markStepDone(params: {
     where: { id: step.orderId, status: { notIn: TERMINAL_STATUSES } },
     data: orderUpdate,
   });
+
+  // Terminal timeline event — only on the real transition (transitioned>0),
+  // so concurrent webhook+poll races don't double-emit.
+  if (transitioned > 0 && nextOrderStatus === 'completed') {
+    recordServerEvent(step.orderId, 'order.completed', 'Payment completed');
+  }
 
   // ── Roll up linked CheckoutSession ────────────────────────────────────────
   // Mirror the order's terminal state onto any hosted checkout session bound to
@@ -852,7 +871,11 @@ export async function markStepDone(params: {
         url:  `${apiBase}/jobs/notify-order-completed`,
         body: { orderId: step.orderId },
       }).catch(err => {
+        // If the enqueue itself fails, the whole notification chain never runs
+        // and nothing downstream retries it — this is the one spot that must be
+        // loud. Capture with the order so it's actionable.
         console.error(`[executor] failed to enqueue order-completed notifications:`, err.message);
+        Sentry.captureException(err, { tags: { area: 'executor.notify-enqueue' }, extra: { orderId: step.orderId } });
       });
     }
   }
@@ -870,6 +893,7 @@ export async function markStepProgress(params: { provider: string; externalId: s
   });
   if (!step) return null;
 
+  const wasAwaiting = step.status === 'awaiting_deposit';
   await prisma.$transaction([
     prisma.routeStep.update({
       where: { id: step.id },
@@ -880,6 +904,12 @@ export async function markStepProgress(params: { provider: string; externalId: s
       data: { status: 'processing' },
     }),
   ]);
+
+  // Timeline: funds first detected (only on the awaiting→in_flight transition,
+  // so a re-poll of an already-in-flight step doesn't re-emit).
+  if (wasAwaiting) {
+    recordServerEvent(step.orderId, 'deposit.detected', 'Deposit detected', { provider: step.provider });
+  }
 
   return { orderId: step.orderId, stepId: step.id };
 }
@@ -894,6 +924,7 @@ export async function markStepFailed(params: { provider: string; externalId: str
   });
   if (!step) return null;
 
+  const wasTerminal = step.status === 'failed';
   await prisma.$transaction([
     prisma.routeStep.update({
       where: { id: step.id },
@@ -904,6 +935,15 @@ export async function markStepFailed(params: { provider: string; externalId: str
       data: { status: params.isRefund ? 'refunded' : 'failed' },
     }),
   ]);
+
+  if (!wasTerminal) {
+    recordServerEvent(
+      step.orderId,
+      params.isRefund ? 'order.refunded' : 'order.failed',
+      params.isRefund ? 'Payment refunded' : 'Payment failed',
+      { provider: step.provider, ...(params.reason ? { reason: params.reason } : {}) },
+    );
+  }
 
   return { orderId: step.orderId, stepId: step.id };
 }

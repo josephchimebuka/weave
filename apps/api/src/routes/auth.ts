@@ -11,6 +11,7 @@ import {
   sendAdminSignupNotification
 } from '../services/email.service';
 import { authLimiter } from '../middleware/rate-limit';
+import { recordAudit, isPlatformAdmin } from '../services/audit.service';
 
 const router = Router();
 
@@ -77,6 +78,9 @@ function pickPublicMerchant(m: { id: string; email: string; name: string; publis
     updatedAt:             m.updatedAt,
     kycLevel:              m.kycLevel,
     emailVerifiedAt:       m.emailVerifiedAt,
+    // Drives the dashboard's platform-wide audit view. Env-designated, so it
+    // reflects config not a stored flag (see isPlatformAdmin).
+    isPlatformAdmin:       isPlatformAdmin(m.email),
   };
 }
 
@@ -167,6 +171,16 @@ router.post('/signup', authLimiter, async (req, res) => {
       console.error('[signup] admin notification error:', err.message);
     }
 
+    recordAudit({
+      merchantId: merchant.id,
+      actorType: 'merchant',
+      actorId: merchant.id,
+      action: 'auth.signup',
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { email },
+    });
+
     return res.json({
       success: true,
       data: {
@@ -195,10 +209,33 @@ router.post('/login', authLimiter, async (req, res) => {
   try {
     const merchant = await prisma.merchant.findUnique({ where: { email } });
     if (!merchant || !verifyPassword(password, merchant.passwordHash)) {
+      // Security signal: failed login. Attach merchantId when the email resolved
+      // (wrong password) so a targeted attack on a known account is visible; leave
+      // it null for an unknown email so we don't confirm which emails exist.
+      recordAudit({
+        merchantId: merchant?.id ?? null,
+        actorType: 'merchant',
+        actorId: merchant?.id ?? null,
+        action: 'auth.login_failed',
+        ip: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+        metadata: { email, reason: merchant ? 'bad_password' : 'unknown_email' },
+      });
       return res.status(401).json({ success: false, error: 'invalid email or password' });
     }
 
     const session = await issueSession(merchant.id);
+
+    recordAudit({
+      merchantId: merchant.id,
+      actorType: 'merchant',
+      actorId: merchant.id,
+      action: 'auth.login',
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { email },
+    });
+
     return res.json({
       success: true,
       data: {
@@ -333,6 +370,16 @@ router.post('/reset-password', authLimiter, async (req, res) => {
       // Invalidate all existing sessions for security
       await tx.session.deleteMany({ where: { merchantId: merchant.id } });
       return m;
+    });
+
+    recordAudit({
+      merchantId: updated.id,
+      actorType: 'merchant',
+      actorId: updated.id,
+      action: 'auth.password_reset',
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { email: merchant.email },
     });
 
     const session = await issueSession(updated.id);

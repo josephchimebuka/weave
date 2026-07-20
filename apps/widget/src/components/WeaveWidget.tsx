@@ -58,8 +58,37 @@ import {
   type InlineWalletInstrument,
   type NextAction,
   fetchAssets,
-  configureApiBase
+  configureApiBase,
+  postOrderEvents,
+  type ClientOrderEvent,
 } from '../api/client';
+
+// ── Session-timeline emitter ───────────────────────────────────────────────
+// Best-effort client telemetry (method chosen, popup open/close, retries) for
+// the merchant's "Payment activity" view. Module-scoped like loadPaystackSdk:
+// events queue immediately (even before the order exists) and flush once the
+// orderId is known — batched, debounced, and completely non-blocking.
+const _txnEventQueue: ClientOrderEvent[] = [];
+const _txnCtx: { apiKey: string; orderId: string | null } = { apiKey: '', orderId: null };
+let _txnFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function emitTxnEvent(type: string, metadata?: Record<string, unknown>) {
+  _txnEventQueue.push({ type, metadata, occurredAt: new Date().toISOString() });
+  if (_txnFlushTimer) return;
+  _txnFlushTimer = setTimeout(flushTxnEvents, 1200);
+}
+function flushTxnEvents() {
+  _txnFlushTimer = null;
+  if (!_txnCtx.orderId || !_txnCtx.apiKey || _txnEventQueue.length === 0) return; // hold until order exists
+  const batch = _txnEventQueue.splice(0, _txnEventQueue.length);
+  void postOrderEvents(_txnCtx.apiKey, _txnCtx.orderId, batch);
+}
+/** Point the emitter at the current order; flushes anything queued before it existed. */
+function configureTxnEmitter(apiKey: string, orderId: string | null) {
+  _txnCtx.apiKey = apiKey;
+  _txnCtx.orderId = orderId;
+  if (orderId) flushTxnEvents();
+}
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 
@@ -608,6 +637,7 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
   const pick = (method: PathPick) => {
     if (submitting || picked) return;
     setPicked(method);
+    emitTxnEvent('method.selected', { method });
     // Fire-and-forget: warm the Paystack inline SDK now, while the order-creation
     // round trip is in flight, so it's already loaded by the time (if) the route
     // resolves to a Paystack popup — instead of fetching+parsing it right when
@@ -1000,10 +1030,11 @@ function ScreenPaystackPopup({
       }
       launched.current = true;
       setLoading(false);
+      emitTxnEvent('auth_window.opened');
       const popup = new Pop();
       popup.resumeTransaction(accessCode, {
-        onSuccess: () => { if (mounted.current) onNext('processing'); },
-        onCancel: () => { launched.current = false; },
+        onSuccess: () => { emitTxnEvent('auth_window.closed', { result: 'success' }); if (mounted.current) onNext('processing'); },
+        onCancel: () => { emitTxnEvent('auth_window.closed', { result: 'cancel' }); launched.current = false; },
       });
     }).catch(() => {
       if (!mounted.current) return;
@@ -2574,6 +2605,9 @@ function WeaveCheckoutInner({
     accountName: '',
   });
   const [orderId, setOrderId] = useState<string | null>(null);
+  // Point the session-timeline emitter at the current order; flushes any events
+  // queued before the order existed (e.g. the initial method selection).
+  useEffect(() => { configureTxnEmitter(apiKey, orderId); }, [apiKey, orderId]);
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
   const [paystackPopupDetails, setPaystackPopupDetails] = useState<PaystackPopupDetails | null>(null);
   const [depositAddress, setDepositAddress] = useState<string | null>(null);
@@ -3214,6 +3248,7 @@ function WeaveCheckoutInner({
   const isOnramp = direction === 'onramp';
 
   const retry = (target: string) => {
+    emitTxnEvent('retry');
     pendingOrderRef.current = null;
     setOrderId(null);
     setApiError(null);
