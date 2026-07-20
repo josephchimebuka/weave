@@ -17,6 +17,20 @@ import { currentRequestId } from './request-context';
 const isProd = process.env.NODE_ENV === 'production';
 const level = process.env.LOG_LEVEL || (isProd ? 'info' : 'debug');
 
+// Serverless-first by default. pino worker-thread transports don't bundle/
+// resolve reliably on Vercel/Lambda ("unable to determine transport target")
+// and can be killed on freeze, so the DEFAULT everywhere is plain JSON to
+// stdout — ship to Axiom via a platform Log Drain (Vercel → Axiom).
+// The in-process Axiom worker transport is OPT-IN (AXIOM_INPROCESS=true) and
+// only for long-running hosts that don't have a drain.
+const isServerless = !!(
+  process.env.VERCEL ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.LAMBDA_TASK_ROOT ||
+  process.env.FUNCTIONS_WORKER_RUNTIME
+);
+const allowAxiomTransport = process.env.AXIOM_INPROCESS === 'true' && !isServerless;
+
 const axiomToken = process.env.AXIOM_TOKEN;
 const axiomDataset = process.env.AXIOM_DATASET;
 // Axiom's client defaults to the US cloud endpoint. Non-US datasets need an
@@ -79,14 +93,8 @@ const baseOptions: pino.LoggerOptions = {
 };
 
 function build(): pino.Logger {
-  if (axiomToken && axiomDataset) {
-    const targets: pino.TransportTargetOptions[] = [
-      { target: '@axiomhq/pino', options: { dataset: axiomDataset, token: axiomToken, ...axiomUrlOption }, level },
-      { target: 'pino/file', options: { destination: 1 }, level }, // also stdout
-    ];
-    return pino(baseOptions, pino.transport({ targets }));
-  }
-  if (!isProd) {
+  // Pretty output for local DX (never serverless, never prod).
+  if (!isServerless && !isProd && process.env.LOG_PRETTY !== 'false') {
     return pino(
       baseOptions,
       pino.transport({
@@ -95,15 +103,24 @@ function build(): pino.Logger {
       }),
     );
   }
-  return pino(baseOptions); // prod without Axiom: JSON to stdout
+  // Opt-in in-process Axiom transport, long-running hosts only.
+  if (allowAxiomTransport && axiomToken && axiomDataset) {
+    const targets: pino.TransportTargetOptions[] = [
+      { target: '@axiomhq/pino', options: { dataset: axiomDataset, token: axiomToken, ...axiomUrlOption }, level },
+      { target: 'pino/file', options: { destination: 1 }, level }, // also stdout
+    ];
+    return pino(baseOptions, pino.transport({ targets }));
+  }
+  // Default (serverless + prod): plain JSON to stdout; ship to Axiom via a drain.
+  return pino(baseOptions);
 }
 
 export const logger = build();
 
-if (axiomToken && axiomDataset) {
-  logger.info('[logger] shipping logs to Axiom');
+if (allowAxiomTransport && axiomToken && axiomDataset) {
+  logger.info('[logger] shipping logs to Axiom via in-process transport');
 } else if (isProd) {
-  logger.info('[logger] AXIOM_TOKEN not set — logging JSON to stdout only');
+  logger.info('[logger] logging JSON to stdout (ship to Axiom via a platform log drain)');
 }
 
 // ── console → pino bridge ─────────────────────────────────────────────────────
