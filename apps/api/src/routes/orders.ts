@@ -554,9 +554,14 @@ router.get('/:id/events', requireAuth, async (req, res) => {
     const last = events.length ? events[events.length - 1].createdAt : order.updatedAt;
     const durationSec = Math.max(0, Math.round((new Date(last).getTime() - new Date(first).getTime()) / 1000));
 
-    // Device + IP from the order.created event's payer context.
-    const created = events.find((e) => e.type === 'order.created');
-    const cm = (created?.metadata ?? {}) as Record<string, unknown>;
+    // Device + IP: prefer the customer's browser context (captured on a client
+    // event) over order.created — which for API/server-created orders is the
+    // merchant's backend, not the payer. Fall back to order.created otherwise.
+    const clientCtx = [...events].reverse().find(
+      (e) => e.source === 'client' && (e.metadata as Record<string, unknown> | null)?.userAgent,
+    );
+    const ctxSource = clientCtx ?? events.find((e) => e.type === 'order.created');
+    const cm = (ctxSource?.metadata ?? {}) as Record<string, unknown>;
     const ip = cm.ip ? String(cm.ip) : null;
     const device = deviceTypeFromUA(cm.userAgent ? String(cm.userAgent) : null);
 
@@ -602,6 +607,12 @@ router.post('/:id/events', requireApiKey, async (req, res) => {
     if (raw.length === 0) return res.status(400).json({ success: false, error: 'events array required' });
     if (raw.length > 50) return res.status(400).json({ success: false, error: 'too many events (max 50)' });
 
+    // This request IS the customer's browser (the widget), so it carries the real
+    // payer device/IP — unlike order.created, which for API/server-created orders
+    // is the merchant's backend. Stamp it server-side (client can't spoof it).
+    const clientIp = req.ip ?? null;
+    const clientUa = (req.headers['user-agent'] as string | undefined) ?? null;
+
     let recorded = 0;
     for (const ev of raw) {
       const type = String(ev?.type ?? '');
@@ -617,7 +628,8 @@ router.post('/:id/events', requireApiKey, async (req, res) => {
         type,
         label: build(metadata),
         source: 'client',
-        metadata,
+        // Server-set ip/userAgent LAST so client-supplied metadata can't spoof them.
+        metadata: { ...metadata, ip: clientIp, userAgent: clientUa },
         occurredAt: isNaN(occurredAt.getTime()) ? new Date() : occurredAt,
       });
       recorded++;
