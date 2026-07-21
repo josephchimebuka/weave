@@ -85,19 +85,53 @@ export function toSearchQueryExport(params: Record<string, string | undefined>):
 }
 
 // Client-side fetch that uses API endpoint directly
+// Backward-compatible list fetch (used by home + payouts for metrics). Pulls a
+// generous recent batch and returns just the array from the paginated response.
 export async function fetchOrdersClient(revalidateSeconds = 10): Promise<Order[]> {
   try {
-    // Call a server action or API route to get the session token
-    const res = await fetch(`/api/orders`, {
+    const res = await fetch(`/api/orders?limit=100`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       cache: revalidateSeconds <= 0 ? 'no-store' : undefined,
     });
     if (!res.ok) return [];
     const json = await res.json();
-    return json.data ?? [];
+    const d = json.data ?? json;
+    return Array.isArray(d) ? d : (d.orders ?? []);
   } catch {
     return [];
+  }
+}
+
+export type OrdersAggregates = { completedCount: number; todayNetSum: number; pendingNetSum: number };
+export type OrdersPage = { orders: Order[]; total: number; limit: number; offset: number; aggregates: OrdersAggregates };
+export type OrdersQuery = { limit?: number; offset?: number; status?: string; direction?: string; q?: string; fromDate?: string; toDate?: string };
+
+const EMPTY_PAGE: OrdersPage = {
+  orders: [], total: 0, limit: 25, offset: 0,
+  aggregates: { completedCount: 0, todayNetSum: 0, pendingNetSum: 0 },
+};
+
+export async function fetchOrdersPageClient(query: OrdersQuery = {}): Promise<OrdersPage> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v != null && v !== '' && v !== 'all') qs.set(k, String(v));
+  }
+  try {
+    const res = await fetch(`/api/orders?${qs.toString()}`, { method: 'GET', cache: 'no-store' });
+    if (!res.ok) return EMPTY_PAGE;
+    const json = await res.json();
+    const d = json.data ?? json;
+    if (Array.isArray(d)) return { ...EMPTY_PAGE, orders: d, total: d.length };
+    return {
+      orders: d.orders ?? [],
+      total: d.total ?? 0,
+      limit: d.limit ?? 25,
+      offset: d.offset ?? 0,
+      aggregates: d.aggregates ?? EMPTY_PAGE.aggregates,
+    };
+  } catch {
+    return EMPTY_PAGE;
   }
 }
 

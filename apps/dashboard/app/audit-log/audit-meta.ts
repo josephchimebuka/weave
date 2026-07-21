@@ -66,6 +66,15 @@ const ACTIONS: Record<string, ActionMeta> = {
     label: 'Payment link deleted', severity: 'info', category: 'payments',
     describe: (m) => s(m, 'title'),
   },
+  'link.updated': {
+    label: 'Payment link updated', severity: 'info', category: 'payments',
+    describe: (m) => {
+      const changed = Array.isArray((m as Record<string, unknown>)?.changed)
+        ? ((m as Record<string, unknown>).changed as unknown[]).join(', ')
+        : '';
+      return [s(m, 'title'), changed].filter(Boolean).join(' · ');
+    },
+  },
   'kyb.submitted': { label: 'KYB submitted for review', severity: 'info', category: 'compliance' },
   'kyb.approved': { label: 'KYB approved', severity: 'success', category: 'compliance' },
   'kyb.rejected': {

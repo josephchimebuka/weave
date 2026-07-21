@@ -138,6 +138,20 @@ router.patch('/:id', requireAuth, async (req, res) => {
       },
     });
 
+    // Record which fields changed. Toggling active/inactive is called out
+    // explicitly since it's the most consequential edit.
+    const changed: string[] = [];
+    if (title !== undefined) changed.push('title');
+    if (description !== undefined) changed.push('description');
+    if (amount !== undefined) changed.push('amount');
+    if (asset !== undefined) changed.push('asset');
+    if (isActive !== undefined) changed.push(isActive ? 'activated' : 'deactivated');
+    recordMerchantAudit(req, 'link.updated', {
+      targetType: 'payment_link',
+      targetId: link.id,
+      metadata: { title: link.title, changed },
+    });
+
     return res.json({ success: true, data: link });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });

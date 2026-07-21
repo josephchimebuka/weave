@@ -29,16 +29,45 @@ export async function fetchOrders(revalidateSeconds = 10): Promise<Order[]> {
     const cacheOptions = getCacheOptions(revalidateSeconds);
     const token = await getSessionToken();
     if (!token) return [];
-    const res = await fetch(`${API_BASE}/orders`, {
+    const res = await fetch(`${API_BASE}/orders?limit=100`, {
       headers: { 'x-session-token': token },
       ...cacheOptions,
     });
     if (!res.ok) return [];
     const json = await res.json();
-    return json.data ?? [];
+    const d = json.data ?? json;
+    return Array.isArray(d) ? d : (d.orders ?? []);
   } catch {
     return [];
   }
+}
+
+// Export-oriented: pull the ENTIRE matching set by looping pages (the API caps
+// a single page at 500). Server-side filters are applied by the API.
+export async function fetchAllOrders(
+  query: { status?: string; direction?: string; q?: string; fromDate?: string; toDate?: string } = {},
+): Promise<Order[]> {
+  const token = await getSessionToken();
+  if (!token) return [];
+  const all: Order[] = [];
+  const pageSize = 500;
+  let offset = 0;
+  for (let i = 0; i < 500; i++) {
+    const qs = new URLSearchParams({ limit: String(pageSize), offset: String(offset) });
+    for (const [k, v] of Object.entries(query)) if (v) qs.set(k, String(v));
+    const res = await fetch(`${API_BASE}/orders?${qs.toString()}`, {
+      headers: { 'x-session-token': token },
+      cache: 'no-store',
+    });
+    if (!res.ok) break;
+    const json = await res.json();
+    const d = json.data ?? json;
+    const orders: Order[] = Array.isArray(d) ? d : (d.orders ?? []);
+    all.push(...orders);
+    if (orders.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
 }
 
 export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<OrderWithProviderStatus | null> {

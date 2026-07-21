@@ -13,7 +13,7 @@ import {
   CreditCard,
   ShoppingBag,
 } from 'lucide-react';
-import { fetchOrdersClient as fetchOrders, fetchOrderClient as fetchOrder, fetchOrderEventsClient, applyOrderFilter } from '../lib/dashboard-api-client';
+import { fetchOrdersPageClient, fetchOrderEventsClient, type OrdersAggregates } from '../lib/dashboard-api-client';
 import { directionOf, parseAsset } from '../types';
 import type { Order } from '../types';
 import { EVENT_TONE, fmtDuration, eventTime, type OrderTimeline } from '../lib/order-events';
@@ -110,20 +110,46 @@ function fmtDate(iso: string): string {
 
 import AutoRefresh from '../AutoRefresh';
 
+const PAGE_SIZE = 25;
+
 export default function TransactionsPage() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [total, setTotal] = useState(0);
+  const [aggregates, setAggregates] = useState<OrdersAggregates>({ completedCount: 0, todayNetSum: 0, pendingNetSum: 0 });
+  const [page, setPage] = useState(0); // zero-based
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('completed');
   const [directionFilter, setDirectionFilter] = useState('all');
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Debounce the search box so we don't refetch on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // Any filter change resets to the first page.
+  useEffect(() => { setPage(0); }, [debouncedQuery, statusFilter, directionFilter]);
+
+  const query = {
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    q: debouncedQuery || undefined,
+    status: statusFilter,
+    direction: directionFilter,
+  };
+
   const load = async (isSilent = false) => {
     try {
       if (!isSilent) setLoading(true);
-      const rawOrders = await fetchOrders(20);
-      setOrders(rawOrders);
+      const res = await fetchOrdersPageClient(query);
+      setOrders(res.orders);
+      setTotal(res.total);
+      setAggregates(res.aggregates);
+      setError(null);
       setLoading(false);
     } catch (err) {
       if (!isSilent) {
@@ -135,34 +161,16 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedQuery, statusFilter, directionFilter]);
 
-  // Filter orders based on search and filters
-  const filteredOrders = orders.filter((o) => {
-    const q = searchQuery.toLowerCase();
-    const matchesSearch =
-      !q ||
-      counterpartyName(o).toLowerCase().includes(q) ||
-      o.id.toLowerCase().includes(q);
+  const filteredOrders = orders; // filtering is server-side now
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const hasActiveFilter = !!debouncedQuery || statusFilter !== 'all' || directionFilter !== 'all';
 
-    const matchesStatus =
-      statusFilter === 'all' || o.status === statusFilter;
-
-    const matchesDirection =
-      directionFilter === 'all' || directionOf(o) === directionFilter;
-
-    return matchesSearch && matchesStatus && matchesDirection;
-  });
-
-  // Stat aggregates
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayDone = orders.filter((o) => o.status === 'completed' && o.createdAt.slice(0, 10) === todayStr);
-  const pending = orders.filter((o) => ['awaiting_deposit', 'processing', 'bridging'].includes(o.status));
-
-  // Determine merchant's active fiat currency from their recent orders
+  // Merchant's active fiat currency, inferred from the current page.
   let currencyCode = 'USD';
   let currencySymbol = '$';
-
   for (const o of orders) {
     if (o.destAssetKey) {
       const parsed = parseAsset(o.destAssetKey);
@@ -177,16 +185,18 @@ export default function TransactionsPage() {
   const fmtAggregate = (n: number | null | undefined): string => {
     if (n == null || isNaN(n)) return '—';
     const suffix = ['$', '₦', '€', '£'].includes(currencySymbol) ? '' : ` ${currencyCode}`;
-    return `${currencySymbol}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix}`;
+    return `${currencySymbol}${Math.round(n).toLocaleString('en-US')}${suffix}`;
   };
 
-  const todaySalesFiat = todayDone.reduce((sum, o) => sum + (netSettlement(o) ?? 0), 0);
-  const pendingFiat = pending.reduce((sum, o) => sum + (netSettlement(o) ?? 0), 0);
-  const completedCount = orders.filter((o) => o.status === 'completed').length;
+  // Stat cards now use server aggregates (whole set, not just this page).
+  const statToday = aggregates.todayNetSum;
+  const statPending = aggregates.pendingNetSum;
+  const statSuccess = aggregates.completedCount;
 
-  const statToday = todaySalesFiat;
-  const statPending = pendingFiat;
-  const statSuccess = completedCount;
+  const exportParams = new URLSearchParams();
+  if (debouncedQuery) exportParams.set('q', debouncedQuery);
+  if (statusFilter !== 'all') exportParams.set('status', statusFilter);
+  if (directionFilter !== 'all') exportParams.set('direction', directionFilter);
 
   return (
     <div className="flex flex-col xl:flex-row gap-0 -mx-6 md:-mx-10 lg:-mx-14 -my-8 md:-my-10 min-h-[calc(100vh-2rem)]">
@@ -194,7 +204,7 @@ export default function TransactionsPage() {
       {/* List side */}
       <div className={`flex-1 flex flex-col overflow-hidden px-6 md:px-10 lg:px-14 py-8 md:py-10 ${selected ? 'xl:max-w-[calc(100%-420px)]' : ''}`}>
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
+        <div className="relative z-50 flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
           <div className="fade-up">
             <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-none">
               Transactions
@@ -231,13 +241,9 @@ export default function TransactionsPage() {
                 <option value="failed">Failed</option>
                 <option value="refunded">Refunded</option>
               </select>
-              <Link
-                href="/transactions/export"
-                className="flex items-center gap-2 px-5 py-3 bg-forest text-cream-soft rounded-full text-[14px] hover:bg-forest-deep transition-all shadow-leaf font-medium"
-              >
-                <Download size={15} strokeWidth={2} />
-                Export
-              </Link>
+              <ExportMenu baseParams={exportParams.toString()} />
+
+
             </div>
           )}
         </div>        {/* Stat cards */}
@@ -292,8 +298,10 @@ export default function TransactionsPage() {
             <div className="hidden sm:block text-right min-w-22.5">Settlement</div>
           </div>
 
-          {filteredOrders.length === 0 ? (
-            <EmptyList hasFilter={searchQuery.length > 0 || statusFilter !== 'all'} />
+          {loading && orders.length === 0 ? (
+            <div className="py-20 text-center text-[14px] text-ink-muted">Loading transactions…</div>
+          ) : filteredOrders.length === 0 ? (
+            <EmptyList hasFilter={hasActiveFilter} onClear={() => { setSearchQuery(''); setStatusFilter('all'); setDirectionFilter('all'); }} />
           ) : (
             <div className="flex-1 overflow-y-auto">
               {filteredOrders.map((o) => {
@@ -339,6 +347,32 @@ export default function TransactionsPage() {
                   </button>
                 );
               })}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {total > 0 && (
+            <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3.5 border-t border-hair-soft bg-cream-soft">
+              <p className="text-[12px] text-ink-muted tabular-nums">
+                {total === 0 ? 'No results' : `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total.toLocaleString()}`}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0 || loading}
+                  className="px-3.5 py-2 rounded-full text-[13px] font-medium border border-hair text-ink-soft hover:text-forest-deep hover:border-forest/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Previous
+                </button>
+                <span className="text-[12px] text-ink-muted tabular-nums px-1">Page {page + 1} of {totalPages}</span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1 || loading}
+                  className="px-3.5 py-2 rounded-full text-[13px] font-medium border border-hair text-ink-soft hover:text-forest-deep hover:border-forest/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -389,16 +423,83 @@ function StatCard({
   );
 }
 
-function EmptyList({ hasFilter }: { hasFilter: boolean }) {
+function EmptyList({ hasFilter, onClear }: { hasFilter: boolean; onClear?: () => void }) {
   return (
     <div className="py-20 text-center">
       <p className="text-[14px] text-ink-muted">
         {hasFilter ? 'No transactions match your filters.' : 'No transactions yet.'}
       </p>
       {hasFilter && (
-        <Link href="/transactions" className="inline-block mt-3 text-[13px] text-forest-deep font-semibold hover:underline">
+        <button onClick={onClear} className="inline-block mt-3 text-[13px] text-forest-deep font-semibold hover:underline">
           Clear filters
-        </Link>
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Export menu — "Everything" (respects current filters) or a custom date range.
+function ExportMenu({ baseParams }: { baseParams: string }) {
+  const [open, setOpen] = useState(false);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+
+  const buildHref = (withRange: boolean) => {
+    const p = new URLSearchParams(baseParams);
+    if (withRange) {
+      if (from) p.set('fromDate', new Date(from).toISOString());
+      // Include the whole `to` day.
+      if (to) p.set('toDate', new Date(new Date(to).setHours(23, 59, 59, 999)).toISOString());
+    }
+    const qs = p.toString();
+    return `/transactions/export${qs ? `?${qs}` : ''}`;
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 px-5 py-3 bg-forest text-cream-soft rounded-full text-[14px] hover:bg-forest-deep transition-all shadow-leaf font-medium"
+      >
+        <Download size={15} strokeWidth={2} />
+        Export
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-72 z-40 rounded-2xl bg-cream-soft border border-hair-soft shadow-leaf-lg p-3 fade-up">
+            <a
+              href={buildHref(false)}
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2.5 rounded-xl text-[13.5px] text-ink hover:bg-cream-deep/50 transition-colors"
+            >
+              Export everything
+              <span className="block text-[11.5px] text-ink-muted">All transactions matching current filters</span>
+            </a>
+            <div className="my-2 border-t border-hair-soft" />
+            <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted mb-2">Date range</p>
+            <div className="px-3 flex flex-col gap-2">
+              <label className="text-[11px] text-ink-muted">From
+                <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-cream border border-hair rounded-lg text-[13px] text-ink focus:outline-none focus:border-forest/40" />
+              </label>
+              <label className="text-[11px] text-ink-muted">To
+                <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-cream border border-hair rounded-lg text-[13px] text-ink focus:outline-none focus:border-forest/40" />
+              </label>
+              <a
+                href={buildHref(true)}
+                onClick={(e) => { if (!from && !to) e.preventDefault(); else setOpen(false); }}
+                aria-disabled={!from && !to}
+                className={`mt-1 text-center px-4 py-2 rounded-full text-[13px] font-medium transition-all ${
+                  from || to ? 'bg-forest text-cream-soft hover:bg-forest-deep' : 'bg-cream-deep text-ink-faint cursor-not-allowed'
+                }`}
+              >
+                Export range
+              </a>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

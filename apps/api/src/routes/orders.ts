@@ -641,16 +641,62 @@ router.post('/:id/events', requireApiKey, async (req, res) => {
   }
 });
 
-// GET /api/v1/orders — list for the merchant.
+// GET /api/v1/orders — paginated, server-filtered list for the merchant.
+// Params: limit (default 25, max 500), offset, status, direction, q, fromDate,
+// toDate. Returns { orders, total, limit, offset, aggregates } — the aggregates
+// span the merchant's WHOLE set (not the page) so the stat cards stay accurate.
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const orders = await prisma.order.findMany({
-      where: { merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 500);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const status = req.query.status && req.query.status !== 'all' ? String(req.query.status) : undefined;
+    const direction = req.query.direction && req.query.direction !== 'all' ? String(req.query.direction) : undefined;
+    const q = req.query.q ? String(req.query.q).trim() : '';
+    const fromDate = req.query.fromDate ? new Date(String(req.query.fromDate)) : null;
+    const toDate = req.query.toDate ? new Date(String(req.query.toDate)) : null;
+
+    const base = { merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false };
+    const where: any = { ...base };
+    if (status) where.status = status;
+    if (fromDate && !isNaN(fromDate.getTime())) where.createdAt = { ...(where.createdAt ?? {}), gte: fromDate };
+    if (toDate && !isNaN(toDate.getTime())) where.createdAt = { ...(where.createdAt ?? {}), lte: toDate };
+    // Direction derives from asset kinds — the two common corridors map cleanly.
+    if (direction === 'offramp') { where.sourceAssetKey = { startsWith: 'crypto:' }; where.destAssetKey = { startsWith: 'fiat:' }; }
+    else if (direction === 'onramp') { where.sourceAssetKey = { startsWith: 'fiat:' }; where.destAssetKey = { startsWith: 'crypto:' }; }
+    if (q) {
+      where.OR = [
+        { id: { contains: q, mode: 'insensitive' } },
+        { reference: { contains: q, mode: 'insensitive' } },
+        { sourceInstrument: { bankAccountName: { contains: q, mode: 'insensitive' } } },
+        { destInstrument: { bankAccountName: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const [orders, total, completedCount, todayAgg, pendingAgg] = await Promise.all([
+      prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, skip: offset, take: limit, include: { steps: { orderBy: { sequence: 'asc' } } } }),
+      prisma.order.count({ where }),
+      prisma.order.count({ where: { ...base, status: 'completed' } }),
+      prisma.order.aggregate({ _sum: { destAmount: true }, where: { ...base, status: 'completed', createdAt: { gte: startOfToday } } }),
+      prisma.order.aggregate({ _sum: { destAmount: true }, where: { ...base, status: { in: ['awaiting_deposit', 'processing', 'bridging'] } } }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        orders: orders.map(serializeOrder),
+        total,
+        limit,
+        offset,
+        aggregates: {
+          completedCount,
+          todayNetSum: Number(todayAgg._sum.destAmount ?? 0),
+          pendingNetSum: Number(pendingAgg._sum.destAmount ?? 0),
+        },
+      },
     });
-    res.json({ success: true, data: orders.map(serializeOrder) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

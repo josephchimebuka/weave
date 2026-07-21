@@ -6,17 +6,23 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const orderId = url.searchParams.get('id');
-    
+
     const token = await readSessionCookie();
     if (!token) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const endpoint = orderId ? `${API_BASE}/orders/${orderId}` : `${API_BASE}/orders`;
-    
+    // Forward pagination/filter params (limit, offset, status, direction, q,
+    // fromDate, toDate) through to the API list endpoint.
+    const qs = new URLSearchParams(url.searchParams);
+    qs.delete('id');
+    const endpoint = orderId
+      ? `${API_BASE}/orders/${orderId}`
+      : `${API_BASE}/orders${qs.toString() ? `?${qs.toString()}` : ''}`;
+
     const res = await fetch(endpoint, {
       headers: { 'x-session-token': token },
-      next: { revalidate: 10 },
+      cache: 'no-store',
     });
 
     if (!res.ok) {
