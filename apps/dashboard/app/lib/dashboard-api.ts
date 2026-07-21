@@ -58,20 +58,8 @@ export async function fetchOrder(id: string, revalidateSeconds = 10): Promise<Or
   }
 }
 
-export type OrderEvent = {
-  id: string;
-  type: string;
-  label: string;
-  source: 'server' | 'client';
-  metadata: Record<string, unknown> | null;
-  occurredAt: string;
-  createdAt: string;
-};
-
-export type OrderTimeline = {
-  events: OrderEvent[];
-  summary: { eventCount: number; attempts: number; errors: number; durationSec: number };
-};
+export type { OrderEvent, OrderTimeline } from './order-events';
+import type { OrderTimeline } from './order-events';
 
 export async function fetchOrderEvents(id: string, revalidateSeconds = 10): Promise<OrderTimeline | null> {
   try {

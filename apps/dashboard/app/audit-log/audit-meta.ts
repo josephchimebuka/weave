@@ -18,6 +18,7 @@ export interface AuditEvent {
   // Admin (platform-wide) view only:
   ip?: string | null;
   userAgent?: string | null;
+  device?: string | null;
   merchantId?: string | null;
   merchant?: { id: string; email: string; name: string } | null;
 }

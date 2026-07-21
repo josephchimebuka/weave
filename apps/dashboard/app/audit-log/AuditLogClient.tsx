@@ -351,6 +351,7 @@ function EventDetail({
         {scope === 'all' && (event.ip || event.userAgent) && (
           <Section title="Context">
             {event.ip && <Row k="IP address" v={<span className="font-mono text-[12px]">{event.ip}</span>} />}
+            {event.device && <Row k="Device" v={event.device} />}
             {event.userAgent && <Row k="User agent" v={<span className="text-[12px] text-ink-muted break-words">{event.userAgent}</span>} />}
           </Section>
         )}

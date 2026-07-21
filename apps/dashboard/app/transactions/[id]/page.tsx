@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import { fetchOrder, fetchOrderEvents, type OrderEvent } from '../../lib/dashboard-api';
+import { fetchOrder, fetchOrderEvents } from '../../lib/dashboard-api';
+import { EVENT_TONE, fmtDuration, type OrderEvent } from '../../lib/order-events';
 import { assetLabel, parseAsset, institutionName } from '../../types';
 import { WalletAddress } from '../../../components/WalletAddress';
 
@@ -29,30 +30,6 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
       <p className="text-[14px] text-ink">{value}</p>
     </div>
   );
-}
-
-// Timeline event tone by type — dot color for the activity feed.
-const EVENT_TONE: Record<string, string> = {
-  'order.created':        'bg-ink-faint',
-  'method.selected':      'bg-forest',
-  'chain.selected':       'bg-forest',
-  'auth_window.opened':   'bg-tan',
-  'auth_window.closed':   'bg-tan',
-  'deposit.detected':     'bg-forest',
-  'step.completed':       'bg-forest',
-  'channel.confirmed':    'bg-forest',
-  'retry':                'bg-tan',
-  'error.shown':          'bg-terracotta',
-  'order.completed':      'bg-forest',
-  'order.failed':         'bg-terracotta',
-  'order.refunded':       'bg-ink-muted',
-};
-
-function fmtDuration(sec: number): string {
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}m ${s}s`;
 }
 
 export default async function TransactionReceiptPage({ params }: { params: Promise<{ id: string }> }) {
@@ -240,6 +217,22 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
             </div>
           </div>
           <div className="px-7 py-6">
+            {(timeline.summary.device || timeline.summary.ip) && (
+              <div className="flex flex-wrap gap-3 mb-6">
+                {timeline.summary.device && (
+                  <div className="bg-cream-deep/50 border border-hair-soft rounded-2xl px-4 py-3 min-w-[120px]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted">Device</p>
+                    <p className="text-[15px] font-medium text-ink mt-0.5">{timeline.summary.device}</p>
+                  </div>
+                )}
+                {timeline.summary.ip && (
+                  <div className="bg-cream-deep/50 border border-hair-soft rounded-2xl px-4 py-3 min-w-[120px]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted">IP address</p>
+                    <p className="text-[14px] font-mono text-ink mt-0.5">{timeline.summary.ip}</p>
+                  </div>
+                )}
+              </div>
+            )}
             <ol className="relative border-l border-hair-soft ml-2">
               {timeline.events.map((e: OrderEvent) => (
                 <li key={e.id} className="relative pl-6 pb-5 last:pb-0">

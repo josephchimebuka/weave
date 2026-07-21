@@ -13,9 +13,10 @@ import {
   CreditCard,
   ShoppingBag,
 } from 'lucide-react';
-import { fetchOrdersClient as fetchOrders, fetchOrderClient as fetchOrder, applyOrderFilter } from '../lib/dashboard-api-client';
+import { fetchOrdersClient as fetchOrders, fetchOrderClient as fetchOrder, fetchOrderEventsClient, applyOrderFilter } from '../lib/dashboard-api-client';
 import { directionOf, parseAsset } from '../types';
 import type { Order } from '../types';
+import { EVENT_TONE, fmtDuration, eventTime, type OrderTimeline } from '../lib/order-events';
 
 type SearchParams = {
   q?: string;
@@ -404,6 +405,19 @@ function EmptyList({ hasFilter }: { hasFilter: boolean }) {
 }
 
 function QuickView({ order, onClose }: { order: Order; onClose: () => void }) {
+  const [timeline, setTimeline] = useState<OrderTimeline | null>(null);
+  const [loadingTimeline, setLoadingTimeline] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingTimeline(true);
+    setTimeline(null);
+    fetchOrderEventsClient(order.id).then((t) => {
+      if (!cancelled) { setTimeline(t); setLoadingTimeline(false); }
+    });
+    return () => { cancelled = true; };
+  }, [order.id]);
+
   const status = STATUS_PALETTE[order.status] ?? STATUS_PALETTE.processing;
   const headline = fmtAmount(netSettlement(order), order.destAssetKey);
   const customer = counterpartyName(order);
@@ -497,6 +511,43 @@ function QuickView({ order, onClose }: { order: Order; onClose: () => void }) {
             </div>
           </div>
         </div>
+
+        {/* Payment activity — the payer's session timeline */}
+        {!loadingTimeline && timeline && timeline.events.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[11px] font-semibold tracking-[0.15em] uppercase text-ink-muted">
+                Payment Activity
+              </h3>
+              <div className="flex items-center gap-3 text-[11px] text-ink-muted">
+                <span>{fmtDuration(timeline.summary.durationSec)}</span>
+                {timeline.summary.errors > 0 && <span className="text-terracotta font-medium">{timeline.summary.errors} err</span>}
+              </div>
+            </div>
+            {(timeline.summary.device || timeline.summary.ip) && (
+              <div className="flex items-center gap-4 mb-3 text-[12px] text-ink-muted">
+                {timeline.summary.device && <span>Device <span className="text-ink font-medium">{timeline.summary.device}</span></span>}
+                {timeline.summary.ip && <span>IP <span className="text-ink font-mono">{timeline.summary.ip}</span></span>}
+              </div>
+            )}
+            <ol className="relative border-l border-hair-soft ml-1">
+              {timeline.events.map((e) => (
+                <li key={e.id} className="relative pl-5 pb-3.5 last:pb-0">
+                  <span className={`absolute -left-[5px] top-1 w-2.5 h-2.5 rounded-full ring-2 ring-cream-soft ${EVENT_TONE[e.type] ?? 'bg-ink-faint'}`} />
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-[12.5px] text-ink leading-snug">
+                      {e.label}
+                      {e.source === 'client' && (
+                        <span className="ml-1.5 text-[9px] font-semibold uppercase tracking-wide text-ink-faint">reported</span>
+                      )}
+                    </span>
+                    <span className="text-[11px] text-ink-muted tabular-nums shrink-0">{eventTime(e.createdAt)}</span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
 
         <div className="mt-auto pt-4 flex items-center justify-between text-[12px] text-ink-muted border-t border-hair-soft/50 pt-6">
           <span>Processed via {providerName}</span>

@@ -1,6 +1,7 @@
 'use client';
 
 import { Order, directionOf } from '../types';
+import type { OrderTimeline } from './order-events';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api/v1';
 
@@ -110,6 +111,16 @@ export async function fetchOrderClient(id: string, revalidateSeconds = 10): Prom
     if (!res.ok) return null;
     const json = await res.json();
     return json.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchOrderEventsClient(id: string): Promise<OrderTimeline | null> {
+  try {
+    const res = await fetch(`/api/orders/${id}/events`, { method: 'GET', cache: 'no-store' });
+    if (!res.ok) return null;
+    return await res.json();
   } catch {
     return null;
   }

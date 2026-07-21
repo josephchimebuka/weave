@@ -8,6 +8,7 @@ import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/mercha
 import { webhookService, WEBHOOK_MAX_ATTEMPTS, isSafeWebhookUrl } from '../services/webhook.service';
 import { paystack } from '../services/paystack.service';
 import { recordMerchantAudit, isPlatformAdmin } from '../services/audit.service';
+import { deviceTypeFromUA } from '../lib/user-agent';
 
 const router = Router();
 
@@ -551,6 +552,7 @@ router.get('/audit-events/all', requireSession, async (req, res) => {
     const data = events.map((e) => ({
       ...e,
       merchant: e.merchantId ? byId.get(e.merchantId) ?? null : null,
+      device: deviceTypeFromUA(e.userAgent),
     }));
 
     return res.json({ success: true, data });

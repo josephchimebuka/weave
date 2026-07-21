@@ -5,6 +5,7 @@ import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
 import { executeOrder, syncOrder, toDepositInstruction } from '../services/executor.service';
 import { recordServerEvent, recordOrderEvent } from '../services/order-event.service';
+import { deviceTypeFromUA } from '../lib/user-agent';
 import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest } from '../services/paycrest.service';
@@ -369,6 +370,9 @@ router.post('/', requireAuth, async (req, res) => {
           destAsset: destInstrument.assetKey,
           amount: sourceAmount,
           sandbox: req.sandboxMode ?? false,
+          // Payer context — the widget's request. Drives the device/IP tiles.
+          ip: req.ip ?? null,
+          userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
         });
 
         // Link to checkout session if it exists and isn't already linked
@@ -550,9 +554,15 @@ router.get('/:id/events', requireAuth, async (req, res) => {
     const last = events.length ? events[events.length - 1].createdAt : order.updatedAt;
     const durationSec = Math.max(0, Math.round((new Date(last).getTime() - new Date(first).getTime()) / 1000));
 
+    // Device + IP from the order.created event's payer context.
+    const created = events.find((e) => e.type === 'order.created');
+    const cm = (created?.metadata ?? {}) as Record<string, unknown>;
+    const ip = cm.ip ? String(cm.ip) : null;
+    const device = deviceTypeFromUA(cm.userAgent ? String(cm.userAgent) : null);
+
     res.json({
       success: true,
-      data: { events, summary: { eventCount: events.length, attempts, errors, durationSec } },
+      data: { events, summary: { eventCount: events.length, attempts, errors, durationSec, device, ip } },
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });

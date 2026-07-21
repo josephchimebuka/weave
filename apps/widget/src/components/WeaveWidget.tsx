@@ -2850,6 +2850,7 @@ function WeaveCheckoutInner({
 
   const onDepositChainChange = async (apiChain: string, token: string, refundAddr: string) => {
     const myReq = ++depositReq.current;
+    emitTxnEvent('chain.selected', { chain: apiChain, token });
     setDepositLoading(true);
     setDepositError(null);
     setDepositAddress(null);

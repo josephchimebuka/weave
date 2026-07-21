@@ -283,6 +283,14 @@ router.post('/poll-near-step', verifyQStash, async (req, res) => {
       return res.json({ success: true, outcome });
     }
 
+    // Deposit seen but swap not yet complete → mark in-flight so the timeline
+    // gets a "deposit detected" moment (markStepProgress emits it once, guarded).
+    // NEAR is poll-only with no webhook, so this is the only place to catch it.
+    if (['KNOWN_DEPOSIT_TX', 'PROCESSING', 'INCOMPLETE_DEPOSIT'].includes(status.status)) {
+      const { markStepProgress } = await import('../services/executor.service');
+      await markStepProgress({ provider: 'nearintents', externalId: depositAddress, depositMemo: depositMemo ?? null });
+    }
+
     // Still pending — re-schedule the next check.
     await scheduleNearPoll({ depositAddress, depositMemo, attempt: attempt + 1 });
     return res.json({ success: true, outcome: 'progress', nextAttempt: attempt + 1 });
