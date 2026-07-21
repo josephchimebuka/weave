@@ -112,6 +112,56 @@ import AutoRefresh from '../AutoRefresh';
 
 const PAGE_SIZE = 25;
 
+type RangeKey = 'today' | 'yesterday' | 'last7' | 'thisMonth' | 'lastMonth' | 'alltime' | 'custom';
+
+const DATE_RANGE_OPTIONS: { value: RangeKey; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'last7', label: 'Last 7 days' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'lastMonth', label: 'Last month' },
+  { value: 'alltime', label: 'All time' },
+  { value: 'custom', label: 'Custom' },
+];
+
+function startOfDay(d: Date) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function endOfDay(d: Date) { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; }
+
+// Maps a preset (or custom inputs) to createdAt bounds the API understands.
+function computeRange(key: RangeKey, customFrom: string, customTo: string): { fromDate?: string; toDate?: string } {
+  const now = new Date();
+  switch (key) {
+    case 'today':
+      return { fromDate: startOfDay(now).toISOString(), toDate: endOfDay(now).toISOString() };
+    case 'yesterday': {
+      const y = new Date(now); y.setDate(now.getDate() - 1);
+      return { fromDate: startOfDay(y).toISOString(), toDate: endOfDay(y).toISOString() };
+    }
+    case 'last7': {
+      const from = new Date(now); from.setDate(now.getDate() - 6);
+      return { fromDate: startOfDay(from).toISOString(), toDate: endOfDay(now).toISOString() };
+    }
+    case 'thisMonth': {
+      const from = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { fromDate: startOfDay(from).toISOString(), toDate: endOfDay(now).toISOString() };
+    }
+    case 'lastMonth': {
+      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const to = new Date(now.getFullYear(), now.getMonth(), 0); // day 0 = last day of prev month
+      return { fromDate: startOfDay(from).toISOString(), toDate: endOfDay(to).toISOString() };
+    }
+    case 'custom': {
+      const out: { fromDate?: string; toDate?: string } = {};
+      if (customFrom) out.fromDate = startOfDay(new Date(customFrom)).toISOString();
+      if (customTo) out.toDate = endOfDay(new Date(customTo)).toISOString();
+      return out;
+    }
+    case 'alltime':
+    default:
+      return {};
+  }
+}
+
 export default function TransactionsPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [total, setTotal] = useState(0);
@@ -121,6 +171,9 @@ export default function TransactionsPage() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('completed');
   const [directionFilter, setDirectionFilter] = useState('all');
+  const [dateRange, setDateRange] = useState<RangeKey>('today');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,8 +184,10 @@ export default function TransactionsPage() {
     return () => clearTimeout(t);
   }, [searchQuery]);
 
+  const range = computeRange(dateRange, customFrom, customTo);
+
   // Any filter change resets to the first page.
-  useEffect(() => { setPage(0); }, [debouncedQuery, statusFilter, directionFilter]);
+  useEffect(() => { setPage(0); }, [debouncedQuery, statusFilter, directionFilter, dateRange, customFrom, customTo]);
 
   const query = {
     limit: PAGE_SIZE,
@@ -140,6 +195,8 @@ export default function TransactionsPage() {
     q: debouncedQuery || undefined,
     status: statusFilter,
     direction: directionFilter,
+    fromDate: range.fromDate,
+    toDate: range.toDate,
   };
 
   const load = async (isSilent = false) => {
@@ -162,11 +219,11 @@ export default function TransactionsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, debouncedQuery, statusFilter, directionFilter]);
+  }, [page, debouncedQuery, statusFilter, directionFilter, dateRange, customFrom, customTo]);
 
   const filteredOrders = orders; // filtering is server-side now
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasActiveFilter = !!debouncedQuery || statusFilter !== 'all' || directionFilter !== 'all';
+  const hasActiveFilter = !!debouncedQuery || statusFilter !== 'all' || directionFilter !== 'all' || dateRange !== 'alltime';
 
   // Merchant's active fiat currency, inferred from the current page.
   let currencyCode = 'USD';
@@ -197,6 +254,8 @@ export default function TransactionsPage() {
   if (debouncedQuery) exportParams.set('q', debouncedQuery);
   if (statusFilter !== 'all') exportParams.set('status', statusFilter);
   if (directionFilter !== 'all') exportParams.set('direction', directionFilter);
+  if (range.fromDate) exportParams.set('fromDate', range.fromDate);
+  if (range.toDate) exportParams.set('toDate', range.toDate);
 
   return (
     <div className="flex flex-col xl:flex-row gap-0 -mx-6 md:-mx-10 lg:-mx-14 -my-8 md:-my-10 min-h-[calc(100vh-2rem)]">
@@ -217,7 +276,7 @@ export default function TransactionsPage() {
           {error ? (
             <div className="text-terracotta text-[14px] font-medium">{error}</div>
           ) : (
-            <div className="flex items-center gap-3 fade-up" style={{ animationDelay: '80ms' }}>
+            <div className="flex items-center flex-wrap gap-3 fade-up" style={{ animationDelay: '80ms' }}>
               <div className="relative">
                 <Search size={15} strokeWidth={1.9} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-muted" />
                 <input
@@ -241,6 +300,32 @@ export default function TransactionsPage() {
                 <option value="failed">Failed</option>
                 <option value="refunded">Refunded</option>
               </select>
+              <select
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value as RangeKey)}
+                className="px-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
+              >
+                {DATE_RANGE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              {dateRange === 'custom' && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={customFrom}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                    className="px-3.5 py-3 bg-cream-soft border border-hair rounded-full text-[13px] text-ink-soft focus:outline-none focus:border-forest/40 shadow-leaf"
+                  />
+                  <span className="text-ink-muted text-[13px]">to</span>
+                  <input
+                    type="date"
+                    value={customTo}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                    className="px-3.5 py-3 bg-cream-soft border border-hair rounded-full text-[13px] text-ink-soft focus:outline-none focus:border-forest/40 shadow-leaf"
+                  />
+                </div>
+              )}
               <ExportMenu baseParams={exportParams.toString()} />
 
 
@@ -301,7 +386,7 @@ export default function TransactionsPage() {
           {loading && orders.length === 0 ? (
             <div className="py-20 text-center text-[14px] text-ink-muted">Loading transactions…</div>
           ) : filteredOrders.length === 0 ? (
-            <EmptyList hasFilter={hasActiveFilter} onClear={() => { setSearchQuery(''); setStatusFilter('all'); setDirectionFilter('all'); }} />
+            <EmptyList hasFilter={hasActiveFilter} onClear={() => { setSearchQuery(''); setStatusFilter('all'); setDirectionFilter('all'); setDateRange('alltime'); }} />
           ) : (
             <div className="flex-1 overflow-y-auto">
               {filteredOrders.map((o) => {
