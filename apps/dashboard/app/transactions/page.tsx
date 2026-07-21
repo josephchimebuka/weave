@@ -263,7 +263,7 @@ export default function TransactionsPage() {
       {/* List side */}
       <div className={`flex-1 flex flex-col overflow-hidden px-6 md:px-10 lg:px-14 py-8 md:py-10 ${selected ? 'xl:max-w-[calc(100%-420px)]' : ''}`}>
         {/* Header */}
-        <div className="relative z-50 flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
+        <div className="relative z-30 flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
           <div className="fade-up">
             <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-none">
               Transactions
