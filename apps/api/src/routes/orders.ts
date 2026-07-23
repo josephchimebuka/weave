@@ -77,6 +77,13 @@ function sanitizeCustomer(raw: unknown): { email?: string; name?: string; extern
   return Object.keys(out).length ? out : null;
 }
 
+// Normalize an email for identity comparison: trimmed + lowercased, or null
+// when absent/blank. Used to gate session-scoped order resume so a different
+// payer on a shared device never inherits the previous payer's pending order.
+function normalizeEmail(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim().toLowerCase() : null;
+}
+
 // POST /api/v1/orders — direction-agnostic order creation.
 router.post('/', requireAuth, async (req, res) => {
   const body = req.body as CreateOrderBody;
@@ -341,6 +348,32 @@ router.post('/', requireAuth, async (req, res) => {
       });
     }
 
+    // Session-scoped idempotency. A checkout session represents ONE payment
+    // intent, so at most one live order may hang off it. If the session already
+    // points at a non-terminal order, resume it instead of minting a duplicate
+    // — guarded by payer email so a different payer on a shared device (or a
+    // misbehaving client) can never inherit the previous payer's order. When
+    // either email is unknown (the hosted flow doesn't collect one at the
+    // widget), fall back to the session id alone, since merchants create one
+    // session per payer.
+    if (!order && checkoutSession?.orderId) {
+      const linked = await prisma.order.findUnique({
+        where: { id: checkoutSession.orderId },
+        include: { steps: { orderBy: { sequence: 'asc' } } },
+      });
+      if (linked && ['awaiting_deposit', 'processing'].includes(linked.status)) {
+        const sessionEmail = normalizeEmail((checkoutSession.customer as any)?.email);
+        const incomingEmail = normalizeEmail(customer?.email);
+        const emailMismatch = !!sessionEmail && !!incomingEmail && sessionEmail !== incomingEmail;
+        if (emailMismatch) {
+          console.log(`[orders] session ${checkoutSession.id} email mismatch — starting a fresh order (silent)`);
+        } else {
+          order = linked;
+          console.log(`[orders] resuming session-linked order ${linked.id} for session ${checkoutSession.id}`);
+        }
+      }
+    }
+
     if (!order) {
       // Resolve customer identity: body wins, fall back to the session's customer
       // when the order was triggered from a hosted checkout. Pure passthrough —
@@ -375,13 +408,15 @@ router.post('/', requireAuth, async (req, res) => {
           userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
         });
 
-        // Link to checkout session if it exists and isn't already linked
-        if (checkoutSession && !checkoutSession.orderId) {
+        // Link the session to this order. Re-link (not just first-link) so the
+        // silent-fresh path — where a mismatched payer's order was previously
+        // linked — repoints the session at the current payer's new order.
+        if (checkoutSession && checkoutSession.orderId !== order.id) {
           await prisma.checkoutSession.update({
             where: { id: checkoutSession.id },
-            data: { 
+            data: {
               orderId: order.id,
-              status: 'processing' 
+              status: 'processing'
             }
           });
           console.log(`[orders] linked session ${checkoutSession.id} to order ${order.id}`);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type AssetKey,
   parseAsset,
@@ -51,6 +51,7 @@ const QueryClientProviderC = QueryClientProvider as unknown as (props: { client:
 import {
   createOrder,
   fetchOrder,
+  fetchSession,
   fetchQuote,
   cryptoKey,
   fiatKey,
@@ -243,6 +244,24 @@ const newOrderRef = () =>
   'weave_' + (typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36));
+
+// Stable, non-reversible fingerprint of a payer email, used to scope the resume
+// cache key to a specific payer. Two payers on a shared device land on different
+// keys, so one can never resume the other's pending order. FNV-1a is enough — we
+// only need collision-resistance for cache partitioning, not cryptographic
+// secrecy, and hashing (vs. the raw email) keeps PII out of localStorage keys.
+// Returns null when there's no email → the caller treats "no identity" as
+// "no auto-resume" rather than falling back to a shared per-merchant key.
+function payerFingerprint(email?: string | null): string | null {
+  const normalized = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (!normalized) return null;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < normalized.length; i++) {
+    h ^= normalized.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
 
 // EVM chains where we can verify an address shape with certainty. Non-EVM chains
 // (XRP, TON, Stellar, Solana, BTC, …) pass through — we have no reliable
@@ -2582,6 +2601,24 @@ function WeaveCheckoutInner({
     ((import.meta as any).env?.VITE_WEAVE_DEMO_USER_ADDRESS as string | undefined) ??
     '0x0000000000000000000000000000000000000000';
 
+  // Resume identity + cache key. Resume is gated on a payer identity so two
+  // payers on a shared device can never inherit each other's pending order:
+  //   • checkout session → the session id (server-authoritative resume).
+  //   • payment link / embed → the payer's email fingerprint.
+  //   • neither → no identity, so no auto-resume at all (safe-fail: the payer
+  //     starts fresh rather than risk resuming someone else's order).
+  // The cache key is only ever written/read under an identity; with no identity
+  // it still resolves to a per-merchant key for WRITES, but that key is never
+  // read for resume, so it can't leak across payers.
+  const payerFp = payerFingerprint(customer?.email);
+  const resumeIdentity = sessionId ?? (payerFp ? `e:${payerFp}` : null);
+  const storageKey = resumeIdentity
+    ? `weave-order-${apiKey}-${resumeIdentity}`
+    : `weave-order-${apiKey}`;
+  // Ensures the email-scoped cache resume fires at most once, even as the payer's
+  // typed email (and thus the identity/key) changes across keystrokes.
+  const resumedRef = useRef(false);
+
   // Wagmi wallet hooks
   const { address: wagmiAddress, chainId: wagmiChainId, isConnected: wagmiConnected } = useAccount();
   const { disconnect: wagmiDisconnect } = useDisconnect();
@@ -2589,7 +2626,7 @@ function WeaveCheckoutInner({
     wagmiDisconnect();
     // Only clear the widget's own resume record — NEVER localStorage.clear(),
     // which would wipe the merchant host page's entire origin storage.
-    try { localStorage.removeItem(`weave-order-${apiKey}`); } catch { /* storage unavailable */ }
+    try { localStorage.removeItem(storageKey); } catch { /* storage unavailable */ }
   };
   const { writeContractAsync } = useWriteContract();
   const { sendTransactionAsync } = useSendTransaction();
@@ -2643,80 +2680,90 @@ function WeaveCheckoutInner({
 
   // ── Persistence & Resumption ──────────────────────────────────────────────
 
-  // 1. Resumption logic on mount
-  useEffect(() => {
-    const saved = localStorage.getItem(`weave-order-${apiKey}`);
-    if (saved) {
-      try {
-        const { orderId: savedId, createdAt } = JSON.parse(saved);
-        // Don't resume orders older than 1h
-        if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
-          fetchOrder(apiKey, savedId).then(data => {
-            const order = data;
-            const dir = directionOf(order.sourceAssetKey, order.destAssetKey);
-            setDirection(dir === 'onramp' ? 'onramp' : 'offramp');
+  // Rehydrate the widget screens from a fetched order. Returns true when it drove
+  // a resume (order is live or already completed), false otherwise so the caller
+  // can clear stale cache. Shared by both resume paths (session + email cache).
+  const resumeFromOrder = useCallback((order: any): boolean => {
+    const dir = directionOf(order.sourceAssetKey, order.destAssetKey);
+    setDirection(dir === 'onramp' ? 'onramp' : 'offramp');
 
-            if (['awaiting_deposit', 'processing'].includes(order.status)) {
-              setOrderId(order.id);
+    if (['awaiting_deposit', 'processing'].includes(order.status)) {
+      setOrderId(order.id);
 
-              // Find the active step (usually the first one that isn't DONE)
-              const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
+      // Find the active step (usually the first one that isn't DONE)
+      const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
 
-              if (dir === 'onramp') {
-                if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
-                  if (order.sourceInstrument?.kind === 'bank_account') {
-                    setBankDetails({
-                      accountName: order.sourceInstrument.bankAccountName || '',
-                      accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
-                      institution: order.sourceInstrument.bankInstitution || '',
-                      currency: order.destAssetKey.split(':').pop() || 'NGN',
-                      amountToTransfer: order.sourceAmount.toString()
-                    });
-                  }
-                  setScreen('vaccount');
-                } else if (activeStep?.provider === 'paystack' && activeStep.paystackAccessCode) {
-                  setPaystackPopupDetails({
-                    accessCode: activeStep.paystackAccessCode,
-                    publicKey: '',
-                    amount: Number(activeStep.amountIn ?? order.sourceAmount),
-                    reference: activeStep.externalId ?? '',
-                  });
-                  setScreen('paystack_popup');
-                } else {
-                  setScreen('processing');
-                }
-              } else {
-                // Offramp
-                if (activeStep?.provider === 'nearintents' && order.status === 'awaiting_deposit') {
-                  setDepositAddress(activeStep.depositAddress);
-                  setDepositMemo(activeStep.depositMemo);
-                  setDepositAmount(Number(activeStep.amountIn));
-
-                  const parts = activeStep.fromAsset.split(':');
-                  setDepositToken(parts[2] || parts[1]);
-                  setDepositChain(parts[1]);
-                  setScreen('deposit');
-                } else {
-                  setScreen('processing');
-                }
-              }
-            } else if (order.status === 'completed') {
-              setOrderId(order.id);
-              setScreen('success');
-            } else {
-              // Order is expired, failed, or refunded. Clear it so it doesn't linger.
-              localStorage.removeItem(`weave-order-${apiKey}`);
-            }
-          }).catch(() => {
-            localStorage.removeItem(`weave-order-${apiKey}`);
+      if (dir === 'onramp') {
+        if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
+          if (order.sourceInstrument?.kind === 'bank_account') {
+            setBankDetails({
+              accountName: order.sourceInstrument.bankAccountName || '',
+              accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
+              institution: order.sourceInstrument.bankInstitution || '',
+              currency: order.destAssetKey.split(':').pop() || 'NGN',
+              amountToTransfer: order.sourceAmount.toString()
+            });
+          }
+          setScreen('vaccount');
+        } else if (activeStep?.provider === 'paystack' && activeStep.paystackAccessCode) {
+          setPaystackPopupDetails({
+            accessCode: activeStep.paystackAccessCode,
+            publicKey: '',
+            amount: Number(activeStep.amountIn ?? order.sourceAmount),
+            reference: activeStep.externalId ?? '',
           });
+          setScreen('paystack_popup');
+        } else {
+          setScreen('processing');
         }
-      } catch (e) {
-        localStorage.removeItem(`weave-order-${apiKey}`);
-      }
-    }
+      } else {
+        // Offramp
+        if (activeStep?.provider === 'nearintents' && order.status === 'awaiting_deposit') {
+          setDepositAddress(activeStep.depositAddress);
+          setDepositMemo(activeStep.depositMemo);
+          setDepositAmount(Number(activeStep.amountIn));
 
-    // Existing: Sync assets from API
+          const parts = activeStep.fromAsset.split(':');
+          setDepositToken(parts[2] || parts[1]);
+          setDepositChain(parts[1]);
+          setScreen('deposit');
+        } else {
+          setScreen('processing');
+        }
+      }
+      return true;
+    } else if (order.status === 'completed') {
+      setOrderId(order.id);
+      setScreen('success');
+      return true;
+    }
+    return false;
+  }, []);
+
+  // 1a. Session resume (server-authoritative) + one-time bootstrap (asset sync,
+  //     pre-selection). For a hosted checkout the session — not this browser —
+  //     owns the order, so we resume whatever order the session points at (and
+  //     nothing if it points at none). A different payer is on a different
+  //     session id, so browser cache is never consulted for the session flow.
+  useEffect(() => {
+    const resumeViaSession = async () => {
+      try {
+        const s = await fetchSession(apiKey, sessionId!);
+        if (s?.orderId && ['awaiting_deposit', 'processing', 'completed'].includes(s.orderStatus ?? '')) {
+          const order = await fetchOrder(apiKey, s.orderId);
+          if (!resumeFromOrder(order)) localStorage.removeItem(storageKey);
+        } else {
+          // Session owns no live order → nothing to resume; drop any stale cache.
+          localStorage.removeItem(storageKey);
+        }
+      } catch {
+        /* transient — leave state untouched, the payer can proceed fresh */
+      }
+    };
+
+    if (sessionId) void resumeViaSession();
+
+    // Sync assets from API
     fetchAssets(apiKey).then(data => {
       if (data) setSupportedAssets(data);
     }).catch(() => { });
@@ -2733,7 +2780,39 @@ function WeaveCheckoutInner({
         setScreen('deposit');
       }
     }
-  }, [apiKey]); // Run once on mount
+    // storageKey intentionally omitted: in the session flow it's stable (session-
+    // scoped, email-independent), and depending on it would re-run this bootstrap
+    // on every keystroke in the email-scoped (payment-link) flow.
+  }, [apiKey, sessionId, resumeFromOrder]); // Run once per (merchant, session)
+
+  // 1b. Cache resume — email-scoped (payment links / direct embeds, no session).
+  //     The payer's email is the identity, and it's typed AFTER mount, so this
+  //     re-evaluates as the identity (storageKey) changes and resumes the order
+  //     under the CURRENT payer's key only. With no email there is no identity,
+  //     so nothing is ever resumed — a second payer on a shared device can never
+  //     inherit the first payer's order. Fires at most once (resumedRef).
+  useEffect(() => {
+    if (sessionId) return;              // session flow resumes server-side (1a)
+    if (!resumeIdentity) return;        // no payer identity → no auto-resume
+    if (resumedRef.current || orderId) return; // already resumed or flow started
+
+    const saved = localStorage.getItem(storageKey);
+    if (!saved) return;
+    try {
+      const { orderId: savedId, createdAt } = JSON.parse(saved);
+      // Don't resume orders older than 1h
+      if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
+        fetchOrder(apiKey, savedId)
+          .then(order => {
+            if (resumeFromOrder(order)) resumedRef.current = true;
+            else localStorage.removeItem(storageKey);
+          })
+          .catch(() => localStorage.removeItem(storageKey));
+      }
+    } catch {
+      localStorage.removeItem(storageKey);
+    }
+  }, [apiKey, sessionId, resumeIdentity, storageKey, orderId, resumeFromOrder]);
 
   // supportedAssets.fiat starts as the SUPPORTED_FIAT constant, then gets
   // replaced by a NEW array reference once fetchAssets resolves — even when
@@ -2773,16 +2852,16 @@ function WeaveCheckoutInner({
   // 2. Persistence logic: Save state whenever orderId or screen changes
   useEffect(() => {
     if (orderId && !['success', 'error'].includes(screen)) {
-      localStorage.setItem(`weave-order-${apiKey}`, JSON.stringify({
+      localStorage.setItem(storageKey, JSON.stringify({
         orderId,
         screen,
         createdAt: Date.now()
       }));
     } else if (screen === 'success') {
       // Clear storage after success so next checkout is fresh
-      localStorage.removeItem(`weave-order-${apiKey}`);
+      localStorage.removeItem(storageKey);
     }
-  }, [orderId, screen, apiKey]);
+  }, [orderId, screen, storageKey]);
 
   // Derived Helpers
   const currencies: Record<string, Currency> = supportedAssets.fiat.reduce((acc, f) => {

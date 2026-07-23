@@ -222,6 +222,23 @@ export async function fetchOrder(publishableKey: string, orderId: string) {
   return apiFetch(`/orders/${orderId}`, publishableKey);
 }
 
+// ── Checkout sessions ──────────────────────────────────────────────────────
+// Public (unauthenticated-by-key) session read used to resume a hosted checkout
+// server-authoritatively. Returns the session's linked `orderId`/`orderStatus`
+// so the widget resumes the order the SESSION owns rather than whatever order id
+// happens to sit in this browser's cache — the fix for a shared device carrying
+// a previous payer's pending order.
+export interface PublicSession {
+  id: string;
+  status: 'open' | 'processing' | 'complete' | 'expired';
+  orderId: string | null;
+  orderStatus: string | null;
+}
+
+export async function fetchSession(publishableKey: string, sessionId: string): Promise<PublicSession> {
+  return apiFetch(`/checkout/sessions/public/${sessionId}`, publishableKey);
+}
+
 // ── Reference data ─────────────────────────────────────────────────────────
 
 export async function fetchCountries(publishableKey: string) {

@@ -186,6 +186,17 @@ router.get('/sessions/public/:id', apiLimiter, async (req, res) => {
       ? (session.merchant.sandboxPublishableKey ?? session.merchant.publishableKey)
       : session.merchant.publishableKey;
 
+    // Expose the linked order (id + status only — no PII) so the widget can
+    // resume server-authoritatively. A checkout session is one payment intent,
+    // so its linked order is the ONLY order the widget may resume for this
+    // payer — this is what stops a shared device from resuming a previous
+    // payer's order out of browser cache.
+    let orderStatus: string | null = null;
+    if (session.orderId) {
+      const order = await prisma.order.findUnique({ where: { id: session.orderId }, select: { status: true } });
+      orderStatus = order?.status ?? null;
+    }
+
     return res.json({
       success: true,
       data: {
@@ -201,6 +212,8 @@ router.get('/sessions/public/:id', apiLimiter, async (req, res) => {
         cancelUrl: session.cancelUrl,
         merchantName: session.merchant.name,
         publishableKey,
+        orderId: session.orderId ?? null,
+        orderStatus,
       },
     });
   } catch (err: any) {
