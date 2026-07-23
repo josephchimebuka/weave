@@ -1823,6 +1823,77 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
       <div className="rule-dotted" />
 
       <section className="space-y-5">
+        <SectionHeading icon={<ArrowRight size={17} />} title="What comes back to your redirect URL" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          Weave appends query params to your <IC>redirectUrl</IC> — or bounces to <IC>cancelUrl</IC> — depending on how the payer left the hosted page. These params are a UX signal only; see <strong className="text-ink">Verifying the redirect</strong> below before you trust them.
+        </p>
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { when: 'Payment confirmed',                 dest: 'redirectUrl', params: '?session_id=…&order_id=…', desc: 'The order reached completed. Both the session id and the order id are present.' },
+            { when: 'Returning to a completed session',  dest: 'redirectUrl', params: '?session_id=…&order_id=…', desc: 'Payer reopens the checkout URL (or hits back) after already paying. Same param set as a fresh success.' },
+            { when: 'Reloads mid-payment',               dest: '— no redirect', params: '',                       desc: 'Session still open / processing. The hosted page reloads in place and the payer resumes exactly where they left off; no redirect fires.' },
+            { when: 'Closes or abandons',                dest: 'cancelUrl',   params: ' (no params)',              desc: 'Payer dismisses the widget. Bounced to cancelUrl unchanged — nothing appended.' },
+            { when: 'Session expired',                   dest: 'cancelUrl',   params: ' (no params)',              desc: 'Past expiresAt. The expired screen links back to cancelUrl, unchanged.' },
+          ].map((row, i, arr) => (
+            <div key={row.when} className={`px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <span className="text-[13px] font-semibold text-ink">{row.when}</span>
+                <code className="text-[12px] font-mono text-forest-deep">{row.dest}<span className="text-ink-muted">{row.params}</span></code>
+              </div>
+              <p className="text-[12.5px] text-ink-muted mt-1 leading-relaxed">{row.desc}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-[12.5px] text-ink-muted leading-relaxed">
+          <IC>cancelUrl</IC> is optional. Without it, a closed or expired session has no onward destination — the payer just stays on the Weave page (the expired notice, or the widget as they left it).
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Shield size={17} />} title="Verifying the redirect" />
+        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl px-5 py-4 flex gap-3 text-[13.5px] text-amber-900 leading-relaxed">
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" strokeWidth={2} />
+          <span>
+            <strong>The query params are unsigned.</strong> Anyone can open <IC>{`redirectUrl?session_id=…&order_id=…`}</IC> directly, without paying. Never treat their presence as proof of payment — always confirm server-side before you fulfil.
+          </span>
+        </div>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">Two ways to confirm — use either, or both:</p>
+        <ul className="text-[13.5px] text-ink-muted leading-relaxed space-y-1.5 list-disc list-inside marker:text-forest">
+          <li><strong className="text-ink">Webhook (recommended, async).</strong> The <IC>order.completed</IC> webhook is the source of truth — fulfil there and you never depend on the redirect landing at all. See the Webhooks page.</li>
+          <li><strong className="text-ink">Synchronous check (on landing).</strong> When the payer hits your <IC>redirectUrl</IC>, call <IC>GET /checkout/sessions/:id</IC> with the <IC>session_id</IC> from the query and confirm <IC>orderStatus === 'completed'</IC> before showing success.</li>
+        </ul>
+        <CodeBlock id="cs-verify-redirect" copy={copy} copied={copied} lang="ts">
+{`// Your redirectUrl handler — trust the API, not the query string.
+app.get('/payment/success', async (req, res) => {
+  const { session_id } = req.query;
+
+  const r = await fetch(
+    \`https://api.paywithweave.com/api/v1/checkout/sessions/\${session_id}\`,
+    { headers: { 'x-secret-key': process.env.WEAVE_SECRET_KEY } },
+  );
+  const { data } = await r.json();
+
+  if (data?.orderStatus === 'completed') {
+    // Paid. Fulfil idempotently — the order.completed webhook may
+    // have already fulfilled this same order.
+    await fulfilOrder(data.orderId);
+    return res.render('success');
+  }
+
+  // Not paid (yet). Do NOT fulfil — show a pending / return state.
+  return res.render('pending');
+});`}
+        </CodeBlock>
+        <p className="text-[12.5px] text-ink-muted leading-relaxed">
+          Fulfil <strong className="text-ink">idempotently</strong>: the synchronous check and the webhook can both fire for the same order, so key fulfilment on <IC>orderId</IC> (or your own <IC>reference</IC>) and no-op if you've already delivered.
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
         <SectionHeading icon={<Terminal size={17} />} title="Create a session" />
         <p className="text-[13.5px] text-ink-muted leading-relaxed">
           <IC>POST /checkout/sessions</IC>. Required: <IC>amount</IC>, <IC>destAsset</IC>, <IC>redirectUrl</IC>. Auth via <IC>x-api-key</IC> (publishable) or <IC>x-secret-key</IC> (server-to-server).

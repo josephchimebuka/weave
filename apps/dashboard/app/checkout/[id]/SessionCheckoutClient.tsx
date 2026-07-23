@@ -25,6 +25,7 @@ export type SessionData = {
   cancelUrl: string | null;
   merchantName: string;
   publishableKey: string;
+  orderId: string | null;
 };
 
 function parseDestCurrency(destAsset: string): string {
@@ -58,7 +59,13 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
   // truth so there's never a double-navigation with mismatched query params.
   const [redirectTarget, setRedirectTarget] = useState<string | null>(() =>
     session.status === 'complete'
-      ? appendQuery(session.redirectUrl, { session_id: session.id })
+      ? appendQuery(session.redirectUrl, {
+          session_id: session.id,
+          // Keep the param set identical to the fresh-success path so order_id
+          // never silently disappears when a payer reloads or hits back on an
+          // already-completed session. A completed session always has an order.
+          ...(session.orderId ? { order_id: session.orderId } : {}),
+        })
       : null,
   );
 
