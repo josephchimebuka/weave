@@ -464,6 +464,9 @@ router.post('/', requireAuth, async (req, res) => {
       appFeeBps,
       reference: order.id,
       merchantMemo: `Weave ${order.id}`,
+      // The payer's email (same one used for the success receipt) — Paystack uses
+      // it as the customer email so charges aren't attributed to the merchant.
+      payerEmail: (order.customer as any)?.email,
       refundAddress,
       refundAccount,
       destBank,

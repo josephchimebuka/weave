@@ -35,6 +35,11 @@ export interface ExecutorInput {
   appFeeBps?: number;
   reference: string;
   merchantMemo: string;
+  // Payer's email — the same address the payer gives for the success receipt.
+  // Passed to Paystack as the customer email so a charge is attributed to the
+  // actual payer, NOT the merchant. A merchant==customer email reads as a
+  // self-payment to Paystack's fraud engine and gets systematically denied.
+  payerEmail?: string;
   // Source-side context, set per source-asset kind:
   refundAddress?: string;  // crypto source
   refundAccount?: { institution: string; accountIdentifier: string; accountName: string }; // fiat source
@@ -434,6 +439,17 @@ function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): Execute
 
 // ── Orchestrator ────────────────────────────────────────────────────────────
 
+// Paystack requires a customer email. Prefer the real payer's email (same one
+// used for the success receipt) so the charge is attributed to the payer. Fall
+// back to a per-order UNIQUE synthetic — never the merchant's email, which would
+// make every charge look like the merchant paying themselves (a fraud signal).
+function paystackCustomerEmail(input: ExecutorInput): string {
+  const payer = input.payerEmail?.trim();
+  if (payer) return payer;
+  const domain = process.env.PAYER_FALLBACK_EMAIL_DOMAIN || 'checkout.paywithweave.com';
+  return `payer-${input.orderId}@${domain}`;
+}
+
 export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult> {
   const { plan, orderId } = input;
 
@@ -496,7 +512,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         const merchant = await prisma.merchant.findUniqueOrThrow({ where: { id: input.merchantId } });
         const paystackRef = `${input.orderId}-${i}`;
         const txn = await paystack.initializeTransaction({
-          email:     merchant.email,
+          email:     paystackCustomerEmail(input),
           amountNgn: amountIn,
           reference: paystackRef,
           metadata:  { sandbox: true, orderId: input.orderId },
@@ -562,7 +578,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       // The remainder goes to the merchant subaccount. bearer:'subaccount' means Paystack's
       // processing fee is deducted from the merchant's share, not added on top for the payer.
       const txn = await paystack.initializeTransaction({
-        email: merchant.email,
+        email: paystackCustomerEmail(input),
         amountNgn: chargeAmountNgn,
         reference: paystackRef,
         subaccount: merchant.paystackSubaccountCode!,
