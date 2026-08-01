@@ -16,6 +16,7 @@ import { parseAsset } from '../lib/assets';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
+import { PAYSTACK_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 import { qstash } from '../lib/qstash';
 import * as Sentry from '@sentry/node';
 import { recordServerEvent } from './order-event.service';
@@ -463,6 +464,13 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     // If steps already exist AND have externalId, we are done.
     // If they are "pending", it means a race is happening.
     return reconstructResultFromSteps(input, existingSteps);
+  }
+
+  // Paystack kill switch (defense-in-depth). The router already refuses to plan
+  // a Paystack hop while disabled, but a caller supplying a pre-built plan could
+  // still reach here — never dispatch a Paystack charge for a fresh order.
+  if (!PAYSTACK_ENABLED && plan.steps.some(s => s.provider === 'paystack')) {
+    throw new Error(NAIRA_DISABLED_MESSAGE);
   }
 
   // 2. Pre-create steps to lock the order and prevent race conditions.

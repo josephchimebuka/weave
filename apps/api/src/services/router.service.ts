@@ -5,6 +5,7 @@
 
 import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
+import { PAYSTACK_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 
 export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack';
 
@@ -116,6 +117,15 @@ export function planRoute(req: RouteRequest): RoutePlan {
   const dst = parseAsset(req.destAsset);
   const flow: Flow = req.flow ?? 'external';
 
+  // Paystack kill switch. A pure NGN→NGN collection is the "pay with naira"
+  // (Paystack) path. If Paystack is disabled we must refuse it explicitly here —
+  // otherwise the BFS below would silently reroute NGN→NGN through Paycrest
+  // (onramp→offramp via USDC on Base), moving money on a corridor the caller
+  // never asked for. Crypto→fiat (Paycrest offramp) settlement is unaffected.
+  if (!PAYSTACK_ENABLED && src.kind === 'fiat' && dst.kind === 'fiat') {
+    throw new Error(NAIRA_DISABLED_MESSAGE);
+  }
+
   // Direct transfer is only possible for identical crypto assets.
   // Fiat assets ALWAYS require a bridge (Paycrest) in our architecture.
   if (req.sourceAsset === req.destAsset && src.kind === 'crypto') {
@@ -129,9 +139,13 @@ export function planRoute(req: RouteRequest): RoutePlan {
     }]);
   }
 
-  // Pre-filter edges by flow so the BFS traversal never considers a bridge
-  // that doesn't match the caller's checkout mode.
-  const edges = EDGES.filter(e => !e.flows || e.flows.includes(flow));
+  // Pre-filter edges by flow (and drop Paystack entirely while it's disabled) so
+  // the BFS traversal never considers a rail that doesn't match the caller's
+  // checkout mode or a provider that's been killed for an incident.
+  const edges = EDGES.filter(e =>
+    (e.provider !== 'paystack' || PAYSTACK_ENABLED) &&
+    (!e.flows || e.flows.includes(flow)),
+  );
 
   // BFS with depth ≤ 3. Small edge set; swap for Dijkstra when
   // expectedFeeBps/expectedSecs start mattering across many providers.

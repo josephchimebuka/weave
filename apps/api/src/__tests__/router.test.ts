@@ -25,10 +25,28 @@ describe('planRoute', () => {
     expect(plan.steps[1].provider).toBe('paycrest');
   });
 
-  it('NGN → NGN (external flow): single paystack step', () => {
-    const plan = planRoute({ sourceAsset: 'fiat:NGN', destAsset: 'fiat:NGN', amount: 5000, flow: 'external' });
-    expect(plan.steps).toHaveLength(1);
-    expect(plan.steps[0].provider).toBe('paystack');
+  it('NGN → NGN: rejected while the Paystack kill switch is off (default)', () => {
+    // PAYSTACK_ENABLED is unset in the test env, so naira collection is disabled.
+    // The router must refuse the pure-fiat route rather than silently rerouting
+    // it through Paycrest (onramp→offramp).
+    expect(() =>
+      planRoute({ sourceAsset: 'fiat:NGN', destAsset: 'fiat:NGN', amount: 5000, flow: 'external' }),
+    ).toThrow(/temporarily unavailable/i);
+  });
+
+  it('NGN → NGN: single paystack step when PAYSTACK_ENABLED=true', async () => {
+    const prev = process.env.PAYSTACK_ENABLED;
+    process.env.PAYSTACK_ENABLED = 'true';
+    vi.resetModules();
+    try {
+      const { planRoute: planEnabled } = await import('../services/router.service');
+      const plan = planEnabled({ sourceAsset: 'fiat:NGN', destAsset: 'fiat:NGN', amount: 5000, flow: 'external' });
+      expect(plan.steps).toHaveLength(1);
+      expect(plan.steps[0].provider).toBe('paystack');
+    } finally {
+      process.env.PAYSTACK_ENABLED = prev;
+      vi.resetModules();
+    }
   });
 
   it('NGN → USDC(Base): single paycrest onramp step', () => {

@@ -2560,6 +2560,17 @@ const DEFAULT_MERCHANT: Merchant = {
   currency: 'NGN',
 };
 
+// Kill switch: naira (Paystack) collection is suspended. While this message is
+// non-null the "Pay with <fiat>" method is greyed out with this note, but ONLY
+// for the pure-NGN (Paystack) path — i.e. a merchant settling to a naira bank
+// (destAssetKey 'fiat:NGN'). Crypto-settling merchants route "pay with naira"
+// through Paycrest onramp, which is unaffected, so their naira button stays live.
+// The API enforces the matching Paystack-only block server-side (see lib/flags.ts).
+// Set to null to restore. NOTE: changing this requires publishing a new
+// @weave-sdk/widget version.
+const FIAT_METHOD_DISABLED_NOTICE: string | null =
+  'Naira payments are temporarily unavailable — pay with crypto instead.';
+
 const CHAIN_TO_API: Record<string, string> = {
   Base: 'BASE',
   Optimism: 'OPTIMISM',
@@ -3342,8 +3353,19 @@ function WeaveCheckoutInner({
     setScreen(target);
   };
 
+  // Merge the naira kill switch into whatever the host passed, but ONLY for the
+  // pure-NGN Paystack path (naira-settling merchant). Crypto-settling merchants
+  // fund "pay with naira" via Paycrest onramp, which is unaffected — leave their
+  // button live. Mirrors the `isPureNgn` check in handleMethodPick and the
+  // Paystack-only block in the API router. An explicit caller-supplied fiat note
+  // still wins so a merchant can override the copy.
+  const isPaystackFiat = merchant.currency === 'NGN' && merchant.destAssetKey === 'fiat:NGN';
+  const effectiveDisabledMethods = (FIAT_METHOD_DISABLED_NOTICE && isPaystackFiat)
+    ? { fiat: FIAT_METHOD_DISABLED_NOTICE, ...disabledMethods }
+    : disabledMethods;
+
   const body = (() => {
-    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} disabledMethods={disabledMethods} />;
+    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} disabledMethods={effectiveDisabledMethods} />;
     if (isOnramp) {
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;

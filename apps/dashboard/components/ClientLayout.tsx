@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { Menu } from 'lucide-react';
 import Sidebar from './Sidebar';
+import { NoticeBanner } from './NoticeBanner';
 
 export function ClientLayout({
   children,
@@ -85,6 +86,14 @@ export function ClientLayout({
 
         <main className="flex-1">
           <div className="px-6 md:px-10 lg:px-14 py-8 md:py-10 max-w-[1400px] mx-auto">
+            {/* Global service notice. Swap tone/message (or remove) as needed;
+                see components/NoticeBanner.tsx for the reusable variants. */}
+            <NoticeBanner
+              tone="warning"
+              title="Naira payments temporarily unavailable"
+              message="An issue with our banking partner on the fiat leg means we can't collect naira right now. Crypto payments are unaffected, and all pending naira payouts have already been settled. We're aiming for a fix early next week and will send an update by Monday."
+              className="mb-6"
+            />
             {children}
           </div>
         </main>
