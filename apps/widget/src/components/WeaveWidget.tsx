@@ -2728,16 +2728,16 @@ const DEFAULT_MERCHANT: Merchant = {
   currency: 'NGN',
 };
 
-// Kill switch: naira (Paystack) collection is suspended. While this message is
-// non-null the "Pay with <fiat>" method is greyed out with this note, but ONLY
-// for the pure-NGN (Paystack) path — i.e. a merchant settling to a naira bank
-// (destAssetKey 'fiat:NGN'). Crypto-settling merchants route "pay with naira"
-// through Paycrest onramp, which is unaffected, so their naira button stays live.
-// The API enforces the matching Paystack-only block server-side (see lib/flags.ts).
-// Set to null to restore. NOTE: changing this requires publishing a new
-// @weave-sdk/widget version.
-const FIAT_METHOD_DISABLED_NOTICE: string | null =
-  'Naira payments are temporarily unavailable — pay with crypto instead.';
+// Kill switch: pure-NGN (naira→naira) collection. While this message is non-null
+// the "Pay with <fiat>" method is greyed out with this note, but ONLY for the
+// pure-NGN path — i.e. a merchant settling to a naira bank (destAssetKey
+// 'fiat:NGN'). Crypto-settling merchants route "pay with naira" through Paycrest
+// onramp, which is unaffected, so their naira button stays live regardless.
+// The API enforces the matching block server-side via BACHS_ENABLED/PAYSTACK_ENABLED
+// (see lib/flags.ts). Naira collection is RESTORED via Bachs, so this is null.
+// Set to a message string to re-suspend. NOTE: changing this requires publishing
+// a new @weave-sdk/widget version.
+const FIAT_METHOD_DISABLED_NOTICE: string | null = null;
 
 const CHAIN_TO_API: Record<string, string> = {
   Base: 'BASE',
