@@ -940,11 +940,18 @@ router.get('/audit-events/all', requireSession, async (req, res) => {
       : [];
     const byId = new Map(merchants.map((m) => [m.id, m]));
 
-    const data = events.map((e) => ({
-      ...e,
-      merchant: e.merchantId ? byId.get(e.merchantId) ?? null : null,
-      device: deviceTypeFromUA(e.userAgent),
-    }));
+    const data = events.map((e) => {
+      // Server-to-server callers (API/secret key) and internal system actions
+      // carry no User-Agent — classify those as "Server" rather than "Unknown".
+      const authMethod = (e.metadata as Record<string, unknown> | null)?.authMethod;
+      const serverAuth =
+        e.actorType === 'system' || authMethod === 'api_key' || authMethod === 'secret_key';
+      return {
+        ...e,
+        merchant: e.merchantId ? byId.get(e.merchantId) ?? null : null,
+        device: deviceTypeFromUA(e.userAgent, { serverAuth }),
+      };
+    });
 
     return res.json({ success: true, data });
   } catch (err: any) {

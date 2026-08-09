@@ -2,8 +2,16 @@ export type DeviceType = 'Phone' | 'Tablet' | 'Desktop' | 'Server' | 'Bot' | 'Un
 
 // Lightweight, dependency-free device classification from a User-Agent string.
 // Enough for the "Phone / Desktop" display Paystack shows — not a full UA parser.
-export function deviceTypeFromUA(ua: string | null | undefined): DeviceType {
-  if (!ua) return 'Unknown';
+export function deviceTypeFromUA(
+  ua: string | null | undefined,
+  opts?: { serverAuth?: boolean },
+): DeviceType {
+  // A server-to-server caller (a merchant's backend via API/secret key, or an
+  // internal system job) sends no User-Agent — Node's fetch omits it entirely.
+  // Classify those as "Server" rather than a misleading "Unknown". Browser paths
+  // always carry a UA (the dashboard proxy forwards it), so an empty UA here
+  // genuinely means a non-browser caller.
+  if (!ua) return opts?.serverAuth ? 'Server' : 'Unknown';
   const s = ua.toLowerCase();
 
   // Server-side HTTP clients (a merchant's backend calling the API) — NOT an

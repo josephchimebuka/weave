@@ -1,4 +1,5 @@
 import { readSessionCookie } from '../../../../lib/auth-server';
+import { proxyHeaders } from '../../../../lib/proxy-headers';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
@@ -10,7 +11,7 @@ export async function POST() {
 
     const res = await fetch(`${API_BASE}/merchant/bachs/connect`, {
       method: 'POST',
-      headers: { 'x-session-token': token, 'Content-Type': 'application/json' },
+      headers: await proxyHeaders(token, { 'Content-Type': 'application/json' }),
       cache: 'no-store',
     });
 

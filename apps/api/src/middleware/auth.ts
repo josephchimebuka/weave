@@ -8,6 +8,10 @@ declare global {
     interface Request {
       merchantId: string;
       sandboxMode: boolean;
+      // Which credential authenticated this request. Server-to-server callers
+      // ('api_key' / 'secret_key') send no User-Agent, so the audit trail uses
+      // this to classify their device as "Server" rather than "Unknown".
+      authMethod?: 'api_key' | 'secret_key' | 'session';
       // Set only when the auth strategy already loaded the full Merchant row
       // (API key, session) — route handlers can reuse it to skip a redundant
       // re-fetch. Not set for secret-key auth, which only loads a KeyPair.
@@ -31,6 +35,7 @@ export async function requireApiKey(req: Request, res: Response, next: NextFunct
       req.merchantId = liveMerchant.id;
       req.sandboxMode = false;
       req.merchant = liveMerchant;
+      req.authMethod = 'api_key';
       return next();
     }
 
@@ -39,6 +44,7 @@ export async function requireApiKey(req: Request, res: Response, next: NextFunct
       req.merchantId = sandboxMerchant.id;
       req.sandboxMode = true;
       req.merchant = sandboxMerchant;
+      req.authMethod = 'api_key';
       return next();
     }
 
@@ -88,6 +94,7 @@ export async function requireKeyPair(req: Request, res: Response, next: NextFunc
 
     req.merchantId = keyPair.merchantId;
     req.sandboxMode = keyPair.isSandbox;
+    req.authMethod = 'secret_key';
     return next();
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Auth service error' });
@@ -115,6 +122,7 @@ export async function requireSession(req: Request, res: Response, next: NextFunc
     req.merchantId = session.merchantId;
     req.sandboxMode = false;
     req.merchant = session.merchant;
+    req.authMethod = 'session';
     return next();
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'Auth service error' });

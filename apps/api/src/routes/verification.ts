@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma';
 import { requireAuth } from '../middleware/auth';
 import { sendAdminKYBNotification } from '../services/email.service';
 import { recordMerchantAudit } from '../services/audit.service';
+import { qstash } from '../lib/qstash';
 
 const router = Router();
 
@@ -82,10 +83,27 @@ router.post('/submit', requireAuth, async (req, res) => {
       targetId: verification.id,
     });
 
-    // Notify company admin via email with approve/reject magic links
-    sendAdminKYBNotification(verification.id).catch(err => {
-      console.error('[verification] failed to trigger admin notification email:', err.message);
-    });
+    // Notify company admin via email (carries the review magic link). Routed
+    // through QStash — not called in-process — so a transient Resend/DB blip gets
+    // real retries instead of silently dropping the admin's only notification.
+    const apiBase = process.env.API_BASE;
+    if (apiBase) {
+      await qstash.publishJSON({
+        url:  `${apiBase}/jobs/notify-admin-kyb`,
+        body: { verificationId: verification.id },
+      }).catch(err => {
+        // The enqueue itself failing is the one spot with no downstream retry —
+        // fall back to an in-process send so the alert still has a chance to land.
+        console.error('[verification] failed to enqueue admin KYB notification:', err.message);
+        sendAdminKYBNotification(verification.id).catch(e =>
+          console.error('[verification] fallback admin KYB email also failed:', e.message));
+      });
+    } else {
+      // No QStash target configured (e.g. local dev) — send directly.
+      console.warn('[verification] API_BASE not set — sending admin KYB email in-process');
+      sendAdminKYBNotification(verification.id).catch(err =>
+        console.error('[verification] admin KYB email failed:', err.message));
+    }
 
     res.json({ success: true, data: verification });
   } catch (err: any) {

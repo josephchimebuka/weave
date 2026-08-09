@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { proxyHeaders } from '../../../lib/proxy-headers';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
@@ -17,10 +18,9 @@ export async function POST(
 
     const res = await fetch(`${API_BASE}/auth/${path}`, {
       method: 'POST',
-      headers: { 
+      headers: await proxyHeaders(request.headers.get('x-session-token') || '', {
         'Content-Type': 'application/json',
-        'x-session-token': request.headers.get('x-session-token') || '',
-      },
+      }),
       body: JSON.stringify(body),
     });
 

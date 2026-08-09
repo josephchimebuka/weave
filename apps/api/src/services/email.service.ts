@@ -141,14 +141,15 @@ export async function sendAdminSignupNotification(merchantId: string, email: str
  * Sends a notification to the company admin when a merchant submits KYB.
  * Includes "Magic Link" buttons for immediate approval/rejection.
  */
-export async function sendAdminKYBNotification(verificationId: string) {
+export async function sendAdminKYBNotification(verificationId: string): Promise<boolean> {
   try {
     const v = await prisma.businessVerification.findUnique({
       where: { id: verificationId },
       include: { merchant: true }
     });
 
-    if (!v) return;
+    // Nothing to notify about — treat as terminal success so QStash stops retrying.
+    if (!v) return true;
 
     // Single review token. The review page (re-)mints fresh, short-lived
     // approve/reject tokens itself — keeps the email surface minimal so
@@ -196,11 +197,13 @@ export async function sendAdminKYBNotification(verificationId: string) {
 
     if (error) {
       console.error(`[admin-notify] Resend Error:`, error);
-    } else {
-      console.log(`[admin-notify] KYB alert sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
+      return false;
     }
+    console.log(`[admin-notify] KYB alert sent to ${COMPANY_ADMIN_EMAIL} (id: ${data?.id})`);
+    return true;
   } catch (err: any) {
     console.error(`[admin-notify] fatal error:`, err.message);
+    return false;
   }
 }
 

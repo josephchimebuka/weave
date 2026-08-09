@@ -4,7 +4,7 @@ import { qstashReceiver } from '../lib/qstash';
 import { prisma } from '../lib/prisma';
 import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll, runBachsSplit, scheduleBachsSettle, runBachsWithdrawal, scheduleBachsPayout } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
-import { sendMerchantPaymentNotification, sendCustomerReceiptEmail } from '../services/email.service';
+import { sendMerchantPaymentNotification, sendCustomerReceiptEmail, sendAdminKYBNotification } from '../services/email.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 
@@ -332,6 +332,28 @@ router.post('/notify-order-completed', verifyQStash, async (req, res) => {
     // are cheap/harmless to re-run (at worst, a duplicate transactional email) —
     // far preferable to the previous silent, permanent drop.
     return res.status(500).json({ success: false, merchantEmailOk, customerEmailOk, webhookOk });
+  }
+  res.json({ success: true });
+});
+
+// ── Admin KYB notification (reliable delivery) ──────────────────────────────
+// Enqueued by POST /verification/submit. The admin alert MUST land (it carries
+// the review magic link), so it runs here behind QStash retries rather than as
+// an in-process fire-and-forget that dies on the first transient Resend blip.
+router.post('/notify-admin-kyb', verifyQStash, async (req, res) => {
+  const { verificationId } = req.body as { verificationId: string };
+  if (!verificationId) return res.status(400).json({ error: 'missing verificationId' });
+
+  const ok = await sendAdminKYBNotification(verificationId);
+  if (!ok) {
+    Sentry.captureMessage('notify-admin-kyb: admin KYB email failed to send', {
+      level: 'error',
+      tags: { job: 'notify-admin-kyb' },
+      extra: { verificationId },
+    });
+    // 500 → QStash retries. Re-sending is harmless (at worst a duplicate admin
+    // email) and far better than permanently dropping the review link.
+    return res.status(500).json({ success: false });
   }
   res.json({ success: true });
 });

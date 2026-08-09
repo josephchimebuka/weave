@@ -100,6 +100,11 @@ export function recordMerchantAudit(
   action: string,
   extra: Partial<AuditInput> = {},
 ): void {
+  // Stamp the auth method into metadata so the audit view can classify device:
+  // server-to-server callers (API/secret key) send no User-Agent, and this lets
+  // the reader show "Server" instead of a misleading "Unknown". Merge rather than
+  // overwrite any caller-supplied metadata.
+  const { metadata: extraMeta, ...restExtra } = extra;
   recordAudit({
     merchantId: req.merchantId ?? null,
     actorType: 'merchant',
@@ -107,6 +112,7 @@ export function recordMerchantAudit(
     action,
     ip: req.ip ?? null,
     userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
-    ...extra,
+    metadata: { ...(extraMeta ?? {}), authMethod: req.authMethod ?? null },
+    ...restExtra,
   });
 }

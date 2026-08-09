@@ -1,4 +1,5 @@
 import { readSessionCookie } from '../../../../lib/auth-server';
+import { proxyHeaders } from '../../../../lib/proxy-headers';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
@@ -9,7 +10,7 @@ export async function POST() {
 
     const res = await fetch(`${API_BASE}/merchant/webhook/secret`, {
       method: 'POST',
-      headers: { 'x-session-token': token },
+      headers: await proxyHeaders(token),
     });
     if (!res.ok) return Response.json({ error: 'Failed' }, { status: res.status });
 
