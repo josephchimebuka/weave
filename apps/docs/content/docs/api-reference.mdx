@@ -1,0 +1,419 @@
+---
+title: API Reference
+description: The full surface for the direct API and checkout-session integration paths — widget props, endpoints, and order statuses.
+---
+
+Every endpoint returns `{ success: boolean, data?, error? }`; non-2xx responses still carry a structured error. Base URL: `https://api.paywithweave.com/api/v1`.
+
+## Authentication
+
+| Context | Header | Notes |
+| --- | --- | --- |
+| Browser / widget | `x-api-key: pk_live_…` | Publishable key. Safe to ship in client code. Scoped to creating + reading own orders. |
+| Server-to-server | `x-secret-key: sk_live_…` | Secret key — authenticates on its own. Required for anything that should not be possible from the browser. Never expose it in client code. (Optionally pair with `x-public-key`.) |
+| Sandbox | `x-api-key: pk_test_…` | Same surface, no real funds. Orders auto-complete, outbound webhooks are suppressed, and orders are flagged as sandbox in the dashboard. |
+
+Endpoints are grouped below into **payment** (quotes, orders), **checkout sessions** (the hosted-redirect flow), and **reference data** (institutions, assets). Each lists its parameters and response shape — and the [API Playground](/api-playground) runs any of them live against your key.
+
+## Widget Props
+
+### WeaveCheckout
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | optional | Publishable key (`pk_live_…` or `pk_test_…`). Falls back to `window.__WEAVE_API_KEY__` or `VITE_WEAVE_PUBLIC_KEY`. |
+| `merchant` | `Merchant` | optional | Payment context. See Merchant props below. |
+| `theme` | `"organic" \| "minimal"` | optional | Visual theme. organic (default) = soft curves + warmer palette; minimal = flat. |
+| `accentColor` | `string` | optional | Brand accent. `"forest"` \| `"tan"` or any hex, e.g. `"#0F5D4C"`. Controls buttons and receipt. |
+| `borderRadius` | `number` | optional | Corner radius of the widget frame in px. Default: 16. |
+| `userAddress` | `string` | optional | Pre-fill a connected wallet address. |
+| `apiBase` | `string` | optional | Override the API base URL for proxying or local testing. |
+| `onSuccess` | `(txn: { orderId, status }) => void` | optional | Called when the order reaches completed status. |
+| `onError` | `(err: Error) => void` | optional | Called on unrecoverable errors. |
+| `onClose` | `() => void` | optional | Called when the user dismisses without completing. |
+
+### Merchant
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | `string` | required | Business or store name shown to the payer. |
+| `amount` | `number` | required | Payment amount denominated in currency (or in dest asset when amountIn is `"dest"`). |
+| `currency` | `string` | required | ISO 4217 settlement currency, e.g. `"NGN"`. |
+| `description` | `string` | optional | Order description shown in the widget and on the receipt. |
+| `amountIn` | `"source" \| "dest"` | optional | `"source"` (default) — customer deposits exactly this. `"dest"` — you receive exactly this; customer pays the crypto equivalent including fees. |
+| `sourceAssetKey` | `string` | optional | Lock payer to a specific asset, e.g. `"crypto:ETHEREUM:USDC"`. Widget lets customer choose when omitted. |
+| `destAssetKey` | `string` | optional | Lock settlement destination asset, e.g. `"fiat:NGN"`. Overrides your configured default payout. |
+| `destInstrument` | `InlineBankInstrument \| InlineWalletInstrument` | optional | Explicit payout instrument for this order. Overrides both destAssetKey and the merchant default. |
+
+## Endpoints
+
+### GET `/quotes`
+
+Live exchange rate and full fee breakdown for any asset pair.
+
+**Parameters**
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `from` | `string` | required | Source asset key — e.g. `crypto:ETHEREUM:USDC` |
+| `to` | `string` | required | Destination asset key — e.g. `fiat:NGN` |
+| `amount` | `number` | required | Amount in source asset (or dest when amountIn=dest) |
+| `amountIn` | `"source" \| "dest"` | optional | Whether amount is source- or dest-denominated. Default: source |
+
+**Request**
+
+```bash
+curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:ETHEREUM:USDC&to=fiat:NGN&amount=50" \
+  -H "x-api-key: pk_live_..."
+```
+
+**Response**
+
+```json
+{
+  "data": {
+    "estimatedDest": 74250.00,
+    "breakdown": {
+      "usdEquivalent": 50,
+      "sourceAmount":  50,
+      "senderFeeUsd":  0.375,
+      "appFeeUsd":     0.05,
+      "bridgeFeeUsd":  0.10,
+      "netUsd":        49.475,
+      "sellRate":      1500.00
+    },
+    "route": {
+      "steps": [
+        { "provider": "nearintents", "fromAsset": "crypto:ETHEREUM:USDC",  "toAsset": "crypto:BASE:USDC", "expectedFeeBps": 25, "expectedSecs": 90 },
+        { "provider": "paycrest",    "fromAsset": "crypto:BASE:USDC", "toAsset": "fiat:NGN",          "expectedFeeBps": 85, "expectedSecs": 90 }
+      ],
+      "totalExpectedFeeBps": 110,
+      "totalExpectedSecs":   180
+    }
+  }
+}
+```
+
+### POST `/orders`
+
+Create a payment order. Returns `depositInstruction` (framework-agnostic) alongside `nextAction` (widget-specific).
+
+**Parameters**
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `source.inline.kind` | `"crypto_wallet" \| "bank_account"` | required | Type of source instrument |
+| `source.inline.assetKey` | `string` | required | Source asset key, e.g. `crypto:ETHEREUM:USDC` |
+| `source.inline.walletAddress` | `string` | optional | Customer wallet address (crypto sources) |
+| `amount` | `number` | required | Payment amount in source units (unless amountIn=dest) |
+| `amountIn` | `"source" \| "dest"` | optional | Whether amount is source- or dest-denominated. Default: source |
+| `flow` | `"external" \| "self"` | optional | `"external"` = NEAR Intents (deposit address, any chain). `"self"` = ChainRails (connected EVM wallet). Default: external |
+| `refundAddress` | `string` | optional | Customer wallet for refunds on failure. Defaults to walletAddress |
+| `reference` | `string` | optional | Your unique ID for idempotent creation — returns HTTP 409 if a matching order already exists |
+| `customer` | `{ email?, name?, externalId? }` | optional | Payer identity passthrough. Weave never verifies these fields — echoed in the webhook and on receipt emails |
+| `dest` | `InstrumentRef` | optional | Override the payout destination. Defaults to your merchant default |
+
+**Request**
+
+```bash
+curl https://api.paywithweave.com/api/v1/orders \
+  -X POST -H "x-api-key: pk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": {
+      "inline": {
+        "kind":          "crypto_wallet",
+        "assetKey":      "crypto:ETHEREUM:USDC",
+        "walletAddress": "0xCustomerWallet"
+      }
+    },
+    "amount":        50,
+    "flow":          "external",
+    "refundAddress": "0xCustomerWallet"
+  }'
+```
+
+**Response**
+
+```json
+{
+  "data": {
+    "order": {
+      "id":             "ord_abc123",
+      "status":         "awaiting_deposit",
+      "sourceAmount":   50.38,
+      "destAmount":     74250.00,
+      "sourceAssetKey": "crypto:ETHEREUM:USDC",
+      "destAssetKey":   "fiat:NGN",
+      "senderFeeUsd":   0.375,
+      "appFeeUsd":      0.05,
+      "bridgeFeeUsd":   0.10,
+      "createdAt":      "2026-05-01T10:00:00Z"
+    },
+    "depositInstruction": {
+      "type":           "crypto_transfer",
+      "depositAddress": "0xNEARIntentsDepositAddress",
+      "depositMemo":    null,
+      "amount":         50.38,
+      "token":          "USDC",
+      "chain":          "ETHEREUM",
+      "expiresAt":      "2026-05-01T11:00:00Z"
+    },
+    "nextAction": {
+      "screen":         "collect_crypto",
+      "depositAddress": "0xNEARIntentsDepositAddress",
+      "depositMemo":    null,
+      "amount":         50.38,
+      "token":          "USDC",
+      "chain":          "ETHEREUM"
+    }
+  }
+}
+```
+
+### GET `/orders/:id`
+
+Fetch a single order. Triggers a live sync from the active provider before returning.
+
+**Parameters**
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `:id` | `string` | required | Order ID from POST /orders |
+
+**Request**
+
+```bash
+curl https://api.paywithweave.com/api/v1/orders/ord_abc123 \
+  -H "x-api-key: pk_live_..."
+```
+
+**Response**
+
+```json
+{
+  "data": {
+    "id":             "ord_abc123",
+    "status":         "completed",
+    "sourceAmount":   50.38,
+    "destAmount":     74250.00,
+    "sourceAssetKey": "crypto:ETHEREUM:USDC",
+    "destAssetKey":   "fiat:NGN",
+    "steps": [
+      {
+        "sequence":       0,
+        "provider":       "nearintents",
+        "status":         "done",
+        "depositAddress": "0xNEARDeposit",
+        "depositMemo":    null,
+        "amountIn":       50.38,
+        "amountOut":      50.30
+      },
+      {
+        "sequence":  1,
+        "provider":  "paycrest",
+        "status":    "done",
+        "amountIn":  50.30,
+        "amountOut": 74250.00
+      }
+    ]
+  }
+}
+```
+
+### GET `/orders`
+
+List your last 50 orders, newest first.
+
+**Request**
+
+```bash
+curl https://api.paywithweave.com/api/v1/orders \
+  -H "x-api-key: pk_live_..."
+```
+
+**Response**
+
+```json
+{
+  "data": [
+    {
+      "id":             "ord_abc123",
+      "status":         "completed",
+      "sourceAmount":   50.38,
+      "sourceAssetKey": "crypto:ETHEREUM:USDC",
+      "destAssetKey":   "fiat:NGN",
+      "createdAt":      "2026-05-01T10:05:00Z"
+    },
+    {
+      "id":             "ord_xyz789",
+      "status":         "awaiting_deposit",
+      "sourceAmount":   100,
+      "sourceAssetKey": "crypto:BASE:USDC",
+      "destAssetKey":   "fiat:NGN",
+      "createdAt":      "2026-05-01T09:12:00Z"
+    }
+  ]
+}
+```
+
+### GET `/institutions`
+
+List supported bank institutions for a currency — use to populate bank pickers in onramp flows.
+
+**Parameters**
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `currency` | `string` | required | ISO 4217 currency code, e.g. NGN |
+
+**Request**
+
+```bash
+curl "https://api.paywithweave.com/api/v1/institutions?currency=NGN" \
+  -H "x-api-key: pk_live_..."
+```
+
+**Response**
+
+```json
+{
+  "data": [
+    { "name": "Access Bank", "code": "ACCESS", "id": "..." },
+    { "name": "GTBank",      "code": "GTBANK", "id": "..." },
+    { "name": "Zenith Bank", "code": "ZENITH", "id": "..." }
+  ]
+}
+```
+
+### GET `/assets`
+
+List every supported fiat and crypto asset. Use the `key` field as the canonical asset identifier in other endpoints.
+
+**Request**
+
+```bash
+curl https://api.paywithweave.com/api/v1/assets
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "fiat": [
+      { "key": "fiat:NGN", "name": "Nigerian Naira", "symbol": "₦", "country": "Nigeria" }
+    ],
+    "crypto": [
+      { "key": "crypto:BASE:USDC",  "id": "BASE",  "token": "USDC", "name": "Base" },
+      { "key": "crypto:SOLANA:SOL", "id": "SOLANA","token": "SOL",  "name": "Solana" }
+    ]
+  }
+}
+```
+
+### POST `/checkout/sessions`
+
+Create a hosted checkout session. Returns a `checkoutUrl` you redirect your user to (Stripe-style).
+
+**Parameters**
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `amount` | `number` | required | Payment amount, denominated in destAsset when amountIn=dest |
+| `amountIn` | `"source" \| "dest"` | optional | Whose amount the figure represents. Default: dest |
+| `destAsset` | `string` | required | Canonical asset key for what the merchant receives, e.g. `fiat:NGN` |
+| `sourceAsset` | `string` | optional | Lock the payer to a specific source asset. Omit to let them choose on the hosted page |
+| `reference` | `string` | optional | Your internal ID, echoed in the webhook |
+| `metadata` | `object` | optional | Opaque JSON object, echoed in the webhook |
+| `customer` | `{ email?, name?, externalId? }` | optional | Payer identity passthrough. Weave never verifies these fields — echoed in the webhook and on receipt emails |
+| `redirectUrl` | `string` | required | HTTPS URL the user is redirected to once payment is confirmed |
+| `cancelUrl` | `string` | optional | HTTPS URL the user lands on if they abandon or the session expires |
+| `expiresIn` | `number` | optional | Seconds until the session expires. Default 7200 (2h). Min 300. Max 86400 |
+
+**Request**
+
+```bash
+curl https://api.paywithweave.com/api/v1/checkout/sessions \
+  -X POST -H "x-api-key: pk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "amount":      5000,
+    "destAsset":   "fiat:NGN",
+    "redirectUrl": "https://yourstore.com/payment/success",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" }
+  }'
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "checkoutUrl": "https://app.paywithweave.com/checkout/clx9abc...",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "status":      "open"
+  }
+}
+```
+
+### GET `/checkout/sessions/:id`
+
+Retrieve a checkout session and the status of any linked order.
+
+**Parameters**
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `:id` | `string` | required | Session ID from POST /checkout/sessions |
+
+**Request**
+
+```bash
+curl https://api.paywithweave.com/api/v1/checkout/sessions/clx9abc... \
+  -H "x-api-key: pk_live_..."
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id":           "clx9abc...",
+    "status":       "complete",
+    "amount":       5000,
+    "destAsset":    "fiat:NGN",
+    "reference":    "order_abc123",
+    "metadata":     { "userId": "usr_999" },
+    "orderId":      "ord_xyz",
+    "orderStatus":  "completed",
+    "expiresAt":    "2026-05-28T14:00:00Z",
+    "createdAt":    "2026-05-28T12:00:00Z"
+  }
+}
+```
+
+## Order Statuses
+
+| Status | Description |
+| --- | --- |
+| `awaiting_deposit` | Created — waiting for the customer to send funds. |
+| `processing` | Deposit detected — bridge / settlement in progress. |
+| `completed` | Funds delivered to your payout destination. |
+| `failed` | Payment failed or expired. No funds moved. |
+| `expired` | No deposit received within the session window. |
+
+### Route Step Statuses
+
+| Status | Description |
+| --- | --- |
+| `pending` | Step queued — provider resource not yet created. |
+| `awaiting_deposit` | Provider created — waiting for deposit. |
+| `in_flight` | Funds received — provider processing the hop. |
+| `done` | Hop completed — funds forwarded to next step. |
+| `failed` | Hop failed. Triggers order-level failure. |

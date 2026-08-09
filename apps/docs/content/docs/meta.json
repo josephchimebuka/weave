@@ -1,0 +1,15 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "widget-playground",
+    "api-reference",
+    "api-playground",
+    "checkout-sessions",
+    "cashout-links",
+    "webhooks",
+    "agents",
+    "security",
+    "support"
+  ]
+}

@@ -1,0 +1,196 @@
+---
+title: Introduction
+description: Accept any currency, settle anywhere. Customers pay in 30+ chains or fiat; you receive NGN to a bank account or USDC to a wallet — automatically.
+---
+
+Weave is a universal payment orchestrator. Customers pay in 30+ chains or fiat;
+you receive NGN to your bank account or USDC to a wallet — automatically. You
+integrate once, and Weave handles wallet connections, chain switching, the
+deposit-address screen, real-time status, and the success receipt.
+
+<Callout type="info">
+**Settlement times** — NGN to your bank: **30 s – 2 min**. Crypto-sourced NGN via Paycrest: **30 s – 2 min**. Crypto wallet payouts: **near-instant**.
+</Callout>
+
+## Start here
+
+<Cards>
+  <Card title="2-min setup" href="/widget-playground">One script tag or one React component. No build step.</Card>
+  <Card title="REST API" href="/api-reference">Server-side, programmatic control over quotes and orders.</Card>
+  <Card title="Checkout URLs" href="/checkout-sessions">Redirect users to a Weave-hosted payment page.</Card>
+  <Card title="Webhooks" href="/webhooks">HMAC-signed async notifications — your source of truth.</Card>
+</Cards>
+
+## Authentication
+
+Every request includes an `x-api-key` (publishable) or `x-secret-key` (secret) header. Two key types exist — use each in the right context.
+
+| Key | Prefix | Where it's used |
+| --- | --- | --- |
+| **Publishable** | `pk_live_…` / `pk_test_…` | Safe in browser code and the widget. Scoped to **quotes** and **order creation**. Never grants read access to your account details. |
+| **Secret** | `sk_live_…` / `sk_test_…` | Server-side only. Never expose in client code, logs, or version control. Shown exactly once after generation — store it immediately. |
+
+```bash
+# Publishable key — safe in the browser / widget
+curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:NGN&amount=50" \
+  -H "x-api-key: pk_live_..."
+```
+
+## Choosing how to integrate
+
+There's no single right way to plug Weave in — the best fit depends on how much UI control you want and where the payment lives in your product. All three paths route through the same providers, settle to the same payout destination, and fire the same webhooks. Pick by what fits your stack today; you can always add or swap paths later.
+
+<Cards>
+  <Card title="Path A · The Widget" href="/widget-playground">Drop-in checkout — a React component or one script tag. The fastest start.</Card>
+  <Card title="Path B · Direct API" href="/api-reference">A fully custom checkout over the REST API. Total control.</Card>
+  <Card title="Path C · Checkout Sessions" href="/checkout-sessions">Redirect to a Weave-hosted page. The Stripe-style flow.</Card>
+</Cards>
+
+| | Best when | What you build | Who owns the UI |
+| --- | --- | --- | --- |
+| **Widget** | You have a page and want to drop a checkout into it. | A `<WeaveCheckout>` component, or one `<script>` tag. | Weave owns the payment UI; you own the page. |
+| **Direct API** | You want a fully custom flow, or a stack the widget doesn't target (native, terminal, voice). | Server calls to `/quotes`, `/orders`, `/orders/:id`; render the deposit instruction yourself. | You own every pixel; Weave handles routing + settlement. |
+| **Checkout Sessions** | You want "redirect away, come back when done" — invoices, SMS links, SSR apps. | `POST /checkout/sessions`, then redirect to the returned `checkoutUrl`. | Weave hosts the page; your server owns the flow. |
+
+<Callout type="info">
+**You can mix paths inside a single merchant account.** Ship a widget on web, a checkout-session redirect from your iOS app, and a direct-API integration in your back-office tool — all under the same keys, all in the same dashboard, all firing the same webhooks. The "path" is just how a call enters Weave; the rest of the system is shared.
+</Callout>
+
+## Sandbox mode
+
+<Callout type="warn">
+Use `pk_test_…` keys for development. Orders auto-complete instantly with mock amounts — no real funds move.
+</Callout>
+
+Your sandbox publishable key is on the **Developer** tab in Settings. Sandbox orders appear in your dashboard with a sandbox badge and are excluded from revenue metrics.
+
+| Behaviour | Sandbox |
+| --- | --- |
+| Key prefix | `pk_test_…` |
+| Orders auto-complete | Yes — instant |
+| Real provider calls | None |
+| Emails / webhooks | Suppressed |
+| Revenue metrics | Excluded |
+
+## Asset key format
+
+Every asset uses a canonical `crypto:CHAIN:TOKEN` or `fiat:CCY` identifier. Chain and token are always uppercase; currency is ISO 4217 uppercase.
+
+| Asset key | Meaning |
+| --- | --- |
+| `fiat:NGN` | Nigerian Naira |
+| `crypto:BASE:USDC` | USDC on Base |
+| `crypto:ETHEREUM:ETH` | ETH on Ethereum |
+| `crypto:ETHEREUM:USDC` | USDC on Ethereum |
+| `crypto:ARBITRUM:USDC` | USDC on Arbitrum |
+| `crypto:SOLANA:SOL` | SOL on Solana |
+
+## Quick setup
+
+<Tabs items={["HTML / JS", "React", "Next.js"]}>
+
+```html tab="HTML / JS"
+<div id="weave-checkout"></div>
+
+<script src="https://unpkg.com/@weave-sdk/widget/dist/umd.js"></script>
+<script>
+  Weave.mount('#weave-checkout', {
+    apiKey:       'pk_live_...',
+    theme:        'organic',
+    accentColor:  '#3D6B50',
+    borderRadius: 16,
+    merchant: {
+      name:        'Acme Store',
+      amount:      5000,
+      currency:    'NGN',
+      description: 'Order #1042',
+    },
+    onSuccess: (txn) => console.log('Paid', txn.orderId),
+    onError:   (err) => console.error(err.message),
+    onClose:   ()    => console.log('closed'),
+  });
+</script>
+```
+
+```tsx tab="React"
+import { WeaveCheckout } from '@weave-sdk/widget';
+// npm install @weave-sdk/widget
+
+export default function CheckoutPage() {
+  return (
+    <WeaveCheckout
+      apiKey="pk_live_..."
+      theme="organic"
+      accentColor="#3D6B50"
+      borderRadius={16}
+      merchant={{
+        name:        'Acme Store',
+        amount:      5000,
+        currency:    'NGN',
+        description: 'Order #1042',
+      }}
+      onSuccess={(txn) => fulfillOrder(txn.orderId)}
+      onError={(err)   => showError(err.message)}
+      onClose={()      => setOpen(false)}
+    />
+  );
+}
+```
+
+```tsx tab="Next.js"
+'use client';
+// The widget uses window + wallet APIs — must be client-only.
+import dynamic from 'next/dynamic';
+
+const WeaveCheckout = dynamic(
+  () => import('@weave-sdk/widget').then((m) => m.WeaveCheckout),
+  { ssr: false },
+);
+
+export default function CheckoutPage() {
+  return (
+    <WeaveCheckout
+      apiKey="pk_live_..."
+      theme="organic"
+      accentColor="#3D6B50"
+      borderRadius={16}
+      merchant={{ name: 'Acme Store', amount: 5000, currency: 'NGN' }}
+      onSuccess={(txn) => console.log('paid', txn.orderId)}
+      onError={(err)   => console.error(err.message)}
+      onClose={()      => router.back()}
+    />
+  );
+}
+```
+
+</Tabs>
+
+<Callout type="info">
+On Next.js, the widget accesses `window` and wallet APIs — mount it as a client component or lazy-load with `ssr: false`.
+</Callout>
+
+## Payment corridors
+
+Weave routes automatically. Pass `flow` on `POST /orders` to control the bridge provider.
+
+| Provider | Route | flow | Settles in |
+| --- | --- | --- | --- |
+| **Bachs** | `fiat:NGN → fiat:NGN` | `external` | 30 s – 2 min |
+| **NEAR Intents** | any chain → `crypto:BASE:USDC` | `external` | 30 – 90 s |
+| **ChainRails** | EVM → `crypto:BASE:USDC` | `self` | ~60 s |
+| **Paycrest** | `crypto:BASE:USDC ↔ fiat:NGN` | `automatic` | 30 s – 2 min |
+
+- **Bachs** — direct naira collection: card & bank transfer through a hosted checkout, settled straight to the merchant bank.
+- **NEAR Intents** — cross-chain swap from 30+ chains. A deposit address is generated; the customer sends from any wallet.
+- **ChainRails** — EVM connected-wallet flow. The customer signs from their wallet — no deposit-address copy-paste. Lower fee than NEAR Intents.
+- **Paycrest** — automatic terminal settlement hop whenever a route touches NGN. Also handles onramps (NGN → USDC).
+
+## Security model
+
+<Callout type="info">
+- **API keys are scoped.** Publishable keys (`pk_`) are browser-safe. Secret keys (`sk_`) must never leave your server.
+- **All webhooks are signature-verified.** Incoming provider webhooks (Bachs, Paycrest, ChainRails) are HMAC-verified before any state is mutated. Outgoing merchant webhooks are signed HMAC-SHA256 over `{timestamp}.{rawBody}`.
+- **Idempotent processing.** Every incoming event is deduplicated by `(source, event, externalId)`; outgoing events carry a stable `data.id` for your handler to dedupe on.
+</Callout>
+
+Read the full [Security guide](/security) for key handling, webhook verification, and sandbox isolation.

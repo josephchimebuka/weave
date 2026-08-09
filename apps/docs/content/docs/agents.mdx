@@ -1,0 +1,155 @@
+---
+title: Agents
+description: How AI agents can quote, create, and track Weave payments over the agent-callable REST API.
+---
+
+Weave's REST API is fully agent-callable. Any AI agent that can make HTTP requests — LLM tool calls, AutoGen workers, LangChain tools, or a plain `fetch` loop — can quote, create, and track payments without human interaction. This page covers the key patterns.
+
+## Authentication
+
+Agents calling from a trusted backend should authenticate with the secret key — send it as `x-secret-key`; it authenticates on its own. The publishable key alone is enough for read-only calls and for creating orders when the flow starts in a user's browser.
+
+**Server-side (agent) — secret key**
+
+Pass `x-secret-key` on its own. Never expose the secret key to a browser or end-user.
+
+**Browser / widget — publishable key**
+
+Pass `x-api-key: pk_live_…`. Safe to include in frontend code. Cannot access admin operations.
+
+```bash
+# Secret-key auth (server-side agent)
+curl https://api.paywithweave.com/api/v1/quotes \
+  -H "x-secret-key: sk_live_..." \
+  -G -d "from=fiat:NGN&to=crypto:BASE:USDC&amount=5000&amountIn=source"
+```
+
+## Core primitives
+
+Three calls cover almost every agentic payment workflow.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/quotes` | Price a cross-corridor transfer. Always call before creating an order so the agent can show or validate amounts. |
+| `POST` | `/orders` | Create and execute a payment. Returns `nextAction` which tells the agent or payer what to do next (send crypto, bank transfer, etc.). |
+| `GET` | `/orders/:id` | Poll for completion. Forces a live sync with the underlying provider on every call. Safe to call once per second. |
+
+## OpenAI tool definitions
+
+Drop these into your `tools` array and your model can quote and initiate payments in a single turn.
+
+```json
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "weave_get_quote",
+      "description": "Get an exchange rate and fee breakdown for a cross-corridor transfer.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from":     { "type": "string", "description": "Source asset key, e.g. 'fiat:NGN' or 'crypto:BASE:USDC'" },
+          "to":       { "type": "string", "description": "Destination asset key" },
+          "amount":   { "type": "number", "description": "Transfer amount" },
+          "amountIn": { "type": "string", "enum": ["source", "dest"], "description": "Whether amount refers to source or destination" }
+        },
+        "required": ["from", "to", "amount"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "weave_create_order",
+      "description": "Create a payment order. Returns nextAction describing what the payer must do.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sourceAssetKey": { "type": "string", "description": "Asset the payer will send, e.g. 'crypto:BASE:USDC'" },
+          "amount":         { "type": "number" },
+          "amountIn":       { "type": "string", "enum": ["source", "dest"] },
+          "reference":      { "type": "string", "description": "Your internal order or invoice ID" },
+          "customer": {
+            "type": "object",
+            "properties": {
+              "name":  { "type": "string" },
+              "email": { "type": "string" }
+            }
+          }
+        },
+        "required": ["sourceAssetKey", "amount"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "weave_get_order",
+      "description": "Get the current status and details of a payment order.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "orderId": { "type": "string" }
+        },
+        "required": ["orderId"]
+      }
+    }
+  }
+]
+```
+
+## Polling for completion
+
+After `createOrder` returns, the payment is in flight. Poll `GET /orders/:id` until `status` is terminal. Each call forces a live sync — no extra configuration needed.
+
+```typescript
+const TERMINAL = new Set(['completed', 'failed', 'refunded', 'expired']);
+
+async function waitForOrder(orderId: string, apiKey: string, timeoutMs = 300_000) {
+  const deadline = Date.now() + timeoutMs;
+  let delay = 2_000;
+
+  while (Date.now() < deadline) {
+    const res  = await fetch(`https://api.paywithweave.com/api/v1/orders/${orderId}`, {
+      headers: { 'x-api-key': apiKey },
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    const { status } = data.data;
+    if (TERMINAL.has(status)) return data.data;
+
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, 15_000); // back off to 15s max
+  }
+  throw new Error('Order did not complete within timeout');
+}
+```
+
+For production agents, prefer receiving the `order.completed` webhook instead of polling — it's instantaneous and has no rate-limit implications. Polling is the right fallback when your agent runs in a short-lived Lambda or a turn-based LLM tool loop.
+
+## Sandbox
+
+Use `pk_test_…` / `sk_test_…` keys during development. The API behaves identically — all routes, all validations — but no real funds move and provider calls are mocked. Orders created with test keys are isolated from live orders and only appear when you authenticate with the same test keys.
+
+<Callout type="info">
+**Tip for agents:** run your full tool-call loop in sandbox first. The response shapes, status transitions, and webhook payloads are identical to production — so a passing sandbox run means your agent is production-ready.
+</Callout>
+
+## Customer passthrough
+
+Pass an optional `customer` object with `createOrder` to tag the order with payer information. This is surfaced to the merchant in the transaction detail view and echoed in the `order.completed` webhook — useful for agents that know who the payer is from their own session context.
+
+```bash
+curl https://api.paywithweave.com/api/v1/orders \
+  -X POST \
+  -H "x-secret-key: sk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source":    { "inline": { "kind": "crypto_wallet", "assetKey": "crypto:BASE:USDC", "walletAddress": "0xabc..." } },
+    "amount":    5000,
+    "amountIn":  "dest",
+    "reference": "inv_2024_001",
+    "customer":  { "name": "Amaka Obi", "email": "amaka@example.com" }
+  }'
+```

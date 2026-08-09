@@ -1,0 +1,54 @@
+---
+title: Security
+description: How Weave authenticates requests, signs webhooks, and isolates sandbox traffic.
+---
+
+Designed for direct integration without a server-side SDK — authentication, webhook signatures, and sandbox isolation all use standard HTTP and HMAC primitives you can verify yourself.
+
+## API Key Types
+
+| Key | Type | Header | Use |
+| --- | --- | --- | --- |
+| `pk_live_…` | Publishable (live) | `x-api-key` | Browser widget, public payment pages. Scoped to creating orders + reading your own resources. Never grants account read access. |
+| `pk_test_…` | Publishable (test) | `x-api-key` | Sandbox traffic. Orders auto-complete instantly, real providers are not called, and outgoing webhooks are suppressed. |
+| `sk_live_…` | Secret | `x-secret-key` | Server-to-server only. Authenticates on its own — the server matches a hash of the key, never the plaintext. Required for any flow that should not be possible from the browser. You may optionally also send `x-public-key`; if you do, it must match this secret. |
+| `whsec_…` | Webhook secret | — (used to sign deliveries) | HMAC key for verifying incoming webhook deliveries. Rotate from Settings → Developer → Webhooks; the new value is shown exactly once. |
+
+```bash
+# Server-only — the secret key authenticates on its own (never expose it in the browser).
+curl https://api.paywithweave.com/api/v1/orders \
+  -H "x-secret-key: sk_live_..." \
+  -H "Content-Type: application/json"
+```
+
+## Webhook Verification
+
+Outgoing webhooks are signed with HMAC-SHA256 over `` `${timestamp}.${rawBody}` ``. Always verify the signature **before mutating any state**, and reject deliveries whose timestamp is outside your tolerance window. See the full spec under **Webhooks → Signature Verification**.
+
+- Hash the **raw body bytes** — not a re-stringified JSON object. Any reformatting breaks the signature.
+- Strip the `sha256=` prefix from `X-Weave-Signature` before comparing.
+- Use `crypto.timingSafeEqual` (or equivalent) for the comparison to avoid timing leaks.
+- Reject deliveries where `X-Weave-Timestamp` is older than ~5 minutes — protects against replay.
+- Dedupe on `data.id` in your handler and return `200` for repeats.
+
+## Provider Webhook Hardening
+
+Inbound provider webhooks (Bachs, Paycrest, ChainRails) are HMAC-verified at the edge before any database write. The corresponding secret is required — if it is missing the route fails closed with a 401 rather than accepting unverified payloads.
+
+| Provider | Signature |
+| --- | --- |
+| Paycrest | `HMAC-SHA256(secret, rawBody)` |
+| ChainRails | `HMAC-SHA256(secret, "${ts}.${rawBody}")` |
+| Bachs | `HMAC-SHA256(secret, "{timestamp}.{rawBody}")` |
+
+## Sandbox Isolation
+
+Sandbox keys (`pk_test_…`) live in a separate auth path. Sandbox orders are flagged on the order row and excluded from revenue metrics, list endpoints filter them by default, and outgoing merchant webhooks are suppressed for them. No real funds move under any circumstance.
+
+<Callout type="warn">
+Any request authenticated with `pk_test_` implicitly enables sandbox mode for that request. Mixing test and live keys in the same flow will produce mismatched orders that cannot be reconciled — pick one and stay there.
+</Callout>
+
+## Reporting a Vulnerability
+
+Suspected security issues should be reported privately to [admin@dewdroplabs.com](mailto:admin@dewdroplabs.com). Please include reproduction steps and any proof-of-concept artefacts. We acknowledge within one business day and will not pursue good-faith research that respects the boundaries above.

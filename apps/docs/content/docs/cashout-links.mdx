@@ -1,0 +1,107 @@
+---
+title: Cash-out Links
+description: Help your users cash out crypto to their own naira bank account with hosted links or a self-built offramp.
+---
+
+Help your users cash out crypto to a naira bank account. You create an offramp order and supply **the recipient's own bank account** as the destination — instead of your default payout. The user funds it with their own crypto by sending to the returned deposit address; Weave settles the naira straight to that account.
+
+<Callout type="info">
+**How the money moves.** Crypto → Paycrest (the licensed offramp) → the recipient's bank. Weave never holds the funds and never takes custody — it orchestrates the route. The recipient's crypto goes to the recipient's own account, so this stays a facilitated offramp, not money transmission on your behalf.
+</Callout>
+
+## Cash-out links — no code
+
+Don't want to build anything? Create a **cash-out link** — a shareable, branded, self-serve page where your users offramp crypto to their **own** Nigerian bank. No API, no widget, no code. It's the hosted version of the same offramp documented below.
+
+**You create it**
+
+In the dashboard: **Cash-out Links → New link**. Choose the accepted crypto (**any chain / token**, or lock it to one), plus an optional description and a fixed amount. You get a shareable URL to drop anywhere — bio, email, chat.
+
+**Your user cashes out**
+
+They open the link, pick an amount and their token & chain, and enter **their own** Nigerian bank. They get a deposit address (plus a memo for XRP / TON / XLM / NEAR), send crypto from any wallet, and the naira lands in their bank in **30 s – 2 min**. They never sign up for anything.
+
+<Callout type="info">
+**It's fully yours.** Each link renders in **your** brand — logo, accent colour, background, name, headline and font, set once in **Settings → Branding**. Any link turns your product into a self-serve offramp, and it's chain-agnostic: your users bring crypto from any chain. Same compliance shape as the API — the crypto is theirs, the naira lands in their account, Weave never takes custody.
+</Callout>
+
+## Build it yourself · 1 · List naira banks
+
+Get the supported institutions for the payout currency. Use the returned `code` as the recipient's `bankInstitution` below.
+
+```bash
+curl "https://api.paywithweave.com/api/v1/institutions?currency=NGN"
+```
+
+## 2 · Verify the recipient account
+
+Resolve the account name before you pay out, so a mistyped account number never sends funds to the wrong place. Show the returned name back to the user to confirm.
+
+```bash
+curl -X POST https://api.paywithweave.com/api/v1/institutions/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "institution": "GTBINGLA",
+    "accountIdentifier": "0123456789",
+    "currency": "NGN"
+  }'
+# → { "success": true, "data": "JANE ADEYEMI" }
+```
+
+## 3 · Create the payout order
+
+Create an order with a crypto `source` and the recipient's bank as an inline `dest`. The router plans a crypto→naira offramp and returns a deposit address. Use `amountIn: "source"` when the user tells you how much crypto they're sending, or `"dest"` when you specify the naira they should receive.
+
+```bash
+curl -X POST https://api.paywithweave.com/api/v1/orders \
+  -H "x-secret-key: sk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": { "inline": { "kind": "crypto_wallet", "assetKey": "crypto:BASE:USDC" } },
+    "dest":   { "inline": {
+      "kind": "bank_account",
+      "assetKey": "fiat:NGN",
+      "bankInstitution": "GTBINGLA",
+      "bankAccountIdentifier": "0123456789",
+      "bankAccountName": "JANE ADEYEMI",
+      "label": "cashout: jane"
+    }},
+    "amount": 25,
+    "amountIn": "source",
+    "customer": { "email": "jane@example.com", "name": "Jane Adeyemi" }
+  }'
+```
+
+The response's `nextAction` carries the deposit target — a crypto address (and `depositMemo` for chains that need one) plus the exact amount to send. Hand that to the user; when their crypto lands, Paycrest offramps it to the bank account you supplied.
+
+```json
+{
+  "success": true,
+  "data": {
+    "order": { "id": "ord_...", "status": "awaiting_deposit", "sourceAssetKey": "crypto:BASE:USDC", "destAssetKey": "fiat:NGN" },
+    "nextAction": {
+      "screen": "collect_crypto",
+      "depositAddress": "0x9f...c21",
+      "amount": 25,
+      "token": "USDC",
+      "chain": "BASE"
+    }
+  }
+}
+```
+
+## 4 · Track it to settlement
+
+Poll `GET /orders/:id` (or listen for the `order.completed` webhook) until `status` is `completed` — that's when the naira has reached the recipient's bank. See **Webhooks** for the signed event payload.
+
+```bash
+curl https://api.paywithweave.com/api/v1/orders/ord_... \
+  -H "x-secret-key: sk_live_..."
+# status: awaiting_deposit → processing → completed
+```
+
+## Notes
+
+- The recipient bank is created as a one-off instrument on the order. Set `label` to something you can reconcile against (e.g. the user id).
+- This flow rides the same crypto→naira offramp used elsewhere — it does **not** depend on naira collection being enabled.
+- Paying out to third-party accounts is subject to the offramp provider's KYC/AML rules. Confirm third-party recipient payouts are enabled on your account before going to volume.

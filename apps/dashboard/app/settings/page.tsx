@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
   KeyRound, Copy, Eye, EyeOff, Webhook, Plus, Palette,
   FileText, ShoppingBag, Pencil, Check, User, Mail, Building2, Save,
@@ -519,13 +518,15 @@ export default function CheckoutPage() {
             Manage your profile, API keys, webhooks, and checkout customisation.
           </p>
         </div>
-        <Link
-          href="/docs"
+        <a
+          href="https://docs.paywithweave.com"
+          target="_blank"
+          rel="noopener noreferrer"
           className="inline-flex items-center gap-2 self-start bg-cream-soft border border-hair hover:border-forest/30 text-forest-deep px-5 py-3 rounded-full text-[14px] font-medium transition-all shadow-leaf shrink-0"
         >
           <FileText size={15} strokeWidth={1.9} />
           API Docs
-        </Link>
+        </a>
       </div>
 
       {/* Tab bar */}

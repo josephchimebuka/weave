@@ -70,7 +70,7 @@ export async function sendWelcomeEmail(email: string, name: string) {
             </a>
           </div>
           
-            Need help? Check out our <a href="${dashboardUrl}/docs" style="color: #0F5D4C;">developer documentation</a> or reply directly to this email.
+            Need help? Check out our <a href="https://docs.paywithweave.com" style="color: #0F5D4C;">developer documentation</a> or reply directly to this email.
           </p>
           <p style="font-size: 11px; color: #9B9FA1; text-align: center; margin-top: 48px; border-top: 1px solid #E8EAE6; padding-top: 24px;">
             Weave is a product of <strong>Dewdrop Labs</strong>.

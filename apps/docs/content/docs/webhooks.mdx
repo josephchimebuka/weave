@@ -1,0 +1,145 @@
+---
+title: Webhooks
+description: Signed, server-to-server order notifications that are the source of truth for whether a payment actually settled.
+---
+
+Signed, server-to-server notifications. When an order reaches a terminal state — settled to your payout destination, or failed beyond recovery — Weave POSTs a JSON event to the URL you register. This is the source of truth for "did the payment actually happen?" Front-end signals (the widget's success screen, the checkout-session redirect) are UX cues; the webhook is the audit trail.
+
+Regardless of which integration path created the order — widget, direct API, or checkout session — the same event fires. If the order originated from a checkout session, the payload also echoes the `sessionId` and any `metadata` you set, so you can reconcile by your own IDs without a separate lookup.
+
+## Setup
+
+Register your endpoint URL in **Settings → Developer → Webhooks**. Weave signs every request with HMAC-SHA256 using your webhook secret and retries with exponential back-off if your endpoint does not return `2xx`.
+
+<Callout type="warn">
+**Always verify the signature** before trusting webhook payloads. Never fulfil orders based on unverified requests.
+</Callout>
+
+## Events
+
+| Event | Description |
+| --- | --- |
+| `order.completed` | All route steps settled. Funds delivered to your payout destination. Trigger fulfilment here. |
+| `order.failed` | Payment failed, expired, or refunded. No funds delivered. |
+
+Two more event types are reserved for future use — `order.created` and `order.processing` — but are not yet emitted.
+
+## Delivery Headers
+
+| Header | Value | Description |
+| --- | --- | --- |
+| `X-Weave-Signature` | `sha256=<hex>` | HMAC-SHA256 of `"{timestamp}.{rawBody}"`, signed with your webhook secret. |
+| `X-Weave-Timestamp` | `<epoch seconds>` | Unix timestamp used in the signature payload. Reject deliveries older than your tolerance window (we recommend 5 minutes). |
+| `X-Weave-Event` | `order.completed` | Convenience header — the event type, also present in the body. |
+| `User-Agent` | `Weave-Webhook-Dispatcher/1.0` | Identifies traffic from Weave. |
+
+## Payload
+
+```json
+{
+  "event": "order.completed",
+  "data": {
+    "id":             "clxq8a4...",
+    "reference":      "your-internal-id",
+    "status":         "completed",
+    "sourceAssetKey": "crypto:ETHEREUM:USDC",
+    "destAssetKey":   "fiat:NGN",
+    "sourceAmount":   50.38,
+    "destAmount":     74250,
+    "createdAt":      "2026-05-01T10:00:00.000Z",
+    "customer":       { "email": "jane@example.com", "name": "Jane Doe", "externalId": "usr_999" },
+    "sessionId":      "clx9abc...",
+    "metadata":       { "userId": "usr_999" }
+  }
+}
+```
+
+Use `data.id` as the idempotency key — store processed order IDs and short-circuit duplicate deliveries with a `200`. `reference` is the value you supplied on `POST /orders` (or `null` when omitted). `sessionId` and `metadata` are present only when the order was triggered by a checkout session — they echo back what you sent on `POST /checkout/sessions`. `customer` is present whenever you passed it on order or session creation — Weave never verifies it, we just hand it back to you for reconciliation.
+
+## Signature Verification
+
+The signature is computed from **`` `${timestamp}.${rawBody}` ``** — concatenated with a literal dot — and signed with your webhook secret (`whsec_…`). The header value is `sha256=<hex>`; strip the prefix before comparing. Always hash the **raw request body**, not a re-serialized JSON object.
+
+```ts
+import crypto from 'crypto';
+import express from 'express';
+
+const app = express();
+const TOLERANCE_SECONDS = 5 * 60;
+
+// Raw body middleware — bodyParser.json() will discard the raw buffer.
+app.post('/webhooks/weave', express.raw({ type: 'application/json' }), (req, res) => {
+  const header    = (req.headers['x-weave-signature'] as string | undefined) ?? '';
+  const timestamp = (req.headers['x-weave-timestamp'] as string | undefined) ?? '';
+  const sig       = header.startsWith('sha256=') ? header.slice(7) : header;
+
+  // Replay protection
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > TOLERANCE_SECONDS) {
+    return res.status(401).send('Stale timestamp');
+  }
+
+  const expected = crypto
+    .createHmac('sha256', process.env.WEAVE_WEBHOOK_SECRET!)
+    .update(`${timestamp}.${req.body.toString()}`)
+    .digest('hex');
+
+  if (!sig || !crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) {
+    return res.status(401).send('Invalid signature');
+  }
+
+  const { event, data } = JSON.parse(req.body.toString());
+
+  if (event === 'order.completed') {
+    await fulfillOrder(data.id);  // dedupe on data.id
+  }
+
+  res.json({ received: true });
+});
+```
+
+```python
+import hmac, hashlib, os, time
+from flask import Flask, request
+
+app = Flask(__name__)
+TOLERANCE_SECONDS = 5 * 60
+
+@app.route('/webhooks/weave', methods=['POST'])
+def weave_webhook():
+    header    = request.headers.get('x-weave-signature', '')
+    timestamp = request.headers.get('x-weave-timestamp', '')
+    sig       = header[7:] if header.startswith('sha256=') else header
+
+    if abs(time.time() - int(timestamp)) > TOLERANCE_SECONDS:
+        return 'Stale timestamp', 401
+
+    body     = request.get_data()
+    secret   = os.environ['WEAVE_WEBHOOK_SECRET'].encode()
+    signed   = f'{timestamp}.'.encode() + body
+    expected = hmac.new(secret, signed, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(sig, expected):
+        return 'Invalid signature', 401
+
+    payload = request.get_json(force=True)
+    if payload['event'] == 'order.completed':
+        fulfill_order(payload['data']['id'])  # dedupe on data.id
+
+    return {'received': True}
+```
+
+## Retry Behaviour
+
+| Field | Value |
+| --- | --- |
+| Transport | QStash background queue |
+| Trigger | Non-2xx response or network timeout |
+| Timeout per try | 10 seconds |
+| Idempotency key | `data.id` (in body) |
+| Sandbox | Webhooks suppressed for sandbox orders |
+
+QStash retries failed deliveries with exponential back-off until the configured retry count is exhausted. Dedupe with `data.id` on your side and return `200` immediately for repeats.
+
+<Callout type="info">
+Use **Settings → Developer → Webhooks → Send test event** to fire a real signed delivery against your endpoint with sample data.
+</Callout>

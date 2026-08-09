@@ -40,5 +40,5 @@ Register an endpoint to receive normalized events (e.g. `order.completed`). Inbo
 
 ## Where to read more
 
-- In-app developer docs: `/docs` — Introduction, Widget, API Reference, API Playground, Checkout Sessions, Payouts, Webhooks, Agents, Security, Support.
+- Developer docs: https://docs.paywithweave.com (llms.txt at https://docs.paywithweave.com/llms.txt) — Introduction, Widget Playground, API Reference, API Playground, Checkout Sessions, Cash-out Links, Webhooks, Agents, Security, Support.
 - Support: support@paywithweave.com · Status/incidents: status@paywithweave.com
