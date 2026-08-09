@@ -39,6 +39,9 @@ export interface Order {
   bridgeFeeUsd:       number | null;
   createdAt:          string;
   updatedAt:          string;
+  bachsSplitStatus?:  string | null;
+  bachsPayoutStatus?: string | null;   // "pending" | "processing" | "paid" | "blocked" | "failed"
+  bachsPayoutAt?:     string | null;
   steps:              RouteStep[];
   sourceInstrument?:  {
     bankInstitution?: string | null;

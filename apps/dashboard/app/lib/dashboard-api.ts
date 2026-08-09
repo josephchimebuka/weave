@@ -114,6 +114,7 @@ export async function fetchMerchantProfile(): Promise<{
   publishableKey: string;
   kycLevel: string;
   createdAt: string;
+  businessProfileComplete?: boolean;
 } | null> {
   try {
     const token = await getSessionToken();

@@ -248,6 +248,7 @@ router.post('/', requireAuth, async (req, res) => {
           const targetFiat = new Decimal(body.amount);
           
           const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
+          const isPureBachs    = plan.steps.length === 1 && plan.steps[0].provider === 'bachs';
 
           if (isPurePaystack) {
             // Paystack handles its own gross-up in the executor.
@@ -255,6 +256,17 @@ router.post('/', requireAuth, async (req, res) => {
             sourceAmount = targetFiat.toNumber();
             usdEquivalent = targetFiat.div(sellRate).toNumber(); // for reporting
             appFeeBps = 0; // handled by paystack.grossUp
+            destAmountFiat = body.amount;
+          } else if (isPureBachs) {
+            // Bachs split: the payer pays a grossed-up amount so the vendor nets
+            // exactly the target after Weave's fee (the fee comes out of the split,
+            // not added on top in the executor). vendorShare = collected × (1−fee)
+            // = target ⇒ collected = target / (1−fee). No rate needed for the
+            // source leg (pure NGN); sellRate only feeds usdEquivalent reporting.
+            const feePct = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS).div(10000);
+            sourceAmount = targetFiat.div(new Decimal(1).minus(feePct)).toNumber();
+            usdEquivalent = new Decimal(sourceAmount).div(sellRate).toNumber();
+            appFeeBps = 0; // realized in the split
             destAmountFiat = body.amount;
           } else {
             const sr = new Decimal(sellRate);
@@ -312,8 +324,17 @@ router.post('/', requireAuth, async (req, res) => {
     // still its 0 default — and Paystack rejects a 0 charge with "Invalid Amount Sent".
     // Pin it to the requested amount so the charge is always well-formed.
     const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
-    if (isPurePaystack && (!sourceAmount || sourceAmount <= 0)) {
-      sourceAmount = body.amount;
+    const isPureBachs    = plan.steps.length === 1 && plan.steps[0].provider === 'bachs';
+    if ((isPurePaystack || isPureBachs) && (!sourceAmount || sourceAmount <= 0)) {
+      // Rate fetch failed (common in sandbox) → pin the source leg so the charge
+      // is well-formed. Paystack charges 1:1 (grosses up in the executor); Bachs
+      // grosses up here so the vendor still nets the target after the split fee.
+      if (isPureBachs) {
+        const feePct = (SENDER_FEE_BPS + APP_FEE_BPS) / 10000;
+        sourceAmount = body.amount / (1 - feePct);
+      } else {
+        sourceAmount = body.amount;
+      }
       if (destAmountFiat === undefined) destAmountFiat = body.amount;
     }
 
@@ -549,7 +570,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         // Pass the order we already fetched above so syncOrder doesn't re-query
         // it, and only pay for a refetch when a step actually transitioned —
         // most polls land between provider updates and change nothing.
-        const synced = await syncOrder(order.id, { status: order.status, sandboxMode: order.sandboxMode, steps: order.steps });
+        const synced = await syncOrder(order.id, { status: order.status, sandboxMode: order.sandboxMode, steps: order.steps, bachsSplitStatus: order.bachsSplitStatus });
         paycrestStatus = synced.paycrestStatus;
         nearStatus = synced.nearStatus;
         if (synced.changed) {

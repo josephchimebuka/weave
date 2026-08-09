@@ -37,6 +37,12 @@ export type NoticeBannerProps = {
   storageKey?: string;
   /** Optional trailing call-to-action link. */
   action?: { label: string; href: string };
+  /**
+   * Optional hard expiry. Once the current time is past this, the banner stops
+   * rendering for everyone — no code change or dismissal needed. Pass an ISO string,
+   * epoch ms, or Date (e.g. a launch time + 72h).
+   */
+  expiresAt?: string | number | Date;
   className?: string;
 };
 
@@ -54,6 +60,7 @@ export function NoticeBanner({
   dismissible = false,
   storageKey,
   action,
+  expiresAt,
   className = '',
 }: NoticeBannerProps) {
   const canPersist = dismissible && !!storageKey;
@@ -71,6 +78,9 @@ export function NoticeBanner({
   }, [canPersist, storageKey]);
 
   if (hidden) return null;
+  // Hard expiry — past this instant the banner is gone for everyone. Server and
+  // client agree except within the exact boundary second, so no practical flash.
+  if (expiresAt != null && Date.now() >= new Date(expiresAt).getTime()) return null;
 
   const t = TONES[tone] ?? TONES.info;
   const Icon = t.Icon;

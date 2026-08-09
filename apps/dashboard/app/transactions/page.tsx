@@ -38,6 +38,15 @@ const STATUS_PALETTE: Record<string, { chip: string; dot: string; label: string 
   expired: { chip: 'bg-terracotta-soft text-terracotta', dot: 'bg-terracotta', label: 'Expired' },
 };
 
+// Sub-label shown under the order status for Bachs naira orders — the bank payout leg.
+const PAYOUT_MINI: Record<string, { label: string; cls: string }> = {
+  paid:       { label: 'Paid out',   cls: 'text-forest-deep' },
+  processing: { label: 'Processing', cls: 'text-tan-deep' },
+  pending:    { label: 'Processing', cls: 'text-tan-deep' },
+  blocked:    { label: 'Blocked',    cls: 'text-terracotta' },
+  failed:     { label: 'Payout failed', cls: 'text-terracotta' },
+};
+
 function counterpartyName(order: Order): string {
   return (
     order.sourceInstrument?.bankAccountName ||
@@ -109,6 +118,7 @@ function fmtDate(iso: string): string {
 }
 
 import AutoRefresh from '../AutoRefresh';
+import { Select } from '../../components/Select';
 
 const PAGE_SIZE = 25;
 
@@ -287,10 +297,10 @@ export default function TransactionsPage() {
                   className="w-64 pl-10 pr-4 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:ring-0 transition-colors shadow-leaf"
                 />
               </div>
-              <select
+              <Select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
+                className="pl-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
               >
                 <option value="all">All Status</option>
                 <option value="completed">Completed</option>
@@ -299,16 +309,16 @@ export default function TransactionsPage() {
                 <option value="awaiting_deposit">Awaiting</option>
                 <option value="failed">Failed</option>
                 <option value="refunded">Refunded</option>
-              </select>
-              <select
+              </Select>
+              <Select
                 value={dateRange}
                 onChange={(e) => setDateRange(e.target.value as RangeKey)}
-                className="px-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
+                className="pl-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
               >
                 {DATE_RANGE_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
-              </select>
+              </Select>
               {dateRange === 'custom' && (
                 <div className="flex items-center gap-2">
                   <input
@@ -425,6 +435,10 @@ export default function TransactionsPage() {
                         <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
                         {status.label}
                       </span>
+                      {(() => {
+                        const p = PAYOUT_MINI[o.bachsPayoutStatus ?? ''];
+                        return p ? <div className={`mt-1 text-[10px] font-semibold uppercase tracking-wide ${p.cls}`}>{p.label}</div> : null;
+                      })()}
                     </div>
                     <div className="hidden sm:block text-right font-semibold text-ink tabular-nums whitespace-nowrap text-[14px]">
                       {fmtAmount(netSettlement(o), o.destAssetKey)}

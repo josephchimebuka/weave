@@ -105,6 +105,10 @@ export default async function Page() {
     fetchMerchantProfile(),
   ]);
   const merchantName = merchant?.name ?? 'Merchant';
+  // Already-submitted merchants (verified/pending) who are missing the newer
+  // business-profile fields — nudge them from the Business Status card.
+  const needsProfile = (merchant?.kycLevel === 'verified' || merchant?.kycLevel === 'pending')
+    && merchant?.businessProfileComplete === false;
 
   const completed = orders.filter((o) => o.status === 'completed');
   const active = orders.filter((o) =>
@@ -337,22 +341,26 @@ export default async function Page() {
               </span>
             </div>
             <p className="mt-4 font-display text-[22px] font-semibold text-ink leading-tight">
-              {merchant?.kycLevel === 'verified' ? 'KYB Approved' :
+              {needsProfile ? 'Business Profile Needed' :
+               merchant?.kycLevel === 'verified' ? 'KYB Approved' :
                merchant?.kycLevel === 'pending' ? 'Review Pending' :
                merchant?.kycLevel === 'basic' ? 'KYB Action Required' :
                'Email Verification Required'}
             </p>
             <p className="mt-1 text-[13px] text-ink-muted">
-              {merchant?.kycLevel === 'verified' ? 'Next review in 180 days.' :
+              {needsProfile ? 'Add a few new details to keep your compliance current.' :
+               merchant?.kycLevel === 'verified' ? 'Next review in 180 days.' :
                merchant?.kycLevel === 'pending' ? 'Est. review: 1-3 days.' :
                merchant?.kycLevel === 'basic' ? 'Submit business details to accept live payments.' :
                'Verify your email to unlock orders and payment links.'}
             </p>
             <Link
               href={merchant?.kycLevel === 'none' ? '/verify-email' : '/onboarding/kyb'}
-              className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-semibold text-forest-deep hover:text-forest transition-colors"
+              className={`mt-4 inline-flex items-center gap-1.5 text-[13px] font-semibold transition-colors ${
+                needsProfile ? 'text-tan-deep hover:text-ink' : 'text-forest-deep hover:text-forest'
+              }`}
             >
-              {merchant?.kycLevel === 'none' ? 'Verify email' : 'View details'} <ArrowRight size={13} strokeWidth={2.3} />
+              {needsProfile ? 'Complete profile' : merchant?.kycLevel === 'none' ? 'Verify email' : 'View details'} <ArrowRight size={13} strokeWidth={2.3} />
             </Link>
           </div>
         </div>

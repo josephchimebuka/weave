@@ -28,6 +28,14 @@ export function ClientLayout({
 
   const isAuth   = pathname.startsWith('/auth') || pathname === '/pay' || pathname.startsWith('/pay/') || pathname.startsWith('/checkout/');
   const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy');
+  // Full-bleed, no wrapper: the cash-out page is a merchant-BRANDED surface that
+  // must theme the entire viewport (its own bg color/image edge-to-edge), so it
+  // can't sit inside the centered, cream-padded auth container.
+  const isFullBleed = pathname.startsWith('/cashout/');
+
+  if (isFullBleed) {
+    return <>{children}</>;
+  }
 
   if (isAuth) {
     return (
@@ -87,11 +95,16 @@ export function ClientLayout({
         <main className="flex-1">
           <div className="px-6 md:px-10 lg:px-14 py-8 md:py-10 max-w-[1400px] mx-auto">
             {/* Global service notice. Swap tone/message (or remove) as needed;
-                see components/NoticeBanner.tsx for the reusable variants. */}
+                see components/NoticeBanner.tsx for the reusable variants.
+                `expiresAt` = naira go-live + 72h — set this to your actual go-live
+                instant; the banner auto-hides for everyone once it passes. */}
             <NoticeBanner
-              tone="warning"
-              title="Naira payments temporarily unavailable"
-              message="An issue with our banking partner on the fiat leg means we can't collect naira right now. Crypto payments are unaffected, and all pending naira payouts have already been settled. We're aiming for a fix early next week and will send an update by Monday."
+              tone="success"
+              title="Naira payments are back"
+              message="Naira collection and payouts are fully restored — everything's back to normal. Thanks for your patience."
+              dismissible
+              storageKey="naira-restored-2026-08"
+              expiresAt="2026-08-12T12:00:00Z"
               className="mb-6"
             />
             {children}

@@ -17,6 +17,7 @@ import countriesRouter    from './routes/countries';
 import authRouter         from './routes/auth';
 import merchantRouter     from './routes/merchant';
 import linksRouter        from './routes/links';
+import payoutLinksRouter  from './routes/payout-links';
 import verificationRouter from './routes/verification';
 import adminRouter        from './routes/admin';
 import assetsRouter       from './routes/assets';
@@ -73,8 +74,9 @@ app.use(cors((req: any, callback) => {
   const isPublicRoute = 
     req.path.startsWith('/api/v1/quotes') || 
     req.path.startsWith('/api/v1/orders') || 
-    req.path.startsWith('/api/v1/assets') || 
-    req.path.startsWith('/api/v1/links/public');
+    req.path.startsWith('/api/v1/assets') ||
+    req.path.startsWith('/api/v1/links/public') ||
+    req.path.startsWith('/api/v1/payout-links/public');
 
   // 1. If it's a public/widget route, allow the origin (browser won't send credentials unless origin is reflected)
   if (isPublicRoute) {
@@ -150,6 +152,7 @@ app.use('/api/v1/ramp/countries', countriesRouter);
 app.use('/api/v1/auth',           authRouter);
 app.use('/api/v1/merchant',       merchantRouter);
 app.use('/api/v1/links',          linksRouter);
+app.use('/api/v1/payout-links',   payoutLinksRouter);
 app.use('/api/v1/verification',   verificationRouter);
 app.use('/api/v1/admin',          adminRouter);
 app.use('/api/v1/assets',         assetsRouter);

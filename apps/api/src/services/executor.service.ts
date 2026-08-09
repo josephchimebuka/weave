@@ -12,14 +12,16 @@ import { paycrest } from './paycrest.service';
 import { chainRails } from './chainrails.service';
 import { nearIntents } from './nearintents.service';
 import { paystack } from './paystack.service';
+import { bachs } from './bachs.service';
 import { parseAsset } from '../lib/assets';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
-import { PAYSTACK_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
+import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 import { qstash } from '../lib/qstash';
 import * as Sentry from '@sentry/node';
 import { recordServerEvent } from './order-event.service';
+import { recordAudit } from './audit.service';
 
 export interface ExecutorInput {
   orderId: string;
@@ -50,7 +52,7 @@ export interface ExecutorInput {
 }
 
 export interface FirstStepAction {
-  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup';
+  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout';
   depositAddress?: string;                // crypto
   depositMemo?: string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
   amount?: number;                // crypto
@@ -67,6 +69,12 @@ export interface FirstStepAction {
     accessCode: string;
     publicKey: string;
     amount: number;       // gross NGN — shown to payer
+    reference: string;
+  };
+  // Bachs Connect overlay: the widget opens this hosted checkout with bachs.js.
+  bachsCheckout?: {
+    checkoutUrl: string;
+    amount: number;       // NGN charged — shown to payer
     reference: string;
   };
   expiresAt?: string;
@@ -172,6 +180,95 @@ const WEAVE_EVM_REFUND_ADDRESS = process.env.WEAVE_EVM_REFUND_ADDRESS ?? '';
 
 const NEAR_POLL_DELAY_S  = Math.round(Number(process.env.NEAR_POLL_INTERVAL_MS ?? 120_000) / 1000);
 const NEAR_POLL_MAX_ATTEMPTS = 150; // ~5 hours at default 2-min interval
+
+// ── Bachs split settlement ──────────────────────────────────────────────────
+// After a Bachs collection succeeds, the customer's money sits in OUR platform
+// balance as `pending_balance` until Bachs settles it (~T+1/T+2 for NGN). Only
+// then can we transfer the vendor its share (transfers draw on available_balance
+// only). We schedule a delayed job that retries on the settlement cadence until
+// the funds are available, then splits. First attempt is delayed a full cycle
+// because the money is never available at creation time.
+const BACHS_SETTLE_DELAY_S     = Number(process.env.BACHS_SETTLE_DELAY_S ?? 6 * 60 * 60); // 6h
+const BACHS_SETTLE_MAX_ATTEMPTS = Number(process.env.BACHS_SETTLE_MAX_ATTEMPTS ?? 40);    // ~10 days
+// Weave's total take on a naira collection (sender + app fee), in bps. The vendor
+// receives the collected amount minus this; the remainder stays in our balance.
+const BACHS_FEE_BPS = SENDER_FEE_BPS + APP_FEE_BPS;
+
+// Payout (withdrawal) tuning. BACHS_PAYOUT_HOLD_S is the delay between the split
+// landing in the vendor's connected-account balance and the withdrawal to their
+// bank firing — the lever for holding funds (float, fraud review, batching).
+// Default 0 = pay out as soon as the split settles. The retry cadence reuses the
+// settle knobs so a not-yet-available balance keeps getting re-checked.
+const BACHS_PAYOUT_HOLD_S      = Number(process.env.BACHS_PAYOUT_HOLD_S ?? 0);
+const BACHS_PAYOUT_RETRY_S     = Number(process.env.BACHS_PAYOUT_RETRY_S ?? 30 * 60);       // 30m
+const BACHS_PAYOUT_MAX_ATTEMPTS = Number(process.env.BACHS_PAYOUT_MAX_ATTEMPTS ?? 40);
+
+/**
+ * Schedule the deferred split for a Bachs order. Fired first at collection.succeeded
+ * (once we know the charge settled into pending), then self-reschedules from the
+ * settle job until `available_balance` covers the share or attempts run out.
+ */
+export async function scheduleBachsSettle(params: {
+  orderId: string;
+  attempt: number;
+  delaySeconds?: number;
+}): Promise<void> {
+  if (params.attempt > BACHS_SETTLE_MAX_ATTEMPTS) {
+    console.error(`[executor] bachs split gave up for order ${params.orderId} after ${params.attempt} attempts`);
+    Sentry.captureMessage('bachs split exhausted retries', {
+      level: 'error', tags: { area: 'executor.bachs-settle' }, extra: { orderId: params.orderId, attempt: params.attempt },
+    });
+    return;
+  }
+  const apiBase = process.env.API_BASE;
+  if (!apiBase) {
+    console.warn('[executor] API_BASE not set — cannot schedule Bachs split');
+    return;
+  }
+  try {
+    await qstash.publishJSON({
+      url:   `${apiBase}/jobs/bachs-settle`,
+      body:  { orderId: params.orderId, attempt: params.attempt },
+      delay: params.delaySeconds ?? BACHS_SETTLE_DELAY_S,
+    });
+  } catch (err: any) {
+    console.warn('[executor] failed to schedule Bachs split:', err.message);
+  }
+}
+
+/**
+ * Schedule the deferred payout (withdrawal) for a Bachs order. Fired once the split
+ * has settled into the vendor's connected-account balance; the first delay is the
+ * configurable hold window (BACHS_PAYOUT_HOLD_S), and the payout job self-reschedules
+ * on the retry cadence if the balance isn't yet available or Bachs blips.
+ */
+export async function scheduleBachsPayout(params: {
+  orderId: string;
+  attempt: number;
+  delaySeconds?: number;
+}): Promise<void> {
+  if (params.attempt > BACHS_PAYOUT_MAX_ATTEMPTS) {
+    console.error(`[executor] bachs payout gave up for order ${params.orderId} after ${params.attempt} attempts`);
+    Sentry.captureMessage('bachs payout exhausted retries', {
+      level: 'error', tags: { area: 'executor.bachs-payout' }, extra: { orderId: params.orderId, attempt: params.attempt },
+    });
+    return;
+  }
+  const apiBase = process.env.API_BASE;
+  if (!apiBase) {
+    console.warn('[executor] API_BASE not set — cannot schedule Bachs payout');
+    return;
+  }
+  try {
+    await qstash.publishJSON({
+      url:   `${apiBase}/jobs/bachs-payout`,
+      body:  { orderId: params.orderId, attempt: params.attempt },
+      delay: params.delaySeconds ?? BACHS_PAYOUT_RETRY_S,
+    });
+  } catch (err: any) {
+    console.warn('[executor] failed to schedule Bachs payout:', err.message);
+  }
+}
 
 export async function scheduleNearPoll(params: {
   depositAddress: string;
@@ -451,8 +548,413 @@ function paystackCustomerEmail(input: ExecutorInput): string {
   return `payer-${input.orderId}@${domain}`;
 }
 
+// ── Bachs Connect (NGN collect → split) ─────────────────────────────────────
+//
+// A Bachs NGN order is ONE RouteStep: the collection (a checkout on OUR platform
+// balance, where the payer pays). The order is 'completed' the moment the
+// customer pays — that's the payer- AND merchant-facing success, matching how
+// card platforms work (Stripe: charge succeeds = done).
+//
+// The vendor's split — transferring their share from our platform balance to
+// their connected account — is a POST-completion settlement (funds settle T+1/2
+// before a transfer is possible). It's tracked on `Order.bachsSplitStatus`,
+// decoupled from `status`, so a slow settlement never strands the payer on a
+// "processing" screen. Funds rest transiently in our Bachs balance (custodied by
+// Bachs, the licensed party), never our own bank.
+
+/** The vendor's net share of a gross NGN collection, after Weave's fee. */
+function bachsVendorShare(grossNgn: number): number {
+  const share = grossNgn * (1 - BACHS_FEE_BPS / 10000);
+  // Round to kobo (2dp) so it matches the decimal-string amount Bachs settles.
+  return Math.round(share * 100) / 100;
+}
+
+function buildBachsResult(
+  input: ExecutorInput,
+  checkoutUrl: string,
+  checkoutId: string,
+  grossNgn: number,
+): ExecuteResult {
+  const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
+  const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS / 10000);
+  const vendorShare  = bachsVendorShare(grossNgn);
+  return {
+    firstStep: { sequence: 0, provider: 'bachs', fromAsset: 'fiat:NGN', toAsset: 'fiat:NGN' },
+    nextAction: {
+      screen: 'bachs_checkout',
+      bachsCheckout: { checkoutUrl, amount: grossNgn, reference: input.orderId },
+    },
+    // What the merchant nets after Weave's fee (the split delivers exactly this).
+    destAmount: vendorShare,
+    steps: [
+      { sequence: 0, externalId: checkoutId, amountIn: grossNgn, amountOut: grossNgn },
+    ],
+    feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd: 0 },
+  };
+}
+
+async function executeBachsOrder(input: ExecutorInput): Promise<ExecuteResult> {
+  const { orderId } = input;
+
+  // Idempotency: rebuild the same nextAction from the persisted collection step
+  // so a widget reload / retry never mints a second checkout.
+  const existing = await prisma.routeStep.findMany({ where: { orderId }, orderBy: { sequence: 'asc' } });
+  if (existing.length > 0) {
+    const collection = existing[0];
+    return buildBachsResult(
+      input,
+      collection.bachsCheckoutUrl ?? '',
+      collection.externalId ?? '',
+      Number(collection.amountIn ?? input.sourceAmount),
+    );
+  }
+
+  // Defense-in-depth kill switch (router already refuses to plan bachs when off).
+  if (!BACHS_ENABLED) throw new Error(NAIRA_DISABLED_MESSAGE);
+
+  // Guard: the vendor must have an active Bachs connected account with `transfers`,
+  // otherwise the split at settlement time would fail with nowhere to land.
+  const merchant = await prisma.merchant.findUniqueOrThrow({ where: { id: input.merchantId } });
+  if (!merchant.bachsConnectedAccountId || merchant.bachsTransfersStatus !== 'active') {
+    throw new Error('This store cannot accept naira payments yet. Please contact the merchant to finish payout setup.');
+  }
+
+  // Pre-create the single collection step (unique [orderId,sequence] guards a
+  // concurrent creator — on conflict we reconstruct below).
+  try {
+    await prisma.routeStep.create({
+      data: { orderId, sequence: 0, provider: 'bachs', fromAsset: 'fiat:NGN', toAsset: 'fiat:NGN', status: 'pending' },
+    });
+  } catch {
+    const raced = await prisma.routeStep.findMany({ where: { orderId }, orderBy: { sequence: 'asc' } });
+    const collection = raced[0];
+    return buildBachsResult(
+      input,
+      collection?.bachsCheckoutUrl ?? '',
+      collection?.externalId ?? '',
+      Number(collection?.amountIn ?? input.sourceAmount),
+    );
+  }
+
+  const grossNgn = input.sourceAmount;
+
+  // Sandbox behaviour mirrors Paystack test mode:
+  //   • With sandbox keys (BACHS_SECRET_KEY_TEST): provision a REAL Bachs sandbox
+  //     checkout — real overlay + test-card payment, settled on poll in syncOrder.
+  //   • Without: a fully-mocked checkout URL, instant-completed here.
+  // Live orders always hit live Bachs.
+  const useRealSandbox = input.sandboxMode && bachs.hasTestKeys();
+  const session = (input.sandboxMode && !bachs.hasTestKeys())
+    ? { checkout_id: `chk_sandbox_${orderId}`, checkout_url: `https://checkout.bachs.io/c/sandbox_${orderId}` }
+    : await bachs.createCheckoutSession({
+        amount:    grossNgn,
+        currency:  'NGN',
+        reference: orderId,
+        ...(input.payerEmail ? { customer: { email: input.payerEmail } } : {}),
+        allowedPaymentMethodTypes: ['card', 'bank_transfer'],
+        metadata:  { orderId },
+      }, { sandbox: useRealSandbox });
+
+  await prisma.routeStep.update({
+    where: { orderId_sequence: { orderId, sequence: 0 } },
+    data: {
+      externalId:       session.checkout_id,
+      bachsCheckoutUrl: session.checkout_url,
+      amountIn:         grossNgn,
+      amountOut:        grossNgn,   // gross collected; the split nets the vendor its share
+      status:           'awaiting_deposit',
+      startedAt:        new Date(),
+    },
+  });
+
+  // Fully-mocked sandbox (no test keys): no real money moves, so instant-complete
+  // the collection + mark the split settled. The real-sandbox path instead settles
+  // from the actual test-card payment (verified on poll in syncOrder), just like
+  // the live path — so we leave it awaiting the payer.
+  if (input.sandboxMode && !useRealSandbox) {
+    await markStepDone({ provider: 'bachs', externalId: session.checkout_id, amountOut: grossNgn });
+    await prisma.order.update({
+      where: { id: orderId },
+      data:  { bachsSplitStatus: 'settled', bachsSplitAt: new Date(), bachsPayoutStatus: 'paid', bachsPayoutAt: new Date() },
+    });
+  }
+
+  return buildBachsResult(input, session.checkout_url, session.checkout_id, grossNgn);
+}
+
+/**
+ * Run the deferred split for a Bachs order: transfer the vendor its share once
+ * the collection has settled into our available balance. Idempotent and
+ * retry-safe (Idempotency-Key = orderId, plus a persisted `bachsSplitStatus`
+ * guard). Returns whether it settled, is still waiting on settlement, or should
+ * stop. Does NOT change order status — the order completed at collection.
+ */
+export async function runBachsSplit(orderId: string): Promise<{ status: 'settled' | 'waiting' | 'stop'; reason?: string }> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { steps: { orderBy: { sequence: 'asc' } } },
+  });
+  if (!order) return { status: 'stop', reason: 'order not found' };
+  // Sandbox orders mock the split — the live transfer/getBalances calls must never
+  // run for them (defense-in-depth against a stray sandbox trigger).
+  if (order.sandboxMode) return { status: 'stop', reason: 'sandbox order' };
+  if (order.bachsSplitStatus === 'settled') return { status: 'stop', reason: 'already settled' };
+
+  const collectStep = order.steps.find(s => s.sequence === 0 && s.provider === 'bachs');
+  if (!collectStep) return { status: 'stop', reason: 'not a bachs order' };
+  if (collectStep.status !== 'done') return { status: 'stop', reason: 'collection not complete' };
+
+  const merchant = await prisma.merchant.findUnique({ where: { id: order.merchantId } });
+  if (!merchant?.bachsConnectedAccountId) return { status: 'stop', reason: 'merchant has no connected account' };
+
+  const share = bachsVendorShare(Number(collectStep.amountOut ?? order.sourceAmount ?? 0));
+  if (!(share > 0)) return { status: 'stop', reason: 'non-positive share' };
+
+  // Only transfer once the funds have actually settled into available_balance.
+  const balances = await bachs.getBalances();
+  const ngn = balances.balances.find(b => b.currency === 'NGN');
+  const available = Number(ngn?.available_balance ?? 0);
+  if (available < share) {
+    return { status: 'waiting', reason: `available ${available} < share ${share}` };
+  }
+
+  // transfer_group ties the split to the funding charge (set at collection.succeeded).
+  const transferGroup = collectStep.transferGroup ?? order.id;
+  const transfer = await bachs.createTransfer({
+    destination:    merchant.bachsConnectedAccountId,
+    amount:         share,
+    currency:       'NGN',
+    transferGroup,
+    description:    `Weave order ${order.id} vendor share`,
+    // Distinct key namespace from the withdrawal's `payout:${order.id}` so the two
+    // money moves can never collide in Bachs's idempotency store.
+    idempotencyKey: `split:${order.id}`,   // one split per order — safe to retry (Bachs dedups)
+  });
+
+  await prisma.order.update({
+    where: { id: order.id },
+    data:  {
+      bachsSplitStatus: 'settled', bachsSplitTransferId: transfer.id, bachsSplitAt: new Date(),
+      // Arm the final leg. Marked 'pending' now; the payout job (after the hold
+      // window) moves it to processing/paid. Never overwrite a payout already begun.
+      ...(order.bachsPayoutStatus ? {} : { bachsPayoutStatus: 'pending' }),
+    },
+  });
+  recordServerEvent(order.id, 'bachs.split.settled', `Vendor share ₦${share} transferred`, { transferId: transfer.id });
+
+  // Hand off to the payout leg after the configured hold window.
+  if (!order.bachsPayoutStatus) {
+    await scheduleBachsPayout({ orderId: order.id, attempt: 1, delaySeconds: BACHS_PAYOUT_HOLD_S });
+  }
+
+  return { status: 'settled' };
+}
+
+/**
+ * Resolve (and cache on the Merchant) the Bachs payout destination the withdrawal
+ * will pay into — the vendor's own NGN bank. Order of preference:
+ *   1. A destination id already cached on the Merchant.
+ *   2. An existing usable destination on the connected account (e.g. one Bachs
+ *      auto-created from the payouts-capability onboarding).
+ *   3. Create one from the merchant's saved NGN bank instrument — but only after
+ *      Bachs independently confirms the account name (money-safety gate: we never
+ *      register a destination we couldn't verify, so funds can't misroute).
+ * Throws if it can't produce a verified, usable destination — the caller treats
+ * that as 'blocked' and leaves the vendor's money safely in their connected balance.
+ */
+export async function ensureBachsPayoutDestination(merchant: {
+  id: string;
+  bachsConnectedAccountId: string;
+  bachsPayoutDestinationId: string | null;
+}, opts: { sandbox?: boolean } = {}): Promise<string> {
+  const acct = merchant.bachsConnectedAccountId;
+  const sandbox = opts.sandbox;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // Source of truth for WHERE money goes: the merchant's DEFAULT payout instrument
+  // (what the dashboard shows) — never "the newest NGN bank row", which an order can
+  // create inline and would silently shadow the merchant's chosen bank.
+  const full = await prisma.merchant.findUnique({
+    where: { id: merchant.id }, select: { defaultPayoutInstrumentId: true },
+  });
+  const inst = full?.defaultPayoutInstrumentId
+    ? await prisma.instrument.findUnique({ where: { id: full.defaultPayoutInstrumentId } })
+    : null;
+  if (!inst || inst.kind !== 'bank_account' || (inst.assetKey ?? '') !== 'fiat:NGN'
+      || !inst.bankAccountIdentifier || !inst.bankInstitution) {
+    throw new Error('no verified default NGN bank instrument');   // PII-free
+  }
+  const targetAcctNo = inst.bankAccountIdentifier;
+
+  // Map the Paycrest institution code -> Bachs (NIBSS) bank code by EXACT normalized
+  // name only. Substring matching used to resolve e.g. "Access Bank (Diamond)" to
+  // "Access Bank" — a different institution. Require EXACTLY one candidate.
+  const pcInstitutions = await paycrest.getInstitutions('NGN');
+  const bankName = pcInstitutions.find(b => b.code === inst.bankInstitution)?.name ?? inst.bankInstitution;
+  const bachsBanks = await bachs.getRequirementsBanks(acct, { sandbox });
+  const bankMatches = bachsBanks.filter(b => norm(b.name) === norm(bankName));
+  if (bankMatches.length !== 1) {
+    throw new Error('bank could not be mapped to a single Bachs bank code');   // PII-free
+  }
+  const bankCode = bankMatches[0].code;
+
+  // Reuse an existing destination ONLY if it's for THIS exact account + bank and is
+  // usable — never blindly trust a cached id (the merchant may have changed banks,
+  // which would otherwise keep paying the old account). Matching the current account
+  // number is the invariant that makes stale/wrong-bank routing impossible.
+  const existing = (await bachs.listPayoutDestinations(acct, { sandbox })).find(d =>
+    d.destination_type === 'bank_account' &&
+    (d.currency ?? 'NGN') === 'NGN' &&
+    d.is_usable !== false &&
+    d.account_number === targetAcctNo &&
+    (d.bank_code == null || d.bank_code === bankCode));
+  if (existing) {
+    if (merchant.bachsPayoutDestinationId !== existing.id) {
+      await prisma.merchant.update({ where: { id: merchant.id }, data: { bachsPayoutDestinationId: existing.id } });
+    }
+    return existing.id;
+  }
+
+  // Create — but ONLY after Bachs independently confirms the account resolves to a
+  // name matching the merchant's stored name. Fail CLOSED: if either name is missing
+  // or they differ, refuse to register (unconditional gate — no "skip if no name").
+  const resolved = await bachs.resolveRequirementsAccount(acct, { accountNumber: targetAcctNo, bankCode }, { sandbox });
+  const resolvedName = (resolved.account_name ?? '').trim();
+  const storedName   = (inst.bankAccountName ?? '').trim();
+  if (!resolvedName || !storedName || norm(resolvedName) !== norm(storedName)) {
+    throw new Error('payout account name could not be verified');   // PII-free
+  }
+
+  const dest = await bachs.createPayoutDestination(acct, {
+    destination_type: 'bank_account',
+    currency:         'NGN',
+    bank_code:        bankCode,
+    account_number:   targetAcctNo,
+    account_name:     resolvedName,
+  }, { sandbox });
+  await prisma.merchant.update({ where: { id: merchant.id }, data: { bachsPayoutDestinationId: dest.id } });
+  recordAudit({
+    merchantId: merchant.id, actorType: 'system', action: 'payout.destination_created',
+    targetType: 'payout_destination', targetId: dest.id,
+    metadata: { bankCode, accountLast4: targetAcctNo.slice(-4) },
+  });
+  return dest.id;
+}
+
+/**
+ * Run the deferred payout for a Bachs order: withdraw the vendor's share from their
+ * connected-account balance out to their bank. Idempotent per order; safe to retry.
+ *   - 'paid'    → withdrawal accepted by Bachs (terminal for our purposes).
+ *   - 'waiting' → connected balance not yet funded; caller reschedules.
+ *   - 'blocked' → no verified payout destination; needs merchant/ops attention.
+ *   - 'stop'    → nothing to do (not a bachs order / already paid / split not settled).
+ */
+export async function runBachsWithdrawal(orderId: string): Promise<{ status: 'paid' | 'waiting' | 'blocked' | 'failed' | 'stop'; reason?: string }> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { steps: { orderBy: { sequence: 'asc' } } },
+  });
+  if (!order) return { status: 'stop', reason: 'order not found' };
+  // Sandbox orders mock the payout at settlement time — never touch live Bachs here
+  // (createWithdrawal/getBalances are live-only). Defense-in-depth against a stray
+  // sandbox trigger reaching this live path.
+  if (order.sandboxMode) return { status: 'stop', reason: 'sandbox order' };
+  if (order.bachsPayoutStatus === 'paid' || order.bachsPayoutStatus === 'processing') {
+    return { status: 'stop', reason: `payout already ${order.bachsPayoutStatus}` };
+  }
+  if (order.bachsSplitStatus !== 'settled') return { status: 'stop', reason: 'split not settled' };
+
+  const collectStep = order.steps.find(s => s.sequence === 0 && s.provider === 'bachs');
+  if (!collectStep) return { status: 'stop', reason: 'not a bachs order' };
+
+  const merchant = await prisma.merchant.findUnique({ where: { id: order.merchantId } });
+  if (!merchant?.bachsConnectedAccountId) return { status: 'stop', reason: 'merchant has no connected account' };
+  // A withdrawal needs `payouts` active on the connected account (not just `transfers`,
+  // which gated order creation). Until Bachs enables it, wait and retry.
+  if (merchant.bachsPayoutsStatus !== 'active') {
+    return { status: 'waiting', reason: 'payouts capability not active yet' };
+  }
+
+  const share = bachsVendorShare(Number(collectStep.amountOut ?? order.sourceAmount ?? 0));
+  if (!(share > 0)) return { status: 'stop', reason: 'non-positive share' };
+
+  // Ensure a verified payout destination. A failure here means we must NOT move money.
+  let destinationId: string;
+  try {
+    destinationId = await ensureBachsPayoutDestination({
+      id: merchant.id,
+      bachsConnectedAccountId: merchant.bachsConnectedAccountId,
+      bachsPayoutDestinationId: merchant.bachsPayoutDestinationId,
+    });
+  } catch (err: any) {
+    // The detailed err.message can embed the account HOLDER'S NAME (name-mismatch
+    // path) — keep that out of the merchant-facing audit trail + order timeline
+    // (PII, and the platform-admin audit view is cross-tenant). Log a stable,
+    // PII-free reason; the full detail goes only to Sentry (internal).
+    const publicReason = 'Payout bank could not be verified — check your payout account.';
+    await prisma.order.update({ where: { id: order.id }, data: { bachsPayoutStatus: 'blocked' } });
+    recordServerEvent(order.id, 'bachs.payout.blocked', publicReason);
+    recordAudit({
+      merchantId: order.merchantId, actorType: 'system', action: 'payout.blocked',
+      targetType: 'order', targetId: order.id, metadata: { reason: publicReason },
+    });
+    Sentry.captureMessage('bachs payout blocked — no verified destination', {
+      level: 'warning', tags: { area: 'executor.bachs-payout' }, extra: { orderId: order.id, error: err.message },
+    });
+    return { status: 'blocked', reason: publicReason };
+  }
+
+  // Only withdraw once the split has actually landed in available_balance.
+  const balances = await bachs.getBalances(merchant.bachsConnectedAccountId);
+  const ngn = balances.balances.find(b => b.currency === 'NGN');
+  const available = Number(ngn?.available_balance ?? 0);
+  if (available < share) {
+    return { status: 'waiting', reason: `connected available ${available} < share ${share}` };
+  }
+
+  const withdrawal = await bachs.createWithdrawal({
+    connectedAccountId:  merchant.bachsConnectedAccountId,
+    amount:              share,
+    fromCurrency:        'NGN',
+    toCurrency:          'NGN',
+    reference:           order.id,
+    // Distinct key namespace from the split's `split:${order.id}` — reusing the same
+    // key across the transfer and the withdrawal risks Bachs returning the cached
+    // transfer response for the withdrawal (if keys are scoped per-account).
+    email:               merchant.email,
+    payoutDestinationId: destinationId,
+    idempotencyKey:      `payout:${order.id}`,   // one withdrawal per order — safe to retry
+  });
+
+  const terminalFailed = /^(fail|failed|cancel|cancelled|canceled|declined)$/i.test(withdrawal.status ?? '');
+  await prisma.order.update({
+    where: { id: order.id },
+    data:  {
+      bachsPayoutStatus: terminalFailed ? 'failed' : 'paid',
+      bachsWithdrawalId: withdrawal.withdrawal_id,
+      bachsPayoutAt:     new Date(),
+    },
+  });
+  recordServerEvent(order.id, 'bachs.payout.settled', `Vendor payout ₦${share} to bank (${withdrawal.status})`, { withdrawalId: withdrawal.withdrawal_id });
+  recordAudit({
+    merchantId: order.merchantId, actorType: 'system', action: 'payout.withdrawn',
+    targetType: 'order', targetId: order.id,
+    metadata: { amountNgn: share, withdrawalId: withdrawal.withdrawal_id, currency: 'NGN' },
+  });
+
+  // Reflect the real outcome so the job doesn't log a hard-failed withdrawal as success.
+  return { status: terminalFailed ? 'failed' : 'paid' };
+}
+
 export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult> {
   const { plan, orderId } = input;
+
+  // Bachs uses a 2-phase (collect → split) model that doesn't fit the generic
+  // reverse-walk chain, so it has its own self-contained path (incl. its own
+  // idempotency + reconstruction).
+  if (plan.steps[0]?.provider === 'bachs') {
+    return executeBachsOrder(input);
+  }
 
   // 1. Idempotency Check
   const existingSteps = await prisma.routeStep.findMany({
@@ -985,7 +1487,7 @@ export async function markStepFailed(params: { provider: string; externalId: str
  */
 export async function syncOrder(
   orderId: string,
-  preloaded?: { status: string; sandboxMode: boolean; steps: RouteStep[] },
+  preloaded?: { status: string; sandboxMode: boolean; steps: RouteStep[]; bachsSplitStatus?: string | null },
 ): Promise<{ paycrestStatus: string | null; nearStatus: string | null; changed: boolean }> {
   // Raw provider statuses gathered during the sweep. The widget polls
   // GET /orders/:id and keys intermediate UI on these — e.g. NEAR
@@ -1093,6 +1595,36 @@ export async function syncOrder(
         if (confirmedAmount != null) {
           console.log(`[sync] direct payment confirmed on-chain: ${confirmedAmount} USDC`);
           await markStepDone({ provider: 'direct', externalId: step.externalId, amountOut: confirmedAmount });
+          result.changed = true;
+        }
+      } else if (step.provider === 'bachs' && step.externalId) {
+        // Poll the Bachs checkout status. This is the PRIMARY settlement signal for
+        // sandbox test-mode orders (whose webhooks are signed with the sandbox
+        // secret, not our live one) and a webhook fallback for live. Sandbox orders
+        // verify against the Bachs sandbox with the test key.
+        console.log(`[sync] checking bachs checkout ${step.externalId} (sandbox: ${order.sandboxMode})`);
+        const chk = await bachs.getCheckout(step.externalId, { sandbox: order.sandboxMode });
+        // Paid if ANY of the three signals reads terminal-success — the exact token
+        // varies (session 'complete', payment_status 'paid', charge 'succeeded').
+        const signals = [chk.status, chk.payment_status, chk.charge_status].map(s => String(s ?? '').toLowerCase());
+        console.log(`[sync] bachs checkout status for ${step.id}: ${signals.filter(Boolean).join(', ')}`);
+        const isPaid   = signals.some(s => /^(complete|completed|succeed|succeeded|paid|success|successful)$/.test(s));
+        const isFailed = signals.some(s => /^(fail|failed|cancel|cancelled|canceled|expire|expired|void|voided)$/.test(s));
+
+        if (isPaid) {
+          // Collection confirmed → order COMPLETES (customer paid). Then settle the
+          // vendor split + payout: sandbox mocks both (mirrors Paystack "no subaccount
+          // in test"); live schedules the real deferred split (which arms the payout).
+          await markStepDone({ provider: 'bachs', externalId: step.externalId, amountOut: Number(step.amountOut ?? step.amountIn ?? 0) });
+          result.changed = true;
+          if (order.sandboxMode) {
+            await prisma.order.update({ where: { id: orderId }, data: { bachsSplitStatus: 'settled', bachsSplitAt: new Date(), bachsPayoutStatus: 'paid', bachsPayoutAt: new Date() } });
+          } else if (!order.bachsSplitStatus) {
+            await prisma.order.update({ where: { id: orderId }, data: { bachsSplitStatus: 'pending' } });
+            await scheduleBachsSettle({ orderId, attempt: 1 });
+          }
+        } else if (isFailed) {
+          await markStepFailed({ provider: 'bachs', externalId: step.externalId });
           result.changed = true;
         }
       }

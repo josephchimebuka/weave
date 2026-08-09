@@ -124,6 +124,22 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
           />
           {order.paycrestStatus && <Field label="Paycrest status" value={order.paycrestStatus} />}
           {order.nearStatus && <Field label="NEAR status" value={order.nearStatus} />}
+          {(order.bachsPayoutStatus || order.bachsSplitStatus) && (
+            <Field
+              label="Payout to your bank"
+              value={
+                order.bachsPayoutStatus === 'paid'       ? 'Paid to your bank ✓'
+                : order.bachsPayoutStatus === 'processing' ? 'Paying out…'
+                : order.bachsPayoutStatus === 'blocked'    ? 'Blocked — verify your payout bank'
+                : order.bachsPayoutStatus === 'failed'     ? 'Failed — being retried'
+                : order.bachsPayoutStatus === 'pending'    ? 'Processing — paying out to your bank'
+                // No payout row yet: fall back to the split (collection→balance) stage.
+                : order.bachsSplitStatus === 'settled'     ? 'Collected — payout queued'
+                : order.bachsSplitStatus === 'failed'      ? 'Failed — being retried'
+                : 'Settling (usually within 1–2 business days)'
+              }
+            />
+          )}
         </div>
       </div>
 

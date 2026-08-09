@@ -37,6 +37,11 @@ router.patch('/', requireAuth, async (req, res) => {
       city:            data.city,
       state:           data.state,
       postalCode:      data.postalCode,
+      websiteUrl:         data.websiteUrl,
+      productDescription: data.productDescription,
+      supportEmail:       data.supportEmail,
+      productCategory:    data.productCategory,
+      socialMedia:        data.socialMedia,
       documentUrls:    data.documentUrls,
     };
 

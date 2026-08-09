@@ -401,7 +401,19 @@ router.post('/logout', async (req, res) => {
   if (!token) return res.status(400).json({ success: false, error: 'x-session-token header is required' });
 
   try {
+    // Resolve the owning merchant BEFORE deleting, so the sign-out is attributed.
+    const session = await prisma.session.findUnique({ where: { token }, select: { merchantId: true } });
     await prisma.session.deleteMany({ where: { token } });
+    if (session?.merchantId) {
+      recordAudit({
+        merchantId: session.merchantId,
+        actorType: 'merchant',
+        actorId: session.merchantId,
+        action: 'auth.logout',
+        ip: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
+    }
     return res.json({ success: true, data: { loggedOut: true } });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });

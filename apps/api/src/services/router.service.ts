@@ -5,9 +5,9 @@
 
 import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
-import { PAYSTACK_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
+import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 
-export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
 
 // Which checkout flow the caller is in. 'self' means the user signs with a
 // connected wallet (ChainRails can do this once it's fully wired). 'external'
@@ -56,7 +56,20 @@ type Edge = {
 const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM', 'BSC', 'AVALANCHE'];
 
 const EDGES: Edge[] = [
-  // Paystack: Direct NGN to NGN.
+  // Bachs Connect: Direct NGN to NGN (licensed split-payment collection). Listed
+  // BEFORE the Paystack edge so that if both were ever enabled, Bachs wins the
+  // BFS for NGN→NGN. In practice Paystack is disabled and Bachs is its successor.
+  {
+    provider: 'bachs',
+    from: (a) => a.kind === 'fiat' && a.currency === 'NGN',
+    to: (a) => a.kind === 'fiat' && a.currency === 'NGN',
+    expectedFeeBps: 150, // placeholder until Bachs fees confirmed
+    expectedSecs: 60,
+    note: 'bachs (domestic NGN collection + split)',
+    flows: ['external'],
+  },
+  // Paystack: Direct NGN to NGN. Disabled (account suspended); kept for the
+  // route planner + the PAYSTACK_ENABLED kill switch.
   {
     provider: 'paystack',
     from: (a) => a.kind === 'fiat' && a.currency === 'NGN',
@@ -117,12 +130,13 @@ export function planRoute(req: RouteRequest): RoutePlan {
   const dst = parseAsset(req.destAsset);
   const flow: Flow = req.flow ?? 'external';
 
-  // Paystack kill switch. A pure NGN→NGN collection is the "pay with naira"
-  // (Paystack) path. If Paystack is disabled we must refuse it explicitly here —
-  // otherwise the BFS below would silently reroute NGN→NGN through Paycrest
-  // (onramp→offramp via USDC on Base), moving money on a corridor the caller
-  // never asked for. Crypto→fiat (Paycrest offramp) settlement is unaffected.
-  if (!PAYSTACK_ENABLED && src.kind === 'fiat' && dst.kind === 'fiat') {
+  // Naira kill switch. A pure NGN→NGN collection is the "pay with naira" path
+  // (Bachs today, Paystack historically). If EVERY naira corridor is disabled we
+  // must refuse it explicitly here — otherwise the BFS below would silently
+  // reroute NGN→NGN through Paycrest (onramp→offramp via USDC on Base), moving
+  // money on a corridor the caller never asked for. Crypto→fiat (Paycrest
+  // offramp) settlement is unaffected.
+  if (!NAIRA_ENABLED && src.kind === 'fiat' && dst.kind === 'fiat') {
     throw new Error(NAIRA_DISABLED_MESSAGE);
   }
 
@@ -139,11 +153,12 @@ export function planRoute(req: RouteRequest): RoutePlan {
     }]);
   }
 
-  // Pre-filter edges by flow (and drop Paystack entirely while it's disabled) so
-  // the BFS traversal never considers a rail that doesn't match the caller's
-  // checkout mode or a provider that's been killed for an incident.
+  // Pre-filter edges by flow, and drop disabled naira providers so the BFS
+  // traversal never considers a rail that doesn't match the caller's checkout
+  // mode or a provider that's been killed for an incident / not yet enabled.
   const edges = EDGES.filter(e =>
     (e.provider !== 'paystack' || PAYSTACK_ENABLED) &&
+    (e.provider !== 'bachs'    || BACHS_ENABLED) &&
     (!e.flows || e.flows.includes(flow)),
   );
 
@@ -169,7 +184,9 @@ export function planRoute(req: RouteRequest): RoutePlan {
         if (seen.has(nextKey) && nextKey !== req.destAsset) continue;
         const nextAsset = parseAsset(nextKey);
         if (!edge.to(nextAsset)) continue;
-        if (cur.key === nextKey && edge.provider !== 'paystack') continue;
+        // Same-asset hops are normally rejected, but the domestic NGN→NGN
+        // collectors (Bachs, Paystack) legitimately have identical from/to.
+        if (cur.key === nextKey && edge.provider !== 'paystack' && edge.provider !== 'bachs') continue;
 
         const step: RoutePlanStep = {
           provider: edge.provider,

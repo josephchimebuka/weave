@@ -10,7 +10,19 @@
 // re-open the dead provider.
 export const PAYSTACK_ENABLED = process.env.PAYSTACK_ENABLED === 'true';
 
-// User-facing message when a naira (Paystack) collection is attempted while the
-// provider is disabled. Kept here so the copy is identical everywhere it surfaces.
+// BACHS: Bachs Connect is the licensed naira-collection replacement for Paystack.
+// The customer pays into Dewdrop's Bachs platform balance (funds custodied by
+// Bachs, the CBN-licensed party — NOT Dewdrop's own bank account), and each
+// vendor's share is split to their connected account. Defaults OFF; set
+// `BACHS_ENABLED=true` once onboarding + licensing are confirmed. When enabled,
+// `planRoute` routes NGN→NGN through Bachs instead of Paystack.
+export const BACHS_ENABLED = process.env.BACHS_ENABLED === 'true';
+
+// True when SOME naira corridor is live. The naira kill switch (in planRoute)
+// only rejects a pure NGN→NGN collection when EVERY corridor is down.
+export const NAIRA_ENABLED = PAYSTACK_ENABLED || BACHS_ENABLED;
+
+// User-facing message when a naira collection is attempted while every naira
+// corridor is disabled. Kept here so the copy is identical everywhere it surfaces.
 export const NAIRA_DISABLED_MESSAGE =
   'Naira card & bank payments are temporarily unavailable. Please pay with crypto instead.';

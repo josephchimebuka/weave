@@ -49,6 +49,39 @@ describe('planRoute', () => {
     }
   });
 
+  it('NGN → NGN: single bachs step when BACHS_ENABLED=true', async () => {
+    const prev = process.env.BACHS_ENABLED;
+    process.env.BACHS_ENABLED = 'true';
+    vi.resetModules();
+    try {
+      const { planRoute: planEnabled } = await import('../services/router.service');
+      const plan = planEnabled({ sourceAsset: 'fiat:NGN', destAsset: 'fiat:NGN', amount: 5000, flow: 'external' });
+      expect(plan.steps).toHaveLength(1);
+      expect(plan.steps[0].provider).toBe('bachs');
+    } finally {
+      process.env.BACHS_ENABLED = prev;
+      vi.resetModules();
+    }
+  });
+
+  it('NGN → NGN: bachs wins over paystack when both enabled', async () => {
+    const prevB = process.env.BACHS_ENABLED;
+    const prevP = process.env.PAYSTACK_ENABLED;
+    process.env.BACHS_ENABLED = 'true';
+    process.env.PAYSTACK_ENABLED = 'true';
+    vi.resetModules();
+    try {
+      const { planRoute: planEnabled } = await import('../services/router.service');
+      const plan = planEnabled({ sourceAsset: 'fiat:NGN', destAsset: 'fiat:NGN', amount: 5000, flow: 'external' });
+      expect(plan.steps).toHaveLength(1);
+      expect(plan.steps[0].provider).toBe('bachs');
+    } finally {
+      process.env.BACHS_ENABLED = prevB;
+      process.env.PAYSTACK_ENABLED = prevP;
+      vi.resetModules();
+    }
+  });
+
   it('NGN → USDC(Base): single paycrest onramp step', () => {
     const plan = planRoute({ sourceAsset: 'fiat:NGN', destAsset: 'crypto:BASE:USDC', amount: 5000 });
     expect(plan.steps).toHaveLength(1);

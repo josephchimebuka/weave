@@ -15,8 +15,11 @@ export type OrderFilter = {
 };
 
 export type OrderWithProviderStatus<Order> = Order & {
-  paycrestStatus?: string | null;
-  nearStatus?:     string | null;
+  paycrestStatus?:  string | null;
+  nearStatus?:      string | null;
+  bachsSplitStatus?: string | null;
+  bachsPayoutStatus?: string | null;
+  bachsPayoutAt?:   string | null;
 };
 
 // Returns a URLSearchParams query string from a filter object, omitting empty values.

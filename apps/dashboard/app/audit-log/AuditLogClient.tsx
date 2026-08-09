@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState, useEffect, useCallback } from 'react';
 import { Search, Download, X, ScrollText, ShieldCheck } from 'lucide-react';
 import AutoRefresh from '../AutoRefresh';
+import { Select } from '../../components/Select';
 import {
   type AuditEvent,
   type Category,
@@ -110,7 +111,7 @@ export default function AuditLogClient({
     : 'grid-cols-[92px_minmax(0,1.9fr)_minmax(0,1fr)_auto]';
 
   return (
-    <div className={`flex flex-col xl:flex-row gap-0 -mx-6 md:-mx-10 lg:-mx-14 -my-8 md:-my-10 min-h-[calc(100vh-2rem)]`}>
+    <div className={`flex flex-col xl:flex-row gap-0 -mx-6 md:-mx-10 lg:-mx-14 -mb-8 md:-mb-10 min-h-[calc(100vh-2rem)]`}>
       <AutoRefresh interval={20000} onRefresh={() => load(true)} />
 
       <div className={`flex-1 flex flex-col overflow-hidden px-6 md:px-10 lg:px-14 py-8 md:py-10 ${selected ? 'xl:max-w-[calc(100%-440px)]' : ''}`}>
@@ -180,15 +181,15 @@ export default function AuditLogClient({
               className="w-72 pl-10 pr-4 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 transition-colors shadow-leaf"
             />
           </div>
-          <select
+          <Select
             value={category}
             onChange={(e) => setCategory(e.target.value as Category | 'all')}
-            className="px-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
+            className="pl-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
           >
             {CATEGORIES.map((c) => (
               <option key={c.key} value={c.key}>{c.label}</option>
             ))}
-          </select>
+          </Select>
           <span className="text-[13px] text-ink-muted ml-auto tabular-nums">
             {loading ? 'Loading…' : `${filtered.length} event${filtered.length === 1 ? '' : 's'}`}
           </span>

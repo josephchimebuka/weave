@@ -1,243 +1,352 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useEffect } from 'react';
-import {
-  Search,
-  Download,
-  Landmark,
-  Clock,
-  CheckCircle2,
-  Calendar,
-  ArrowRight,
-  TrendingUp,
-} from 'lucide-react';
-import { fetchOrdersClient as fetchOrders } from '../lib/dashboard-api-client';
-import type { Order } from '../types';
+import { useState, useEffect, useMemo } from 'react';
+import { Landmark, Clock, CheckCircle2, AlertTriangle, ArrowRight, Banknote, Search, Download } from 'lucide-react';
 import AutoRefresh from '../AutoRefresh';
+import { Select } from '../../components/Select';
 
-interface Settlement {
-  id: number;
-  status: string;
-  currency: string;
-  total_amount: number;
-  effective_amount: number;
-  total_fees: number;
-  total_processed: number;
-  settlement_date: string;
-  createdAt: string;
-  settled_by: string | null;
+type PayoutStatus = 'pending' | 'processing' | 'paid' | 'blocked' | 'failed' | 'refunded' | string;
+
+interface LedgerItem {
+  orderId: string;
+  reference: string | null;
+  customer: string | null;
+  amountNgn: number;
+  status: PayoutStatus;
+  at: string;
+}
+interface Ledger {
+  summary: {
+    processingNgn: number;
+    paidNgn: number;
+    blockedCount: number;
+    failedCount: number;
+    holdSeconds: number;
+    destination: { bank: string; accountLast4: string } | null;
+  };
+  items: LedgerItem[];
 }
 
-export default function PayoutsPage() {
-  const [settlements, setSettlements] = useState<Settlement[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+type RangeKey = 'today' | 'yesterday' | 'last7' | 'thisMonth' | 'lastMonth' | 'alltime';
+const DATE_RANGES: { value: RangeKey; label: string }[] = [
+  { value: 'alltime', label: 'All time' },
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'last7', label: 'Last 7 days' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'lastMonth', label: 'Last month' },
+];
+const STATUS_FILTERS: { value: string; label: string }[] = [
+  { value: 'all', label: 'All status' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'processing', label: 'Processing' },
+  { value: 'blocked', label: 'Blocked' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'refunded', label: 'Refunded' },
+];
 
-  const load = async (isSilent = false) => {
-    try {
-      if (!isSilent) setLoading(true);
+const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+const endOfDay = (d: Date) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
+function computeRange(key: RangeKey): { from?: Date; to?: Date } {
+  const now = new Date();
+  switch (key) {
+    case 'today': return { from: startOfDay(now), to: endOfDay(now) };
+    case 'yesterday': { const y = new Date(now); y.setDate(now.getDate() - 1); return { from: startOfDay(y), to: endOfDay(y) }; }
+    case 'last7': { const f = new Date(now); f.setDate(now.getDate() - 6); return { from: startOfDay(f), to: endOfDay(now) }; }
+    case 'thisMonth': return { from: startOfDay(new Date(now.getFullYear(), now.getMonth(), 1)), to: endOfDay(now) };
+    case 'lastMonth': return {
+      from: startOfDay(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+      to: endOfDay(new Date(now.getFullYear(), now.getMonth(), 0)),
+    };
+    default: return {};
+  }
+}
 
-      // Fetch settlements
-      const sRes = await fetch('/api/merchant/payouts/settlements');
-      const sData = await sRes.json();
-      if (!sRes.ok) throw new Error(sData.error || 'Failed to load settlements');
-      setSettlements(sData.data || []);
+const naira = (n: number) =>
+  `₦${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
-      // Fetch recent orders to calculate pending balance
-      const rawOrders = await fetchOrders(50);
-      setOrders(rawOrders);
+const shortDate = (iso: string) => {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
 
-      setLoading(false);
-    } catch (err) {
-      if (!isSilent) {
-        setError(err instanceof Error ? err.message : 'Failed to load data');
-        setLoading(false);
-      }
-    }
+const holdLabel = (s: number) => {
+  if (!s) return null;
+  if (s % 3600 === 0) return `${s / 3600}h`;
+  if (s % 60 === 0) return `${s / 60}m`;
+  return `${s}s`;
+};
+
+function StatusChip({ status }: { status: PayoutStatus }) {
+  const map: Record<string, { label: string; cls: string; dot: string }> = {
+    paid:       { label: 'Paid',       cls: 'bg-forest/8 text-forest-deep border-forest/20', dot: 'bg-forest' },
+    processing: { label: 'Processing', cls: 'bg-amber-50 text-amber-700 border-amber-200',   dot: 'bg-amber-500' },
+    pending:    { label: 'Processing', cls: 'bg-amber-50 text-amber-700 border-amber-200',   dot: 'bg-amber-500' },
+    blocked:    { label: 'Blocked',    cls: 'bg-red-50 text-red-700 border-red-200',         dot: 'bg-red-500' },
+    failed:     { label: 'Failed',     cls: 'bg-red-50 text-red-700 border-red-200',         dot: 'bg-red-500' },
+    refunded:   { label: 'Refunded',   cls: 'bg-cream-deep/50 text-ink-soft border-hair',    dot: 'bg-ink-muted' },
   };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  // Calculate stats
-  const lastSettlement = settlements[0];
-  const lastSettlementDate = lastSettlement ? new Date(lastSettlement.createdAt) : new Date(0);
-
-  const pendingOrders = orders.filter(o =>
-    o.status === 'completed' &&
-    new Date(o.createdAt) > lastSettlementDate
-  );
-
-  const pendingBalance = pendingOrders.reduce((sum, o) => {
-    // Only sum successful NGN to NGN transfers handled by Paystack
-    const isNgnToNgn = o.sourceAssetKey === 'fiat:NGN' && o.destAssetKey === 'fiat:NGN';
-    const usesPaystack = o.steps.some(s => s.provider === 'paystack');
-
-    if (isNgnToNgn && usesPaystack) {
-      return sum + (o.destAmount || 0);
-    }
-    return sum;
-  }, 0);
-
-  const lastSettledAmount = lastSettlement ? lastSettlement.total_amount / 100 : 0;
-
-  // Next payout estimation (T+1 business days)
-  const getNextPayoutDate = () => {
-    const today = new Date();
-    const next = new Date(today);
-    next.setDate(today.getDate() + 1);
-    // If weekend, push to Monday
-    if (next.getDay() === 0) next.setDate(next.getDate() + 1);
-    if (next.getDay() === 6) next.setDate(next.getDate() + 2);
-    return next;
-  };
-
-  const fmtCurrency = (n: number) => {
-    return `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
-
-  const fmtDate = (iso: string) => {
-    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
-
+  const s = map[status] ?? { label: status, cls: 'bg-cream-deep/40 text-ink-muted border-hair-soft', dot: 'bg-ink-faint' };
   return (
-    <div className="flex flex-col gap-0 -mx-6 md:-mx-10 lg:-mx-14 -my-8 md:-my-10 min-h-[calc(100vh-2rem)]">
-      <AutoRefresh interval={30000} onRefresh={() => load(true)} />
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[12px] font-medium ${s.cls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
+      {s.label}
+    </span>
+  );
+}
 
-      <div className="flex-1 flex flex-col px-6 md:px-10 lg:px-14 py-8 md:py-10">
-        {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
-          <div className="fade-up">
-            <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-none">
-              Payouts
-            </h1>
-            <p className="text-ink-muted text-[15px] mt-2">
-              Track your bank settlements and pending balances.
-            </p>
-          </div>
-
-          <Link
-            href="/settings?tab=payouts"
-            className="flex items-center gap-2 px-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-forest-deep hover:border-forest/40 transition-all shadow-leaf font-medium"
-          >
-            <Landmark size={15} strokeWidth={1.9} />
-            Payout Settings
-          </Link>
-        </div>
-
-        {/* Stat cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-          <StatCard
-            label="Pending Balance"
-            value={fmtCurrency(pendingBalance)}
-            footer={
-              <span className="inline-flex items-center gap-1 text-cream-soft/90 text-[12px]">
-                Estimated next settlement
-              </span>
-            }
-            delay={80}
-            highlight
-          />
-          <StatCard
-            label="Last Settlement"
-            value={fmtCurrency(lastSettledAmount)}
-            footer={
-              <span className="inline-flex items-center gap-1 text-ink-muted text-[12px]">
-                {lastSettlement ? fmtDate(lastSettlement.createdAt) : 'No history yet'}
-              </span>
-            }
-            delay={120}
-          />
-          <StatCard
-            label="Next Expected Payout"
-            value={fmtDate(getNextPayoutDate().toISOString())}
-            footer={
-              <span className="inline-flex items-center gap-1 text-ink-muted text-[12px]">
-                Based on T+1 schedule
-              </span>
-            }
-            delay={160}
-          />
-        </div>
-
-        {/* Payout list */}
-        <div className="relative rounded-3xl bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden flex-1 flex flex-col fade-up" style={{ animationDelay: '200ms' }}>
-          <div className="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1.5fr_1fr_1fr_1fr] gap-4 px-6 py-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted border-b border-hair-soft">
-            <div>Settlement ID</div>
-            <div className="hidden sm:block">Date</div>
-            <div className="text-center">Status</div>
-            <div className="text-right">Amount</div>
-          </div>
-
-          {loading ? (
-            <div className="p-12 text-center text-ink-muted animate-pulse">Loading settlements...</div>
-          ) : settlements.length === 0 ? (
-            <div className="py-20 text-center">
-              <p className="text-[14px] text-ink-muted">No settlements found yet.</p>
-            </div>
-          ) : (
-            <div className="flex-1 overflow-y-auto">
-              {settlements.map((s) => (
-                <div
-                  key={s.id}
-                  className="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[1.5fr_1fr_1fr_1fr] gap-4 items-center px-6 py-5 border-b border-hair-soft/60 last:border-b-0 hover:bg-cream-deep/30 transition-colors"
-                >
-                  <div className="min-w-0">
-                    <p className="font-semibold text-ink text-[14px] truncate font-mono">#{s.id}</p>
-                    <p className="sm:hidden text-[11px] text-ink-muted">{fmtDate(s.createdAt)}</p>
-                  </div>
-                  <div className="hidden sm:block text-[13px] text-ink-soft">
-                    {fmtDate(s.createdAt)}
-                  </div>
-                  <div className="text-center">
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium ${s.status === 'success' ? 'bg-forest-surface text-forest-deep' : 'bg-tan-mist text-tan-deep'
-                      }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${s.status === 'success' ? 'bg-forest' : 'bg-tan'}`} />
-                      {s.status === 'success' ? 'Settled' : s.status}
-                    </span>
-                  </div>
-                  <div className="text-right font-semibold text-ink tabular-nums text-[14px]">
-                    {fmtCurrency(s.total_amount / 100)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+function Card({ children, className = '', delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
+  return (
+    <div
+      className={`relative rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf fade-up ${className}`}
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <div className="p-6">{children}</div>
     </div>
   );
 }
 
-function StatCard({
-  label,
-  value,
-  footer,
-  delay = 0,
-  highlight = false
-}: {
-  label: string;
+// Thin wrapper: the shared Select with this page's pill styling + options array.
+function FilterSelect({ value, onChange, options }: {
   value: string;
-  footer: React.ReactNode;
-  delay?: number;
-  highlight?: boolean;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
 }) {
   return (
-    <div
-      className={`relative rounded-3xl border shadow-leaf px-6 py-5 fade-up overflow-hidden ${highlight ? 'bg-forest text-cream-soft border-forest' : 'bg-cream-soft border-hair-soft'
-        }`}
-      style={{ animationDelay: `${delay}ms` }}
+    <Select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="pl-4 py-2.5 bg-cream-soft border border-hair rounded-full text-[13.5px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all font-medium focus:outline-none cursor-pointer"
     >
-      <p className={`text-[13px] font-medium ${highlight ? 'text-cream-soft/70' : 'text-ink-muted'}`}>{label}</p>
-      <p className="mt-2 font-display text-[34px] leading-tight font-semibold tabular-nums">
-        {value}
-      </p>
-      <div className={`mt-3 ${highlight ? 'text-cream-soft/60' : ''}`}>{footer}</div>
-      {highlight && (
-        <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-cream-soft/10 rounded-full blur-2xl" />
+      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </Select>
+  );
+}
+
+// Normalise a status to the bucket the filter uses (pending reads as processing).
+const bucket = (s: PayoutStatus) => (s === 'pending' ? 'processing' : s);
+
+function exportCsv(items: LedgerItem[]) {
+  // Quote for CSV AND neutralise spreadsheet formula injection: a customer-supplied
+  // cell starting with = + - @ (or tab/CR) is prefixed with ' so Excel/Sheets treats
+  // it as text, not a formula. `customer`/`reference` are payer-controlled.
+  const esc = (v: string) => {
+    const s = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+  const isoOrBlank = (iso: string) => { const d = new Date(iso); return isNaN(d.getTime()) ? '' : d.toISOString(); };
+  const header = ['Date', 'Amount (NGN)', 'Status', 'Customer', 'Reference', 'Order ID'];
+  const rows = items.map((i) => [
+    isoOrBlank(i.at),
+    String(i.amountNgn),
+    bucket(i.status),
+    i.customer ?? '',
+    i.reference ?? '',
+    i.orderId,
+  ].map(esc).join(','));
+  const csv = [header.map(esc).join(','), ...rows].join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `payouts-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export default function PayoutsPage() {
+  const [ledger, setLedger] = useState<Ledger | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [range, setRange] = useState<RangeKey>('alltime');
+
+  const load = async (silent = false) => {
+    try {
+      if (!silent) setLoading(true);
+      const res = await fetch('/api/merchant/payouts/ledger', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load payouts');
+      setLedger(data);
+      setError(null);
+    } catch (e) {
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load payouts');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const s = ledger?.summary;
+  const hold = holdLabel(s?.holdSeconds ?? 0);
+
+  const filtered = useMemo(() => {
+    const items = ledger?.items ?? [];
+    const q = query.trim().toLowerCase();
+    const { from, to } = computeRange(range);
+    return items.filter((i) => {
+      if (statusFilter !== 'all' && bucket(i.status) !== statusFilter) return false;
+      if (from || to) {
+        const t = new Date(i.at).getTime();
+        if (from && t < from.getTime()) return false;
+        if (to && t > to.getTime()) return false;
+      }
+      if (q) {
+        const hay = `${i.customer ?? ''} ${i.reference ?? ''} ${i.orderId} ${i.status}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [ledger, query, statusFilter, range]);
+
+  const hasFilter = !!query.trim() || statusFilter !== 'all' || range !== 'alltime';
+
+  return (
+    <div>
+      <AutoRefresh interval={20000} onRefresh={() => load(true)} />
+
+      {/* Header */}
+      <div className="fade-up mb-8">
+        <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-none">
+          Payouts
+        </h1>
+        <p className="text-ink-muted text-[15px] mt-2">
+          Naira collected from your customers, settled to your bank.
+          {s?.destination && (
+            <> Paying out to <span className="text-ink-soft font-medium">{s.destination.bank} ••{s.destination.accountLast4}</span>.</>
+          )}
+        </p>
+      </div>
+
+      {error ? (
+        <div className="text-terracotta text-[14px] font-medium fade-up">{error}</div>
+      ) : loading ? (
+        <div className="h-40 rounded-[24px] bg-cream-deep/50 animate-pulse fade-up" />
+      ) : (
+        <>
+          {/* Blocked alert — needs merchant action */}
+          {!!s && s.blockedCount > 0 && (
+            <div className="fade-up mb-6 flex items-start gap-3 rounded-[20px] border border-red-200 bg-red-50 px-5 py-4">
+              <AlertTriangle size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="text-[13px] text-red-700 leading-relaxed">
+                <span className="font-semibold">{s.blockedCount} payout{s.blockedCount > 1 ? 's' : ''} blocked.</span>{' '}
+                We couldn&apos;t verify your payout bank, so these funds are safely on hold. {' '}
+                <Link href="/settings?tab=payouts" className="underline font-medium hover:text-red-800">Check your payout bank →</Link>
+              </div>
+            </div>
+          )}
+
+          {/* Summary stats — always all-time totals, independent of the filters below */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+            <Card delay={40}>
+              <div className="flex items-center gap-2 text-ink-muted text-[12px] font-semibold uppercase tracking-widest mb-2">
+                <Clock size={14} /> Processing
+              </div>
+              <div className="font-display text-[28px] font-semibold text-ink leading-none">{naira(s?.processingNgn ?? 0)}</div>
+              <div className="text-[12px] text-ink-muted mt-2">
+                {hold ? `On its way — pays out ~${hold} after each sale` : 'On its way to your bank'}
+              </div>
+            </Card>
+            <Card delay={80}>
+              <div className="flex items-center gap-2 text-ink-muted text-[12px] font-semibold uppercase tracking-widest mb-2">
+                <CheckCircle2 size={14} /> Paid out
+              </div>
+              <div className="font-display text-[28px] font-semibold text-forest-deep leading-none">{naira(s?.paidNgn ?? 0)}</div>
+              <div className="text-[12px] text-ink-muted mt-2">Settled to your bank</div>
+            </Card>
+            <Card delay={120}>
+              <div className="flex items-center gap-2 text-ink-muted text-[12px] font-semibold uppercase tracking-widest mb-2">
+                <Landmark size={14} /> Destination
+              </div>
+              {s?.destination ? (
+                <>
+                  <div className="font-display text-[20px] font-semibold text-ink leading-tight">{s.destination.bank}</div>
+                  <div className="text-[13px] text-ink-muted mt-1 font-mono">••••{s.destination.accountLast4}</div>
+                </>
+              ) : (
+                <Link href="/settings?tab=payouts" className="text-[14px] text-forest-deep hover:underline">Set a payout bank →</Link>
+              )}
+            </Card>
+          </div>
+
+          {/* Ledger */}
+          <Card delay={160}>
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-5">
+              <div className="flex items-center gap-3 text-forest-deep">
+                <Banknote size={18} strokeWidth={1.9} />
+                <h2 className="font-display text-[20px] font-semibold text-ink">Payout history</h2>
+                <span className="text-[12px] text-ink-muted tabular-nums font-normal">
+                  {filtered.length.toLocaleString()}{hasFilter ? ` of ${(ledger?.items.length ?? 0).toLocaleString()}` : ''}
+                </span>
+              </div>
+
+              {!!ledger?.items.length && (
+                <div className="flex items-center flex-wrap gap-2.5">
+                  <div className="relative">
+                    <Search size={15} strokeWidth={1.9} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-muted" />
+                    <input
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Search payouts..."
+                      className="w-48 pl-10 pr-4 py-2.5 bg-cream-soft border border-hair rounded-full text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 transition-colors"
+                    />
+                  </div>
+                  <FilterSelect value={statusFilter} onChange={setStatusFilter} options={STATUS_FILTERS} />
+                  <FilterSelect value={range} onChange={(v) => setRange(v as RangeKey)} options={DATE_RANGES} />
+                  <button
+                    onClick={() => exportCsv(filtered)}
+                    disabled={!filtered.length}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-forest text-cream-soft rounded-full text-[13.5px] hover:bg-forest-deep transition-all font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Download size={15} strokeWidth={2} />
+                    Export
+                  </button>
+                </div>
+              )}
+            </div>
+            {!ledger?.items.length ? (
+              <div className="py-12 text-center">
+                <p className="text-[14px] text-ink-muted">No naira payouts yet.</p>
+                <p className="text-[12px] text-ink-faint mt-1">They&apos;ll appear here once customers pay you in naira.</p>
+              </div>
+            ) : !filtered.length ? (
+              <div className="py-12 text-center">
+                <p className="text-[14px] text-ink-muted">No payouts match your filters.</p>
+                <button
+                  onClick={() => { setQuery(''); setStatusFilter('all'); setRange('alltime'); }}
+                  className="text-[12px] text-forest-deep hover:underline mt-1"
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-hair-soft">
+                {filtered.map((it) => (
+                  <Link
+                    key={it.orderId}
+                    href={`/transactions/${it.orderId}`}
+                    className="group flex items-center justify-between gap-4 py-3.5 -mx-2 px-2 rounded-xl hover:bg-cream-deep/40 transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-display text-[16px] font-semibold text-ink">{naira(it.amountNgn)}</div>
+                      <div className="text-[12px] text-ink-muted truncate">
+                        {it.customer || it.reference || it.orderId.slice(0, 8)} · {shortDate(it.at)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <StatusChip status={it.status} />
+                      <ArrowRight size={15} className="text-ink-faint group-hover:text-forest-deep group-hover:translate-x-0.5 transition-all" />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </Card>
+        </>
       )}
     </div>
   );

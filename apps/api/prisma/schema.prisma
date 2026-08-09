@@ -36,11 +36,27 @@ model Merchant {
   paystackSubaccountCode     String?
   paystackSubaccountStatus   SubaccountSyncStatus @default(PENDING)
   paystackSubaccountSyncedAt DateTime?
+  // Bachs Connect: the merchant's connected account ("org_…"). Naira collection
+  // splits each order's share to this account. Capability statuses are cached so
+  // the dashboard can gate order creation on `transfers` being active without an
+  // API round-trip. `bachsPayoutDestinationId` ("pd_…") is the merchant's bank
+  // destination for withdrawals; resolved during onboarding.
+  bachsConnectedAccountId    String?  @unique
+  bachsTransfersStatus       String?  // "restricted" | "pending" | "active"
+  bachsPayoutsStatus         String?  // "restricted" | "pending" | "active"
+  bachsPayoutDestinationId   String?
+  bachsOnboardedAt           DateTime?
   sessions           Session[]
   instruments        Instrument[]
   orders             Order[]
   keyPairs           KeyPair[]
+  // Merchant brand profile — themes the hosted cash-out page so it reads as the
+  // merchant's own offramp product. Shape: { logoUrl?, accentColor?, displayName?,
+  // headline?, subheadline?, bgColor?, bgImageUrl?, font? }. Display-only, so JSON
+  // is fine and future-proof; validated/whitelisted in the route.
+  brand              Json?
   paymentLinks       PaymentLink[]
+  payoutLinks        PayoutLink[]
   checkoutSessions   CheckoutSession[]
   verification       BusinessVerification?
   deliveries         WebhookDelivery[]
@@ -66,7 +82,15 @@ model BusinessVerification {
   city                String?
   state               String?
   postalCode          String?
-  
+
+  // Business profile — also maps to Bachs `business_profile.*` when a connected
+  // account requests collection capabilities.
+  websiteUrl          String?
+  productDescription  String?
+  supportEmail        String?
+  productCategory     String?
+  socialMedia         String?
+
   // Step 3: Documents
   documentUrls        Json?    // Array of { type: string, url: string }
   
@@ -190,6 +214,20 @@ model Order {
   appFeeUsd          Decimal?     @db.Decimal(18, 8)
   bridgeFeeUsd       Decimal?     @db.Decimal(18, 8)
 
+  // Bachs split settlement — decoupled from `status`. The order is 'completed'
+  // when the customer pays (collection); the vendor's share then transfers to
+  // their connected account as a post-completion settlement tracked here.
+  bachsSplitStatus     String?    // "pending" | "settled" | "failed"
+  bachsSplitTransferId String?    // Bachs transfer id ("tr_…") once the split posts
+  bachsSplitAt         DateTime?
+
+  // Bachs payout (withdrawal) — the final leg: connected-account balance → vendor's
+  // own bank. Deferred behind the split and behind an optional hold window
+  // (BACHS_PAYOUT_HOLD_S), so payout timing is a lever independent of collection.
+  bachsPayoutStatus    String?    // "pending" | "processing" | "paid" | "failed" | "blocked"
+  bachsWithdrawalId    String?    // Bachs withdrawal_id once the withdrawal posts
+  bachsPayoutAt        DateTime?
+
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
@@ -226,6 +264,11 @@ model RouteStep {
   depositBankDetails Json? // for fiat-source (Paycrest onramp) steps: { institution, accountIdentifier, accountName, amountToTransfer, currency }
   paymentChannel String?   // Paystack channel actually used by the payer: "card" | "bank" | "ussd" | "bank_transfer" | "mobile_money" | "qr" | "eft"
   paystackAccessCode String? // Paystack inline popup access code, persisted so a refreshed widget can relaunch the popup
+  // Bachs: the charge id ties a collection step to its downstream split transfer.
+  // On a Bachs NGN order, seq 0 = collection (charge on our platform balance),
+  // seq 1 = transfer (vendor's share). Both carry the same transferGroup = charge id.
+  transferGroup  String?
+  bachsCheckoutUrl String? // hosted checkout URL for the widget overlay (collection step)
   startedAt      DateTime?
   completedAt    DateTime?
 
@@ -331,6 +374,34 @@ model PaymentLink {
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([merchantId])
+}
+
+// Self-serve cash-out link (the inverse of PaymentLink). A merchant creates one
+// and shares it; their user opens the hosted page, supplies THEIR OWN bank
+// account, and offramps their crypto to it (crypto→naira via Paycrest). The user
+// funds it with their own crypto, so Weave never holds funds.
+model PayoutLink {
+  id             String   @id @default(cuid())
+  merchantId     String
+  merchant       Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  title          String
+  description    String?
+  // Optional restriction to a single crypto (e.g. "crypto:BASE:USDC"). NULL =
+  // chain-agnostic: the user picks ANY supported chain/token they hold and NEAR
+  // Intents routes it to naira. Keeping the offramp chain-agnostic is the whole
+  // point — Paycrest is only the invisible final fiat leg.
+  sourceAsset    String?
+  // The fiat the user receives to their bank.
+  payoutCurrency String   @default("NGN")
+  // Fixed cash-out amount, or null = the user chooses at cash-out time.
+  amount         Decimal? @db.Decimal(18, 8)
+
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@index([merchantId])
 }

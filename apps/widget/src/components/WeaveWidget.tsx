@@ -139,6 +139,12 @@ interface PaystackPopupDetails {
   reference: string;
 }
 
+interface BachsCheckoutDetails {
+  checkoutUrl: string;
+  amount: number;
+  reference: string;
+}
+
 const CURRENCIES: Record<string, Currency> = SUPPORTED_FIAT.reduce((acc, f) => {
   const code = f.key.split(':').pop()!;
   acc[code] = {
@@ -1100,6 +1106,168 @@ function ScreenPaystackPopup({
         style={{ ...primaryBtn, background: WEAVE.page, color: WEAVE.ink }}
       >
         Re-open popup
+      </button>
+    </Stack>
+  );
+}
+
+// Loads the Bachs overlay SDK (bachs.js) exactly once per page. Same cached-promise
+// + existing-tag guard as loadPaystackSdk so remounts never inject a duplicate.
+let _bachsPromise: Promise<void> | null = null;
+function loadBachsSdk(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).Bachs) return Promise.resolve();
+  if (_bachsPromise) return _bachsPromise;
+  _bachsPromise = new Promise<void>((resolve, reject) => {
+    const SRC = 'https://checkout.bachs.io/bachs.js';
+    const fail = () => { _bachsPromise = null; reject(new Error('bachs-load-failed')); };
+    const existing = document.querySelector(`script[src="${SRC}"]`) as HTMLScriptElement | null;
+    if (existing) {
+      if ((window as any).Bachs) return resolve();
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', fail);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = SRC;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = fail;
+    document.head.appendChild(script);
+  });
+  return _bachsPromise;
+}
+
+// Bachs Connect overlay. Opens the hosted checkout in a modal via bachs.js. Same
+// shape as ScreenPaystackPopup: the browser `checkout.completed` event only drives
+// UI (→ 'processing'); the collection.succeeded webhook is the real source of truth.
+function ScreenBachsCheckout({
+  onNext,
+  details,
+  orderId,
+  apiKey,
+}: {
+  onNext: (s: string) => void;
+  details: BachsCheckoutDetails | null;
+  orderId: string | null;
+  apiKey: string;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const launched = useRef(false);
+  const mounted = useRef(true);
+  // Set true in the effect SETUP (not just the initial ref value) so a StrictMode
+  // remount — which runs cleanup then setup again — restores mounted=true instead
+  // of leaving it false and silently short-circuiting the async launch below.
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  // Poll the order status while the overlay is open. The Bachs SDK does NOT
+  // reliably emit `checkout.completed` (observed: it fires only opened/loaded/
+  // ready), so the browser event is not a dependable completion signal. Bachs'
+  // own guidance is to treat SERVER state as the source of truth — so we poll
+  // GET /orders/:id (which reflects the collection webhook in live, and the
+  // getCheckout poll in sandbox) and advance when the order settles. This is
+  // robust regardless of which client events do or don't fire.
+  useEffect(() => {
+    if (!orderId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const closeOverlay = () => { try { (window as any).Bachs?.Checkout?.close?.(); } catch { /* noop */ } };
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const order = await fetchOrder(apiKey, orderId);
+        const status = String(order.status ?? '').toLowerCase();
+        if (TERMINAL_OK.has(status)) { stopped = true; closeOverlay(); if (mounted.current) onNext('success'); return; }
+        if (TERMINAL_BAD.has(status)) { stopped = true; closeOverlay(); if (mounted.current) onNext('error'); return; }
+      } catch { /* transient — keep polling */ }
+      timer = setTimeout(tick, 3000);
+    };
+    timer = setTimeout(tick, 3000);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [orderId, apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const launch = () => {
+    if (!details?.checkoutUrl) { setError('Payment details unavailable. Please retry.'); setLoading(false); return; }
+    setError(null);
+    setLoading(true);
+    loadBachsSdk().then(() => {
+      if (!mounted.current || launched.current) return;
+      const Bachs = (window as any).Bachs;
+      if (!Bachs) {
+        setError('Checkout failed to load. Please check your connection and retry.');
+        setLoading(false);
+        return;
+      }
+      launched.current = true;
+      setLoading(false);
+      emitTxnEvent('auth_window.opened');
+      // The SDK validates checkoutUrl against its configured checkout origin
+      // (default = live checkout.bachs.io) and rejects any other host. Sandbox
+      // sessions live on sandbox-checkout.bachs.io, so derive baseUrl from the
+      // checkout URL's own origin — works for both live and sandbox.
+      let baseUrl: string | undefined;
+      try { baseUrl = new URL(details.checkoutUrl).origin; } catch { baseUrl = undefined; }
+      // Initialize once; the handler drives our UI only. Fulfilment is webhook-driven.
+      Bachs.Initialize({
+        ...(baseUrl ? { baseUrl } : {}),
+        onEvent: (event: { type: string; data?: any }) => {
+          if (event.type === 'checkout.completed') {
+            emitTxnEvent('auth_window.closed', { result: 'success' });
+            if (mounted.current) onNext('processing');
+          } else if (event.type === 'checkout.failed') {
+            emitTxnEvent('auth_window.closed', { result: 'fail' });
+          } else if (event.type === 'checkout.closed') {
+            // Payer dismissed the overlay without paying — let them re-open.
+            launched.current = false;
+          }
+        },
+      });
+      Bachs.Checkout.open({ checkoutUrl: details.checkoutUrl });
+    }).catch(() => {
+      if (!mounted.current) return;
+      setLoading(false);
+      setError('Could not load checkout. Check your network and try again.');
+    });
+  };
+
+  useEffect(() => { launch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loading) {
+    return (
+      <Stack gap={24} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            border: `3px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent,
+            animation: 'wspin 0.8s linear infinite', margin: '0 auto',
+          }} />
+          <div style={{ marginTop: 14, fontSize: 14, color: WEAVE.mute }}>Opening secure checkout…</div>
+        </div>
+      </Stack>
+    );
+  }
+
+  if (error) {
+    return (
+      <Stack gap={16} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.err, padding: '8px 0' }}>{error}</div>
+        <button onClick={() => { launched.current = false; setError(null); setLoading(true); launch(); }} style={primaryBtn}>
+          Retry
+        </button>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack gap={16} style={{ padding: '28px 20px' }}>
+      <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.mute, padding: '12px 0' }}>
+        A secure checkout has opened. Complete payment there to continue.
+      </div>
+      <button
+        onClick={() => { launched.current = false; launch(); }}
+        style={{ ...primaryBtn, background: WEAVE.page, color: WEAVE.ink }}
+      >
+        Re-open checkout
       </button>
     </Stack>
   );
@@ -2658,6 +2826,7 @@ function WeaveCheckoutInner({
   useEffect(() => { configureTxnEmitter(apiKey, orderId); }, [apiKey, orderId]);
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
   const [paystackPopupDetails, setPaystackPopupDetails] = useState<PaystackPopupDetails | null>(null);
+  const [bachsCheckoutDetails, setBachsCheckoutDetails] = useState<BachsCheckoutDetails | null>(null);
   const [depositAddress, setDepositAddress] = useState<string | null>(null);
   const [depositMemo, setDepositMemo] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState<number | null>(null);
@@ -3183,8 +3352,10 @@ function WeaveCheckoutInner({
       setOrderId(res.order.id);
       setBankDetails(res.nextAction.bankDetails ?? null);
       setPaystackPopupDetails(res.nextAction.paystackPopupDetails ?? null);
+      setBachsCheckoutDetails(res.nextAction.bachsCheckout ?? null);
       const nextScreen =
         res.nextAction.screen === 'paystack_popup' ? 'paystack_popup' :
+        res.nextAction.screen === 'bachs_checkout' ? 'bachs_checkout' :
           'vaccount';
       setScreen(nextScreen);
     } catch (e: any) {
@@ -3345,6 +3516,7 @@ function WeaveCheckoutInner({
     setApiError(null);
     setBankDetails(null);
     setPaystackPopupDetails(null);
+    setBachsCheckoutDetails(null);
     setDepositAddress(null);
     setDepositMemo(null);
     setDepositError(null);
@@ -3370,6 +3542,7 @@ function WeaveCheckoutInner({
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'paystack_popup') return <ScreenPaystackPopup onNext={advance} details={paystackPopupDetails} />;
+      if (screen === 'bachs_checkout') return <ScreenBachsCheckout onNext={advance} details={bachsCheckoutDetails} orderId={orderId} apiKey={apiKey} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} message={apiError} />;

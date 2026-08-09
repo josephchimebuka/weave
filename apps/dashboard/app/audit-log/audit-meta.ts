@@ -41,6 +41,45 @@ const ACTIONS: Record<string, ActionMeta> = {
         ? `${s(m, 'bankInstitution') || 'Bank'} ····${s(m, 'accountLast4')}`.trim()
         : s(m, 'walletTail') ? `Wallet ····${s(m, 'walletTail')}` : '',
   },
+  'payout.destination_created': {
+    label: 'Payout bank registered', severity: 'sensitive', category: 'settlements',
+    describe: (m) => `${s(m, 'bankCode') || 'Bank'} ····${s(m, 'accountLast4')}`.trim(),
+  },
+  'payout.withdrawn': {
+    label: 'Payout sent to bank', severity: 'sensitive', category: 'settlements',
+    describe: (m) => (s(m, 'amountNgn') ? `₦${s(m, 'amountNgn')} → your bank` : 'Funds sent to your bank'),
+  },
+  'payout.blocked': {
+    label: 'Payout blocked', severity: 'critical', category: 'settlements',
+    describe: (m) => s(m, 'reason') || 'Payout bank could not be verified',
+  },
+  'bachs.connected_account.created': {
+    label: 'Naira payments connected', severity: 'sensitive', category: 'settlements',
+    describe: (m) => s(m, 'accountId'),
+  },
+  'bachs.requirements.submitted': {
+    label: 'Naira payout details submitted', severity: 'info', category: 'compliance',
+    describe: (m) => (s(m, 'fields') ? `${s(m, 'fields')} field(s) · setup ${s(m, 'setupStatus')}` : ''),
+  },
+  'brand.updated': {
+    label: 'Branding updated', severity: 'info', category: 'account',
+    describe: (m) => {
+      const f = (m as Record<string, unknown>)?.fields;
+      return Array.isArray(f) ? (f as unknown[]).join(', ') : '';
+    },
+  },
+  'payout_link.created': {
+    label: 'Cash-out link created', severity: 'info', category: 'payments',
+    describe: (m) => s(m, 'title') || s(m, 'slug'),
+  },
+  'payout_link.updated': {
+    label: 'Cash-out link updated', severity: 'info', category: 'payments',
+    describe: (m) => s(m, 'title') || s(m, 'slug'),
+  },
+  'payout_link.deleted': {
+    label: 'Cash-out link deleted', severity: 'info', category: 'payments',
+    describe: (m) => s(m, 'title') || s(m, 'slug'),
+  },
   'key.regenerated': {
     label: 'API keys regenerated', severity: 'sensitive', category: 'api',
     describe: (m) => (s(m, 'mode') ? `${s(m, 'mode')} keys` : ''),
@@ -102,6 +141,9 @@ const ACTIONS: Record<string, ActionMeta> = {
   'auth.login': {
     label: 'Signed in', severity: 'info', category: 'security',
     describe: (m) => s(m, 'email'),
+  },
+  'auth.logout': {
+    label: 'Signed out', severity: 'info', category: 'security',
   },
   'kyb.document_viewed': {
     label: 'KYB document viewed', severity: 'sensitive', category: 'compliance',
