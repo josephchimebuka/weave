@@ -22,9 +22,11 @@ export function rateLimit(options: RateLimitOptions) {
     if (req.headers['x-session-token']) role = 'dashboard';
     if (req.headers['x-secret-key']) role = 'server';
 
-    // Smarter IP detection for proxied environments (Vercel/Heroku/Cloudflare)
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : (req.ip || req.socket.remoteAddress || 'unknown');
+    // Use req.ip — Express derives it from X-Forwarded-For honoring `trust proxy`
+    // (set in index.ts), so it's the real visitor IP and NOT client-spoofable.
+    // The previous left-most `x-forwarded-for` split was attacker-controlled: a
+    // client could rotate the header to dodge the rate-limit bucket entirely.
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
 
     const key = `${keyPrefix}:${role}:${ip}`;
 

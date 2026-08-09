@@ -58,10 +58,17 @@ patchConsole();
 const app = express();
 
 // ── Trust proxy ──────────────────────────────────────────────────────────────
-// Tells Express to trust the first X-Forwarded-For hop so req.ip reflects the
-// real client IP rather than the proxy's IP. Adjust the number if you have
-// multiple proxy layers (e.g. Cloudflare → platform proxy → app = 2).
-app.set('trust proxy', 1);
+// Number of trusted proxy hops in front of the app, so req.ip reflects the real
+// visitor rather than a proxy address. Our topology is Cloudflare → platform
+// proxy → app = 2 hops; with the old value of 1, req.ip resolved to Cloudflare's
+// IP (the 172.x seen in audit logs). The count must EXACTLY match the real chain:
+// too low keeps showing a proxy IP, too high makes X-Forwarded-For spoofable
+// (a client could inject a left-most entry Express would then trust). Override
+// via TRUST_PROXY_HOPS if your deployment differs.
+const trustProxyRaw = process.env.TRUST_PROXY_HOPS;
+const trustProxyHops =
+  trustProxyRaw && Number.isFinite(Number(trustProxyRaw)) ? Number(trustProxyRaw) : 2;
+app.set('trust proxy', trustProxyHops);
 
 // ── Security headers ─────────────────────────────────────────────────────────
 app.use(helmet());
