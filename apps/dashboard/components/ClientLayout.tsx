@@ -27,7 +27,7 @@ export function ClientLayout({
   }, [pathname]);
 
   const isAuth   = pathname.startsWith('/auth') || pathname === '/pay' || pathname.startsWith('/pay/') || pathname.startsWith('/checkout/');
-  const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy');
+  const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy') || pathname.startsWith('/esign-consent');
   // Full-bleed, no wrapper: the cash-out page is a merchant-BRANDED surface that
   // must theme the entire viewport (its own bg color/image edge-to-edge), so it
   // can't sit inside the centered, cream-padded auth container.
