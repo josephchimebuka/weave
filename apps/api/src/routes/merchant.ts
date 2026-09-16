@@ -8,8 +8,9 @@ import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/mercha
 import { webhookService, WEBHOOK_MAX_ATTEMPTS, isSafeWebhookUrl } from '../services/webhook.service';
 import { paycrest } from '../services/paycrest.service';
 import { bachs } from '../services/bachs.service';
+import { anchor } from '../services/anchor.service';
 import { ensureBachsPayoutDestination } from '../services/executor.service';
-import { BACHS_ENABLED } from '../lib/flags';
+import { BACHS_ENABLED, ANCHOR_ENABLED } from '../lib/flags';
 import { recordMerchantAudit, isPlatformAdmin } from '../services/audit.service';
 import { deviceTypeFromUA } from '../lib/user-agent';
 
@@ -531,17 +532,24 @@ function kybValueFor(fieldKey: string, kyb: any): unknown {
 async function refreshBachsCapabilities(merchant: any, accountId: string, sandbox: boolean) {
   const caps = await bachs.getCapabilities(accountId, { sandbox }).catch(() => [] as any[]);
   const find = (n: string) => caps.find((c: any) => c.name === n)?.status;
-  const transfersStatus = find('transfers') ?? merchant.bachsTransfersStatus ?? 'restricted';
+  // DIRECT-CHARGE model: the naira-collection capability (merchant persona) gates
+  // order creation — active if EITHER naira method is enabled. `payouts` (recipient)
+  // lets the merchant withdraw its own balance. `transfers` is legacy (split model).
+  const paymentsStatus  = (find('ngn_card_collection') === 'active' || find('bank_transfer') === 'active')
+                            ? 'active'
+                            : (find('ngn_card_collection') ?? find('bank_transfer') ?? merchant.bachsPaymentsStatus ?? 'restricted');
   const payoutsStatus   = find('payouts')   ?? merchant.bachsPayoutsStatus   ?? 'restricted';
+  const transfersStatus = find('transfers') ?? merchant.bachsTransfersStatus ?? 'restricted';
   await prisma.merchant.update({
     where: { id: merchant.id },
     data: {
-      bachsTransfersStatus: transfersStatus,
+      bachsPaymentsStatus:  paymentsStatus,
       bachsPayoutsStatus:   payoutsStatus,
-      ...(transfersStatus === 'active' && !merchant.bachsOnboardedAt ? { bachsOnboardedAt: new Date() } : {}),
+      bachsTransfersStatus: transfersStatus,
+      ...(paymentsStatus === 'active' && !merchant.bachsOnboardedAt ? { bachsOnboardedAt: new Date() } : {}),
     },
   });
-  return { transfersStatus, payoutsStatus };
+  return { paymentsStatus, payoutsStatus, transfersStatus };
 }
 
 function remainingFields(checklist: any) {
@@ -604,15 +612,16 @@ router.post('/bachs/connect', requireSession, async (req, res) => {
     }
 
     // 4. Refresh capability status + compute the remaining delta.
-    const { transfersStatus, payoutsStatus } = await refreshBachsCapabilities(merchant, accountId, sandbox);
+    const { paymentsStatus, payoutsStatus, transfersStatus } = await refreshBachsCapabilities(merchant, accountId, sandbox);
 
     return res.json({
       success: true,
       data: {
         connectedAccountId: accountId,
         setupStatus: checklist.setup_status,   // "complete" | "incomplete"
-        transfersStatus,
+        paymentsStatus,   // naira collection capability (gates order creation)
         payoutsStatus,
+        transfersStatus,  // legacy (split model)
         remaining: remainingFields(checklist),  // fields Bachs still needs from the merchant
       },
     });
@@ -646,7 +655,7 @@ router.post('/bachs/onboarding/submit', requireSession, async (req, res) => {
 
     const result = await bachs.submitRequirements(accountId, { country: 'NG', draft: false, data }, { sandbox });
     const fresh = await bachs.getRequirementsChecklist(accountId, { sandbox });
-    const { transfersStatus, payoutsStatus } = await refreshBachsCapabilities(merchant, accountId, sandbox);
+    const { paymentsStatus, payoutsStatus, transfersStatus } = await refreshBachsCapabilities(merchant, accountId, sandbox);
 
     // Audit the KYB-data submission to the payment processor (metadata is PII-free:
     // count + resulting setup status only, never the submitted field values).
@@ -657,7 +666,7 @@ router.post('/bachs/onboarding/submit', requireSession, async (req, res) => {
 
     return res.json({
       success: true,
-      data: { setupStatus: fresh.setup_status, transfersStatus, payoutsStatus, remaining: remainingFields(fresh), errors: result.errors ?? [] },
+      data: { setupStatus: fresh.setup_status, paymentsStatus, payoutsStatus, transfersStatus, remaining: remainingFields(fresh), errors: result.errors ?? [] },
     });
   } catch (err: any) {
     console.error('[merchant] bachs onboarding submit failed:', err.message);
@@ -673,24 +682,29 @@ router.get('/bachs/status', requireSession, async (req, res) => {
     const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
 
-    let transfersStatus = merchant.bachsTransfersStatus ?? null;
+    let paymentsStatus  = merchant.bachsPaymentsStatus ?? null;
     let payoutsStatus   = merchant.bachsPayoutsStatus ?? null;
 
     if (BACHS_ENABLED && merchant.bachsConnectedAccountId) {
       try {
         const caps = await bachs.getCapabilities(merchant.bachsConnectedAccountId, { sandbox: bachsOnboardSandbox() });
         const find = (n: string) => caps.find(c => c.name === n)?.status ?? null;
-        const t = find('transfers');
+        // Direct-charge model: naira collection = the merchant persona capability
+        // (active if EITHER naira method is enabled); payouts lets the merchant
+        // withdraw its own balance.
+        const pay = (find('ngn_card_collection') === 'active' || find('bank_transfer') === 'active')
+                      ? 'active'
+                      : (find('ngn_card_collection') ?? find('bank_transfer'));
         const p = find('payouts');
-        if ((t && t !== transfersStatus) || (p && p !== payoutsStatus)) {
-          transfersStatus = t ?? transfersStatus;
-          payoutsStatus   = p ?? payoutsStatus;
+        if ((pay && pay !== paymentsStatus) || (p && p !== payoutsStatus)) {
+          paymentsStatus = pay ?? paymentsStatus;
+          payoutsStatus  = p ?? payoutsStatus;
           await prisma.merchant.update({
             where: { id: merchant.id },
             data: {
-              ...(t ? { bachsTransfersStatus: t } : {}),
+              ...(pay ? { bachsPaymentsStatus: pay } : {}),
               ...(p ? { bachsPayoutsStatus:   p } : {}),
-              ...(t === 'active' && !merchant.bachsOnboardedAt ? { bachsOnboardedAt: new Date() } : {}),
+              ...(pay === 'active' && !merchant.bachsOnboardedAt ? { bachsOnboardedAt: new Date() } : {}),
             },
           });
         }
@@ -705,13 +719,375 @@ router.get('/bachs/status', requireSession, async (req, res) => {
       data: {
         enabled:            BACHS_ENABLED,
         connectedAccountId: merchant.bachsConnectedAccountId ?? null,
-        transfersStatus,
+        paymentsStatus,
         payoutsStatus,
-        canCollectNaira:    transfersStatus === 'active',
+        canCollectNaira:    paymentsStatus === 'active',
       },
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── Anchor onboarding (the merchant's own KYB'd naira account) ───────────────
+// Unlike Bachs (checklist-driven), Anchor runs real KYB: we create a BusinessCustomer
+// from the merchant's Weave KYB, trigger verification, and — once approved (via the
+// customer.identification.approved webhook) — create the DepositAccount that naira
+// collects into. NOTE: Weave's current KYB does NOT yet collect business BVN, director
+// BVN, registration date, or ownership% — Anchor may require these, so KYB can land on
+// `awaitingDocument`/`reenter_information` until the KYB form is extended. Best-effort
+// mapping degrades gracefully rather than blocking.
+
+function anchorOnboardSandbox(): boolean {
+  return process.env.NODE_ENV !== 'production' && anchor.hasTestKeys();
+}
+
+/** Normalise an Anchor verification status token to our cached `anchorKybStatus`. */
+function mapAnchorVerificationStatus(raw: string | undefined): string {
+  switch ((raw || '').toLowerCase()) {
+    case 'approved': case 'verified':                return 'approved';
+    case 'rejected': case 'declined': case 'error':  return 'rejected';
+    case 'manualreview': case 'manual_review':       return 'manualReview';
+    case 'awaitingdocument': case 'pending_document':return 'awaitingDocument';
+    case 'pending': case 'processing': case 'unverified': return raw?.toLowerCase() === 'unverified' ? 'unverified' : 'pending';
+    default: return raw ? 'pending' : 'unverified';
+  }
+}
+
+// Weave entity types → Anchor `registrationType` enum. Anchor's valid values (confirmed):
+// Private_Incorporated, Incorporated_Trustees, Business_Name, Free_Zone, Gov,
+// Private_Incorporated_Gov, Cooperative_Society, Public_Incorporated.
+const ANCHOR_REG_TYPES = new Set([
+  'Private_Incorporated', 'Incorporated_Trustees', 'Business_Name', 'Free_Zone',
+  'Gov', 'Private_Incorporated_Gov', 'Cooperative_Society', 'Public_Incorporated',
+]);
+function anchorRegistrationType(entityType: string | null | undefined): string {
+  const et = (entityType || '').trim();
+  if (ANCHOR_REG_TYPES.has(et)) return et;             // KYB dropdown now emits canonical values
+  switch (et.toLowerCase()) {                          // legacy Weave labels
+    case 'sole proprietorship': return 'Business_Name';
+    case 'cooperative':         return 'Cooperative_Society';
+    case 'llc':
+    case 'corporation':
+    default:                    return 'Private_Incorporated';
+  }
+}
+
+// Map Weave's productCategory → Anchor's required `industry` enum (underscore form,
+// confirmed accepted in sandbox). Unmapped/blank falls back to ANCHOR_DEFAULT_INDUSTRY
+// (override for a specific merchant/business), then a neutral valid default.
+const ANCHOR_INDUSTRY_BY_CATEGORY: Record<string, string> = {
+  'Retail & E-commerce':         'Commerce_PhysicalGoods',
+  'Food & Beverage':             'Hospitality_Restaurants',
+  'Fashion & Apparel':           'Commerce_PhysicalGoods',
+  'Digital Products & Software': 'Commerce_DigitalGoods',
+  'Professional Services':       'Commerce_ProfessionalServices',
+  'Health & Beauty':             'Commerce_PhysicalGoods',
+  'Education & Training':        'Education_VocationalTraining',
+  'Travel & Hospitality':        'Travel_TravelAgencies',
+  'Financial Services':          'FinancialServices_CorporateServices',
+  'Arts & Entertainment':        'Nonprofits_Leisure_Entertainment',
+  'Logistics & Delivery':        'Logistics_CourierServices',
+  'Nonprofit':                   'Nonprofits_NGOs',
+  'Other':                       'OtherProfessionalServices',
+};
+function anchorIndustry(kyb?: any): string {
+  const pc = kyb?.productCategory ? String(kyb.productCategory).trim() : '';
+  // Legacy Weave labels (spaces/&, incl. single-word "Nonprofit"/"Other") map first.
+  if (pc && ANCHOR_INDUSTRY_BY_CATEGORY[pc]) return ANCHOR_INDUSTRY_BY_CATEGORY[pc];
+  // The KYB dropdown now stores Anchor's canonical industry value directly — pass through.
+  if (pc && !/[\s&]/.test(pc)) return pc;
+  return process.env.ANCHOR_DEFAULT_INDUSTRY || 'OtherProfessionalServices';
+}
+
+// Normalise a Nigerian phone number to the exact 11-digit local form Anchor requires
+// (e.g. "+234 801 234 5678" / "8012345678" → "08012345678"). Returns null if it can't.
+function normalizeNgPhone(raw?: string | null): string | null {
+  let n = String(raw ?? '').replace(/\D/g, '');
+  if (n.startsWith('234')) n = '0' + n.slice(3);   // +234 / 234 country code → leading 0
+  else if (n.length === 10) n = '0' + n;           // missing leading 0
+  return n.length === 11 ? n : null;
+}
+
+/** Build an Anchor BusinessCustomer `attributes` object from Weave's KYB (confirmed
+ *  shape: { address, basicDetail, contact, officers }). NOTE: `industry` uses Anchor's
+ *  own taxonomy (e.g. "Agriculture-AgriculturalCooperatives") which Weave's coarse
+ *  productCategory doesn't match — omitted until the KYB form emits Anchor's enum
+ *  values, so a wrong value can't reject the whole customer. */
+function buildAnchorCustomerPayload(merchant: any, kyb: any) {
+  const ownershipRaw = kyb?.ownershipPercentage != null && kyb.ownershipPercentage !== '' ? Number(kyb.ownershipPercentage) : undefined;
+  // Anchor KYB requires ≥1 officer with role OWNER holding ≥5%; default a sole
+  // signatory to 100% when unspecified. `percentageOwned` is required (non-null) on
+  // EVERY officer (confirmed against sandbox).
+  const ownerPct = Number.isFinite(ownershipRaw) && (ownershipRaw as number) > 0 ? (ownershipRaw as number) : 100;
+  const bizAddress = kyb?.businessAddress
+    ? { addressLine_1: String(kyb.businessAddress), city: kyb.city || '', state: kyb.state || '', ...(kyb.postalCode ? { postalCode: String(kyb.postalCode) } : {}), country: 'NG' }
+    : undefined;
+  const email = String(merchant.email);
+  const phone = normalizeNgPhone(kyb?.directorPhone);
+  // The primary signatory is emitted as BOTH a DIRECTOR and an OWNER — Weave collects
+  // one person, and Anchor needs a director designation plus owner (≥5%) information.
+  const personBase = {
+    fullName: { firstName: kyb?.firstName || '', lastName: kyb?.lastName || '' },
+    nationality: 'NG',
+    ...(kyb?.dob ? { dateOfBirth: kyb.dob } : {}),
+    email,
+    ...(phone ? { phoneNumber: phone } : {}),
+    ...(kyb?.directorBvn ? { bvn: String(kyb.directorBvn) } : {}),
+    ...(kyb?.personalAddress ? { address: { addressLine_1: String(kyb.personalAddress), city: kyb.city || '', state: kyb.state || '', country: 'NG' } } : {}),
+  };
+  const officers = (kyb?.firstName || kyb?.lastName) ? [
+    { role: 'DIRECTOR', title: 'Manager', percentageOwned: 0, ...personBase },
+    { role: 'OWNER', percentageOwned: ownerPct, ...personBase },
+  ] : [];
+  return {
+    ...(kyb?.state ? { address: { country: 'NG', state: String(kyb.state) } } : { address: { country: 'NG' } }),
+    basicDetail: {
+      businessName: kyb?.legalName || merchant.name,
+      country: 'NG',
+      industry: anchorIndustry(kyb),
+      registrationType: anchorRegistrationType(kyb?.entityType),
+      ...(kyb?.businessBvn ? { businessBvn: String(kyb.businessBvn) } : {}),
+      ...(kyb?.dateOfRegistration ? { dateOfRegistration: String(kyb.dateOfRegistration) } : {}),
+      ...(kyb?.productDescription ? { description: String(kyb.productDescription) } : {}),
+      ...(kyb?.websiteUrl ? { website: String(kyb.websiteUrl) } : {}),
+    },
+    contact: {
+      email: { general: email, support: String(kyb?.supportEmail || email), dispute: String(kyb?.supportEmail || email) },
+      ...(phone ? { phoneNumber: phone } : {}),
+      ...(bizAddress ? { address: { main: bizAddress, registered: bizAddress } } : {}),
+    },
+    ...(officers.length ? { officers } : {}),
+  };
+}
+
+/** Create the merchant's DepositAccount once KYB is approved (idempotent). */
+async function ensureAnchorDepositAccount(merchantId: string, customerId: string, kybStatus: string, sandbox: boolean): Promise<{ accountId: string | null; accountNumber: string | null }> {
+  const m = await prisma.merchant.findUnique({ where: { id: merchantId } });
+  if (m?.anchorAccountId) return { accountId: m.anchorAccountId, accountNumber: m.anchorAccountNumber ?? null };
+  if (kybStatus !== 'approved') return { accountId: null, accountNumber: null };
+  const account = await anchor.createDepositAccount(customerId, { sandbox });
+  const accountNumber = ((account.attributes as any)?.accountNumber as string) ?? null;
+  await prisma.merchant.update({
+    where: { id: merchantId },
+    data: { anchorAccountId: account.id, ...(accountNumber ? { anchorAccountNumber: accountNumber } : {}), anchorOnboardedAt: new Date() },
+  });
+  return { accountId: account.id, accountNumber };
+}
+
+// POST /api/v1/merchant/anchor/connect — ensure BusinessCustomer + trigger KYB (+ create
+// the deposit account if already approved). Idempotent.
+router.post('/anchor/connect', requireSession, async (req, res) => {
+  if (!ANCHOR_ENABLED) return res.status(503).json({ success: false, error: 'Naira payouts are not currently available.' });
+  try {
+    const sandbox = anchorOnboardSandbox();
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId }, include: { verification: true } });
+    if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
+    const v = merchant.verification;
+    if (!v?.legalName) {
+      return res.status(400).json({ success: false, error: 'Please complete your business verification (KYB) first.' });
+    }
+    // Anchor KYB requires fields Weave's earlier KYB didn't collect — validate up-front so
+    // the merchant gets an actionable prompt instead of an opaque provider 400.
+    const missing: string[] = [];
+    if (!v.businessBvn)         missing.push('Business BVN');
+    if (!v.dateOfRegistration)  missing.push('Date of Registration');
+    if (!v.directorBvn)         missing.push('Director BVN');
+    if (!v.firstName || !v.lastName) missing.push('Director name');
+    if (!v.dob)                 missing.push('Director date of birth');
+    if (!normalizeNgPhone(v.directorPhone)) missing.push('Director phone (a valid Nigerian number)');
+    if (missing.length) {
+      return res.status(400).json({ success: false, error: `Add these to your business verification first: ${missing.join(', ')}.`, missing });
+    }
+
+    // 1. Ensure the BusinessCustomer.
+    let customerId = merchant.anchorCustomerId;
+    if (!customerId) {
+      const customer = await anchor.createBusinessCustomer(buildAnchorCustomerPayload(merchant, merchant.verification), { sandbox });
+      customerId = customer.id;
+      await prisma.merchant.update({ where: { id: merchant.id }, data: { anchorCustomerId: customerId, anchorKybStatus: 'unverified' } });
+      recordMerchantAudit(req, 'anchor.customer.created', { metadata: { customerId } });
+    }
+
+    // 2. Trigger KYB if we haven't yet.
+    let kybStatus = merchant.anchorKybStatus ?? 'unverified';
+    if (kybStatus === 'unverified') {
+      await anchor.triggerBusinessKYB(customerId, { sandbox });
+      kybStatus = 'pending';
+      await prisma.merchant.update({ where: { id: merchant.id }, data: { anchorKybStatus: 'pending' } });
+      recordMerchantAudit(req, 'anchor.kyb.triggered', { metadata: { customerId } });
+    }
+
+    // 3. If already approved (sandbox often auto-approves), provision the deposit account.
+    const account = await ensureAnchorDepositAccount(merchant.id, customerId, kybStatus, sandbox);
+    if (account.accountId && !merchant.anchorAccountId) {
+      recordMerchantAudit(req, 'anchor.deposit_account.created', { metadata: { accountId: account.accountId } });
+    }
+
+    return res.json({
+      success: true,
+      data: { customerId, kybStatus, accountId: account.accountId, accountNumber: account.accountNumber, canCollectNaira: kybStatus === 'approved' && !!account.accountId },
+    });
+  } catch (err: any) {
+    console.error('[merchant] anchor connect failed:', err.message);
+    return res.status(502).json({ success: false, error: 'Could not set up naira payments. Please try again.' });
+  }
+});
+
+// GET /api/v1/merchant/anchor/status — cached status + best-effort live KYB refresh
+// (in case a customer.identification.* webhook was missed), provisioning the deposit
+// account on approval.
+router.get('/anchor/status', requireSession, async (req, res) => {
+  try {
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
+
+    let kybStatus     = merchant.anchorKybStatus ?? null;
+    let accountId     = merchant.anchorAccountId ?? null;
+    let accountNumber = merchant.anchorAccountNumber ?? null;
+
+    if (ANCHOR_ENABLED && merchant.anchorCustomerId) {
+      try {
+        const sandbox = anchorOnboardSandbox();
+        const cust = await anchor.getCustomer(merchant.anchorCustomerId, { sandbox });
+        const raw = ((cust.attributes as any)?.verification?.status ?? (cust.attributes as any)?.status) as string | undefined;
+        const mapped = mapAnchorVerificationStatus(raw);
+        if (mapped && mapped !== kybStatus) {
+          kybStatus = mapped;
+          // Anchor is the KYB authority — mirror its outcome onto Weave's KYB (safety-net
+          // for a missed customer.identification.* webhook).
+          await prisma.merchant.update({
+            where: { id: merchant.id },
+            data: {
+              anchorKybStatus: mapped,
+              ...(mapped === 'approved' ? { kycLevel: 'verified' } : {}),
+              ...(mapped === 'rejected' ? { kycLevel: 'basic' } : {}),
+            },
+          });
+          if (mapped === 'approved' || mapped === 'rejected') {
+            await prisma.businessVerification.updateMany({
+              where: { merchantId: merchant.id },
+              data: { status: mapped === 'approved' ? 'verified' : 'rejected' },
+            });
+          }
+        }
+        const account = await ensureAnchorDepositAccount(merchant.id, merchant.anchorCustomerId, kybStatus ?? 'unverified', sandbox);
+        accountId     = account.accountId ?? accountId;
+        accountNumber = account.accountNumber ?? accountNumber;
+      } catch (err: any) {
+        console.warn('[merchant] anchor status refresh failed:', err.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        enabled:        ANCHOR_ENABLED,
+        customerId:     merchant.anchorCustomerId ?? null,
+        kybStatus,
+        accountId,
+        accountNumber,
+        canCollectNaira: kybStatus === 'approved' && !!accountId,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Map an Anchor KYB documentType → a TEXT value Weave already holds (for auto-relay).
+function anchorAutoDocText(documentType: string, kyb: any): string | undefined {
+  switch (documentType) {
+    case 'RC_NUMBER': return kyb?.regNumber || undefined;
+    // TIN and all FILE documents are supplied by the merchant in the checklist.
+  }
+  return undefined;
+}
+
+// GET /api/v1/merchant/anchor/documents — the KYB document checklist. Auto-relays the
+// TEXT documents Weave already holds (RC_NUMBER) so the merchant only supplies the rest.
+router.get('/anchor/documents', requireSession, async (req, res) => {
+  if (!ANCHOR_ENABLED) return res.status(503).json({ success: false, error: 'Naira payments are not currently available.' });
+  try {
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId }, include: { verification: true } });
+    if (!merchant) return res.status(404).json({ success: false, error: 'merchant not found' });
+    if (!merchant.anchorCustomerId) {
+      return res.json({ success: true, data: { ready: false, kybStatus: merchant.anchorKybStatus ?? null, documents: [] } });
+    }
+    const sandbox = anchorOnboardSandbox();
+    const customerId = merchant.anchorCustomerId;
+
+    let docs = await anchor.getDocuments(customerId, { sandbox });
+    let relayed = 0;
+    for (const d of docs.filter((x) => !x.submitted && x.format === 'TEXT')) {
+      const val = anchorAutoDocText(d.documentType, merchant.verification);
+      if (val) {
+        try { await anchor.uploadDocumentText(customerId, d.id, val, { sandbox }); relayed++; }
+        catch (e: any) { console.warn(`[merchant] anchor auto-relay ${d.documentType} failed:`, e.message); }
+      }
+    }
+    if (relayed) docs = await anchor.getDocuments(customerId, { sandbox });
+
+    return res.json({
+      success: true,
+      data: {
+        ready: true,
+        kybStatus: merchant.anchorKybStatus ?? null,
+        documents: docs.map((d) => ({ documentType: d.documentType, format: d.format, submitted: d.submitted, verified: d.verified, description: d.description })),
+      },
+    });
+  } catch (err: any) {
+    console.error('[merchant] anchor documents list failed:', err.message);
+    return res.status(502).json({ success: false, error: 'Could not load your verification documents. Please try again.' });
+  }
+});
+
+// POST /api/v1/merchant/anchor/documents/upload — relay ONE KYB document to Anchor.
+// Body: { documentType, textData } for TEXT docs, or { documentType, fileBase64, fileName?, contentType? } for FILE docs.
+router.post('/anchor/documents/upload', requireSession, async (req, res) => {
+  if (!ANCHOR_ENABLED) return res.status(503).json({ success: false, error: 'Naira payments are not currently available.' });
+  try {
+    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    if (!merchant?.anchorCustomerId) return res.status(400).json({ success: false, error: 'Start naira setup first.' });
+    const sandbox = anchorOnboardSandbox();
+    const customerId = merchant.anchorCustomerId;
+
+    const documentType = String(req.body?.documentType ?? '');
+    if (!documentType) return res.status(400).json({ success: false, error: 'documentType is required' });
+
+    const docs = await anchor.getDocuments(customerId, { sandbox });
+    const doc = docs.find((d) => d.documentType === documentType);
+    if (!doc) return res.status(400).json({ success: false, error: 'Unknown document for this customer' });
+    if (doc.submitted) return res.json({ success: true, data: { documentType, submitted: true, alreadySubmitted: true } });
+
+    if (doc.format === 'TEXT') {
+      const textData = String(req.body?.textData ?? '').trim();
+      if (!textData) return res.status(400).json({ success: false, error: 'A value is required for this document' });
+      await anchor.uploadDocumentText(customerId, doc.id, textData, { sandbox });
+    } else {
+      const raw = String(req.body?.fileBase64 ?? '');
+      if (!raw) return res.status(400).json({ success: false, error: 'A file is required for this document' });
+      const b64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw; // strip data: URI prefix
+      const buffer = Buffer.from(b64, 'base64');
+      if (!buffer.length) return res.status(400).json({ success: false, error: 'Invalid file data' });
+      const fileName = String(req.body?.fileName ?? `${documentType}.pdf`);
+      const contentType = req.body?.contentType ? String(req.body.contentType) : undefined;
+      await anchor.uploadDocumentFile(customerId, doc.id, { buffer, fileName, contentType }, { sandbox });
+    }
+
+    recordMerchantAudit(req, 'anchor.document.uploaded', { metadata: { documentType } });
+
+    const fresh = await anchor.getDocuments(customerId, { sandbox });
+    return res.json({
+      success: true,
+      data: {
+        documentType, submitted: true,
+        documents: fresh.map((d) => ({ documentType: d.documentType, format: d.format, submitted: d.submitted, verified: d.verified, description: d.description })),
+      },
+    });
+  } catch (err: any) {
+    console.error('[merchant] anchor document upload failed:', err.message);
+    return res.status(502).json({ success: false, error: 'Could not upload the document. Please try again.' });
   }
 });
 

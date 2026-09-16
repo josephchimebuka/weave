@@ -36,16 +36,32 @@ model Merchant {
   paystackSubaccountCode     String?
   paystackSubaccountStatus   SubaccountSyncStatus @default(PENDING)
   paystackSubaccountSyncedAt DateTime?
-  // Bachs Connect: the merchant's connected account ("org_…"). Naira collection
-  // splits each order's share to this account. Capability statuses are cached so
-  // the dashboard can gate order creation on `transfers` being active without an
-  // API round-trip. `bachsPayoutDestinationId` ("pd_…") is the merchant's bank
-  // destination for withdrawals; resolved during onboarding.
+  // Bachs Connect: the merchant's account ("acct_…"). Naira collection now uses the
+  // DIRECT-CHARGE model — the customer pays the MERCHANT's account directly, the
+  // charge lands in the merchant's own balance, and Weave takes a `platform_fee`
+  // (Dewdrop never holds the gross). `bachsPaymentsStatus` is the merchant-persona
+  // naira-collection capability (ngn_card_collection / bank_transfer) that gates
+  // order creation; `bachsPayoutsStatus` (recipient persona) lets the merchant
+  // withdraw its own balance to its bank on its payout schedule. `bachsTransfers...`
+  // + `bachsPayoutDestinationId` are LEGACY (the old collect→split→withdraw model)
+  // and dormant under direct charge.
   bachsConnectedAccountId    String?  @unique
-  bachsTransfersStatus       String?  // "restricted" | "pending" | "active"
+  bachsPaymentsStatus        String?  // naira collection capability: "restricted" | "active"
+  bachsTransfersStatus       String?  // LEGACY (split model) — "restricted" | "pending" | "active"
   bachsPayoutsStatus         String?  // "restricted" | "pending" | "active"
-  bachsPayoutDestinationId   String?
+  bachsPayoutDestinationId   String?  // LEGACY (split-model withdrawals)
   bachsOnboardedAt           DateTime?
+  // Anchor (getanchor.co) — the merchant's OWN KYB'd bank account, in their own
+  // name (so Dewdrop never holds funds). `anchorCustomerId` = the BusinessCustomer
+  // ("…-anc_bus_cst"); `anchorAccountId` = the DepositAccount ("…-anc_acc");
+  // `anchorAccountNumber`/`anchorBankName` = the NUBAN, generated async via the
+  // `accountNumber.created` webhook. `anchorKybStatus` gates order creation.
+  anchorCustomerId           String?  @unique
+  anchorAccountId            String?  @unique
+  anchorAccountNumber        String?
+  anchorBankName             String?
+  anchorKybStatus            String?  // "unverified" | "pending" | "manualReview" | "awaitingDocument" | "approved" | "rejected"
+  anchorOnboardedAt          DateTime?
   sessions           Session[]
   instruments        Instrument[]
   orders             Order[]
@@ -90,6 +106,16 @@ model BusinessVerification {
   supportEmail        String?
   productCategory     String?
   socialMedia         String?
+
+  // Anchor BaaS KYB fields (required to create an Anchor BusinessCustomer + pass KYB).
+  // Weave's earlier KYB didn't collect these; they're gathered in the KYB form and
+  // relayed to Anchor in buildAnchorCustomerPayload. All nullable so existing rows
+  // and non-Anchor flows are unaffected.
+  businessBvn         String?  // 11-digit business BVN
+  dateOfRegistration  String?  // ISO date string (company incorporation date)
+  directorBvn         String?  // 11-digit BVN of the primary director/signatory
+  directorPhone       String?  // primary director's phone number
+  ownershipPercentage String?  // primary director's ownership stake (%)
 
   // Step 3: Documents
   documentUrls        Json?    // Array of { type: string, url: string }
@@ -214,9 +240,16 @@ model Order {
   appFeeUsd          Decimal?     @db.Decimal(18, 8)
   bridgeFeeUsd       Decimal?     @db.Decimal(18, 8)
 
-  // Bachs split settlement — decoupled from `status`. The order is 'completed'
-  // when the customer pays (collection); the vendor's share then transfers to
-  // their connected account as a post-completion settlement tracked here.
+  // Bachs charge model: "direct" = the customer paid the merchant's account
+  // directly (funds land in the merchant's balance, Weave takes `platform_fee`);
+  // null = a LEGACY collect→split order. `bachsPlatformFeeId` is the PlatformFee
+  // record ("pf_…") read back from Bachs after a direct charge settles.
+  bachsChargeType      String?    // "direct" | null (legacy split)
+  bachsPlatformFeeId   String?
+
+  // LEGACY Bachs split settlement (collect→split model, dormant under direct charge).
+  // Kept for historical orders. The order is 'completed' when the customer pays
+  // (collection); the vendor's share then transferred to their connected account.
   bachsSplitStatus     String?    // "pending" | "settled" | "failed"
   bachsSplitTransferId String?    // Bachs transfer id ("tr_…") once the split posts
   bachsSplitAt         DateTime?
@@ -227,6 +260,29 @@ model Order {
   bachsPayoutStatus    String?    // "pending" | "processing" | "paid" | "failed" | "blocked"
   bachsWithdrawalId    String?    // Bachs withdrawal_id once the withdrawal posts
   bachsPayoutAt        DateTime?
+
+  // Anchor NGN collection — the customer pays into a per-order dynamic virtual
+  // NUBAN; `anchorPayinId` is Anchor's PayIn resource once the transfer lands. After
+  // settlement Weave skims its fee via a book transfer to Dewdrop's platform account
+  // (`anchorFeeTransferId`). Payout to the merchant's external bank is DECOUPLED —
+  // funds accrue in the merchant's Anchor account and are swept on a merchant-initiated
+  // / bulk basis, tracked by `anchorPayoutStatus`/`anchorPayoutTransferId`.
+  anchorPayinId          String?
+  anchorFeeTransferId    String?
+  anchorSettledAt        DateTime?
+  anchorPayoutStatus     String?   // "pending" | "processing" | "paid" | "failed" | "blocked"
+  anchorPayoutTransferId String?
+  anchorPayoutAt         DateTime?
+
+  // Bank-transfer collections settle whatever the payer actually sends, so we
+  // reconcile received-vs-expected. `amountCollected` is the running NGN total
+  // credited to the order's NUBAN (partial while under-paid, full once complete).
+  // An under-paid order HOLDS (stays awaiting_deposit) so the payer can top up the
+  // same NUBAN. `overpaidAmount` flags NGN received above the expected amount — the
+  // order still completes, but the excess is surfaced to the merchant for a manual
+  // refund. Both are null until a payment lands (Anchor path only).
+  amountCollected        Float?
+  overpaidAmount         Float?
 
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
@@ -269,6 +325,18 @@ model RouteStep {
   // seq 1 = transfer (vendor's share). Both carry the same transferGroup = charge id.
   transferGroup  String?
   bachsCheckoutUrl String? // hosted checkout URL for the widget overlay (collection step)
+  // Anchor: the per-order dynamic virtual account the customer transfers into.
+  // `anchorReference` is our idempotent reference sent to pay-with-transfer and
+  // echoed on the payin webhook, tying the inbound payment back to this step.
+  anchorAccountNumber String?
+  anchorBankName      String?
+  anchorReference     String?
+  // Set ONLY when the collection fell back to a RESERVED (permanent) virtual NUBAN
+  // — dynamic accounts self-expire (~1h), so they leave this null. Its presence marks
+  // a permanent account that must be deactivated once the order reaches a terminal
+  // state (the anchor-nuban-cleanup sweep); `anchorNubanReleasedAt` records that it was.
+  anchorReservedNubanId String?
+  anchorNubanReleasedAt DateTime?
   startedAt      DateTime?
   completedAt    DateTime?
 

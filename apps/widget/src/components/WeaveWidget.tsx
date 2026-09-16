@@ -145,6 +145,15 @@ interface BachsCheckoutDetails {
   reference: string;
 }
 
+interface AnchorTransferDetails {
+  accountNumber: string;
+  bankName: string;
+  accountName?: string;
+  amount: number;
+  reference: string;
+  expiresAt?: string;
+}
+
 const CURRENCIES: Record<string, Currency> = SUPPORTED_FIAT.reduce((acc, f) => {
   const code = f.key.split(':').pop()!;
   acc[code] = {
@@ -1275,6 +1284,169 @@ function ScreenBachsCheckout({
 
 const TERMINAL_OK = new Set(['completed']);
 const TERMINAL_BAD = new Set(['failed', 'expired', 'refunded']);
+
+// Anchor bank-transfer: show the payer a per-order NUBAN to transfer into. No SDK —
+// the payer sends an ordinary bank transfer, Anchor fires payin.received, and we poll
+// the order to advance. Mirrors ScreenVirtualAccount's copy-field + poll pattern.
+function ScreenAnchorTransfer({
+  onNext, details, apiKey, orderId, merchant, fmtCur,
+}: {
+  onNext: (s: string) => void;
+  details: AnchorTransferDetails | null;
+  apiKey: string;
+  orderId: string | null;
+  merchant: Merchant;
+  fmtCur: (n: number, cur: string, dec?: number) => string;
+}) {
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // NGN already credited to this NUBAN while still awaiting the full amount. A bank
+  // transfer settles whatever is sent, so a payer can underpay; the backend holds the
+  // order open and we prompt them to top up the same account.
+  const [collected, setCollected] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!orderId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const order = await fetchOrder(apiKey, orderId);
+        const status = String(order.status ?? '').toLowerCase();
+        if (typeof order.amountCollected === 'number') setCollected(order.amountCollected);
+        if (status && status !== 'awaiting_deposit') {
+          stopped = true;
+          if (TERMINAL_OK.has(status)) onNext('success');
+          else if (TERMINAL_BAD.has(status)) onNext('error');
+          else onNext('processing');
+          return;
+        }
+      } catch { /* transient — keep polling */ }
+      timer = setTimeout(tick, 5000);
+    };
+    timer = setTimeout(tick, 5000);
+    return () => { stopped = true; clearTimeout(timer); };
+    // Exclude onNext: the pay page's per-second "Expires in…" countdown re-renders the
+    // parent and would recreate onNext every second, tearing down + restarting this 5s
+    // timer before it can ever fire (so the poll would never run). Same pattern as
+    // ScreenBachsCheckout. onNext is stable enough for the terminal transition.
+  }, [apiKey, orderId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const copy = (key: string, value: string) => {
+    copyToClipboard(value).then(ok => {
+      if (!ok) return;
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1400);
+    });
+  };
+
+  const Field = ({ label, value, k, mono = true }: { label: string; value: string; k: string; mono?: boolean }) => (
+    <Row justify="space-between" style={{ padding: '11px 14px' }}>
+      <Stack gap={2} style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 10.5, color: WEAVE.mute, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</div>
+        <div style={{
+          fontSize: 14, fontWeight: 500, color: WEAVE.ink,
+          fontFamily: mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'inherit',
+          letterSpacing: mono ? -0.2 : 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{value}</div>
+      </Stack>
+      <button onClick={() => copy(k, value)} style={{
+        height: 28, padding: '0 10px', borderRadius: 7,
+        border: `1px solid ${WEAVE.hair}`,
+        background: copiedKey === k ? WEAVE.accentSoft : '#fff',
+        color: copiedKey === k ? WEAVE.accent : WEAVE.ink,
+        fontSize: 11.5, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+      }}>{copiedKey === k ? 'Copied' : 'Copy'}</button>
+    </Row>
+  );
+
+  if (!details) {
+    return (
+      <Stack gap={16} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.err, padding: '8px 0' }}>
+          Payment details unavailable. Please retry.
+        </div>
+      </Stack>
+    );
+  }
+
+  // Underpaid: a part-payment landed but it's short of the full amount. Show the payer how
+  // much is left and prompt a top-up to the SAME account. Guard by ~₦1 so a sub-naira
+  // rounding gap doesn't read as underpaid (that resolves to completed on the backend).
+  const remaining = collected != null ? details.amount - collected : 0;
+  const partial = collected != null && collected > 0 && remaining > 1
+    ? { received: collected, remaining }
+    : null;
+
+  return (
+    <Stack gap={16} style={{ padding: '24px 20px' }}>
+      <Stack gap={4} style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: WEAVE.ink }}>
+          {partial ? 'Complete your payment' : 'Transfer to complete payment'}
+        </div>
+        <div style={{ fontSize: 13, color: WEAVE.mute }}>
+          {partial ? (
+            <>Send the remaining <strong>{fmtCur(partial.remaining, merchant.currency)}</strong> to the same account below.</>
+          ) : (
+            <>Send exactly <strong>{fmtCur(details.amount, merchant.currency)}</strong> to the account below from your banking app.</>
+          )}
+        </div>
+      </Stack>
+
+      {partial ? (
+        <div style={{
+          border: `1px solid ${WEAVE.hair}`, borderRadius: 12, padding: '12px 14px',
+          background: WEAVE.accentSoft,
+        }}>
+          <Row justify="space-between" style={{ fontSize: 12.5, color: WEAVE.ink }}>
+            <span style={{ color: WEAVE.mute }}>Received so far</span>
+            <span style={{ fontWeight: 600 }}>{fmtCur(partial.received, merchant.currency)}</span>
+          </Row>
+          <Row justify="space-between" style={{ fontSize: 12.5, color: WEAVE.ink, marginTop: 6 }}>
+            <span style={{ color: WEAVE.mute }}>Still needed</span>
+            <span style={{ fontWeight: 600, color: WEAVE.accent }}>{fmtCur(partial.remaining, merchant.currency)}</span>
+          </Row>
+        </div>
+      ) : null}
+
+      <Stack gap={1} style={{ border: `1px solid ${WEAVE.hair}`, borderRadius: 12, overflow: 'hidden', background: WEAVE.page }}>
+        <Field label="Bank" value={details.bankName} k="bank" mono={false} />
+        <div style={{ height: 1, background: WEAVE.hair }} />
+        <Field label="Account Number" value={details.accountNumber} k="acct" />
+        {details.accountName ? (
+          <>
+            <div style={{ height: 1, background: WEAVE.hair }} />
+            <Field label="Account Name" value={details.accountName} k="name" mono={false} />
+          </>
+        ) : null}
+        <div style={{ height: 1, background: WEAVE.hair }} />
+        <Field
+          label={partial ? 'Amount to send' : 'Amount'}
+          value={fmtCur(partial ? partial.remaining : details.amount, merchant.currency)}
+          k="amt"
+          mono={false}
+        />
+      </Stack>
+
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        fontSize: 13, color: WEAVE.mute, padding: '4px 0',
+      }}>
+        <div style={{
+          width: 14, height: 14, borderRadius: '50%',
+          border: `2px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent,
+          animation: 'wspin 0.8s linear infinite',
+        }} />
+        Waiting for your transfer…
+      </div>
+
+      <div style={{ fontSize: 11.5, color: WEAVE.mute, textAlign: 'center', lineHeight: 1.5 }}>
+        This account is unique to this order. Keep this window open — it updates automatically once your transfer arrives.
+      </div>
+    </Stack>
+  );
+}
 
 function ScreenProcessing({
   onNext, merchant, mode, apiKey, orderId, bankDetails, fmtCur
@@ -2827,6 +2999,7 @@ function WeaveCheckoutInner({
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
   const [paystackPopupDetails, setPaystackPopupDetails] = useState<PaystackPopupDetails | null>(null);
   const [bachsCheckoutDetails, setBachsCheckoutDetails] = useState<BachsCheckoutDetails | null>(null);
+  const [anchorTransferDetails, setAnchorTransferDetails] = useState<AnchorTransferDetails | null>(null);
   const [depositAddress, setDepositAddress] = useState<string | null>(null);
   const [depositMemo, setDepositMemo] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState<number | null>(null);
@@ -3353,9 +3526,11 @@ function WeaveCheckoutInner({
       setBankDetails(res.nextAction.bankDetails ?? null);
       setPaystackPopupDetails(res.nextAction.paystackPopupDetails ?? null);
       setBachsCheckoutDetails(res.nextAction.bachsCheckout ?? null);
+      setAnchorTransferDetails(res.nextAction.anchorTransfer ?? null);
       const nextScreen =
         res.nextAction.screen === 'paystack_popup' ? 'paystack_popup' :
         res.nextAction.screen === 'bachs_checkout' ? 'bachs_checkout' :
+        res.nextAction.screen === 'anchor_transfer' ? 'anchor_transfer' :
           'vaccount';
       setScreen(nextScreen);
     } catch (e: any) {
@@ -3517,6 +3692,7 @@ function WeaveCheckoutInner({
     setBankDetails(null);
     setPaystackPopupDetails(null);
     setBachsCheckoutDetails(null);
+    setAnchorTransferDetails(null);
     setDepositAddress(null);
     setDepositMemo(null);
     setDepositError(null);
@@ -3543,6 +3719,7 @@ function WeaveCheckoutInner({
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'paystack_popup') return <ScreenPaystackPopup onNext={advance} details={paystackPopupDetails} />;
       if (screen === 'bachs_checkout') return <ScreenBachsCheckout onNext={advance} details={bachsCheckoutDetails} orderId={orderId} apiKey={apiKey} />;
+      if (screen === 'anchor_transfer') return <ScreenAnchorTransfer onNext={advance} details={anchorTransferDetails} orderId={orderId} apiKey={apiKey} merchant={merchant} fmtCur={fmtCur} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} message={apiError} />;

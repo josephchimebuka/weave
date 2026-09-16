@@ -1,10 +1,13 @@
 // Thin client for the Bachs Connect API (docs.bachs.io). Bachs is the CBN-licensed
-// party; Dewdrop Labs is a Connect *platform* and each vendor is a *connected
-// account*. Naira collection uses the "split payments / you collect" model:
-//   1. Customer pays a charge on OUR platform balance (checkout session).
-//   2. On settlement, we transfer the vendor its share to its connected account.
-// Funds rest transiently in our Bachs BALANCE (custodied by Bachs), never in our
-// own bank account — so this is the Paystack shape, not unlicensed aggregation.
+// party; Dewdrop Labs is a Connect *platform* and each merchant is an *account*
+// (`acct_…`). Naira collection uses the DIRECT-CHARGE model ("account collects"):
+//   • The customer pays the MERCHANT's account directly (checkout created with the
+//     `X-Account-Id` header). The charge lands in the merchant's OWN balance.
+//   • Weave's cut is a top-level `platform_fee` on that checkout, settled as a
+//     PlatformFee record on the merchant's settlement schedule.
+// Dewdrop NEVER holds the gross — the clean "technology-platform, not MSB" posture.
+// Refunds/disputes debit the merchant's balance, not ours. (The older collect→split
+// model — transfers + withdrawals below — is LEGACY/dormant, kept for old orders.)
 //
 // Auth is a plain bearer secret key (sk_sandbox_… / sk_live_…); there is no token
 // exchange. Money is ALWAYS a decimal string at the currency's precision
@@ -131,7 +134,7 @@ export interface CreateConnectedAccountParams {
 }
 
 export interface CreateCheckoutSessionParams {
-  amount: number | string;         // raw NGN amount
+  amount: number | string;         // raw NGN amount (the gross the customer pays)
   currency?: string;               // default "NGN"
   reference: string;               // our order id (unique per org, ≤128 chars)
   customer?: { email?: string; name?: string; phoneNumber?: string };
@@ -140,6 +143,12 @@ export interface CreateCheckoutSessionParams {
   allowedPaymentMethodTypes?: BachsPaymentMethod[];
   metadata?: Record<string, string>;
   expiresInMinutes?: number;
+  /** Direct charge: the merchant's account id ("acct_…"). Its presence makes the
+   *  charge the account's (merchant-of-record) — the funds land in ITS balance. */
+  accountId?: string;
+  /** Direct charge: Weave's cut, a base-currency AMOUNT (never a %) taken from the
+   *  account's proceeds. Ignored unless `accountId` is set. */
+  platformFee?: number | string;
 }
 
 export interface CreateTransferParams {
@@ -215,8 +224,9 @@ export class BachsService {
       'Content-Type':  'application/json',
       'Authorization': `Bearer ${secretKey}`,
     };
-    // Act as a connected account (e.g. clawback, withdrawal from a vendor balance).
-    if (opts.connectedAccountId) headers['X-Connected-Account-ID'] = opts.connectedAccountId;
+    // Act AS an account (direct-charge checkout, balance/payout reads, legacy
+    // transfers). The current API header is `X-Account-Id`.
+    if (opts.connectedAccountId) headers['X-Account-Id'] = opts.connectedAccountId;
     // Idempotency-Key makes money-moving POSTs safe to retry — REQUIRED on transfers/withdrawals.
     if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
 
@@ -239,19 +249,32 @@ export class BachsService {
 
   // ── Connect onboarding ──────────────────────────────────────────────────────
 
-  /** POST /v1/organizations/connected-accounts — create a vendor's connected account. */
+  /** POST /v1/accounts — create the merchant's account under our platform.
+   *  DIRECT-CHARGE model: the merchant is merchant-of-record, so it needs the
+   *  `merchant` persona with the naira collection capabilities (bank_transfer +
+   *  ngn_card_collection), plus the `recipient` persona's `payouts` so it can
+   *  withdraw its own balance to its bank. Sandbox grants requested capabilities
+   *  `active` immediately (scoped to the named personas). Requires an active
+   *  `connect` capability on our own platform. */
   async createConnectedAccount(params: CreateConnectedAccountParams, opts: { sandbox?: boolean } = {}): Promise<BachsConnectedAccount> {
-    return this.request<BachsConnectedAccount>('POST', '/v1/organizations/connected-accounts', {
+    return this.request<BachsConnectedAccount>('POST', '/v1/accounts', {
       sandbox: opts.sandbox,
       body: {
         contact_email: params.contactEmail,
         display_name:  params.displayName,
         country:       params.country ?? 'NG',
-        // Split-payments vendors only RECEIVE a transfer and withdraw it — they
-        // never collect their own charges, so request exactly these two.
-        capabilities: {
-          transfers: { requested: true },
-          payouts:   { requested: true },
+        configuration: {
+          merchant: {
+            capabilities: {
+              bank_transfer:       { requested: true },
+              ngn_card_collection: { requested: true },
+            },
+          },
+          recipient: {
+            capabilities: {
+              payouts: { requested: true },
+            },
+          },
         },
       },
     });
@@ -299,16 +322,20 @@ export class BachsService {
     });
   }
 
-  /** GET /v1/connected-accounts/{id}/capabilities — read capability statuses.
+  /** GET /v1/accounts/{id}/capabilities — read capability statuses. Returns every
+   *  capability applicable to the account (gate on `status === 'active'`).
    *  Bachs returns `{ items: [...] }`; unwrap to the array (tolerate a bare array). */
   async getCapabilities(accountId: string, opts: { sandbox?: boolean } = {}): Promise<{ name: string; status: CapabilityStatus; requested: boolean }[]> {
-    const raw = await this.request<any>('GET', `/v1/connected-accounts/${accountId}/capabilities`, { sandbox: opts.sandbox });
+    const raw = await this.request<any>('GET', `/v1/accounts/${accountId}/capabilities`, { sandbox: opts.sandbox });
     return Array.isArray(raw) ? raw : (raw?.items ?? []);
   }
 
   // ── Collection ──────────────────────────────────────────────────────────────
 
-  /** POST /v1/checkout-sessions — raw-amount NGN charge on OUR platform balance.
+  /** POST /v1/checkout-sessions — raw-amount NGN charge. When `accountId` is set,
+   *  this is a DIRECT CHARGE (X-Account-Id header + top-level `platform_fee`): the
+   *  charge lands in the merchant's own balance and Weave keeps `platform_fee`.
+   *  Without it, the charge lands on OUR platform balance (legacy split model).
    *  Pass `sandbox` to provision it against the Bachs sandbox (test key + base). */
   async createCheckoutSession(params: CreateCheckoutSessionParams, opts: { sandbox?: boolean } = {}): Promise<BachsCheckoutSession> {
     const customer = params.customer
@@ -321,9 +348,15 @@ export class BachsService {
 
     return this.request<BachsCheckoutSession>('POST', '/v1/checkout-sessions', {
       sandbox: opts.sandbox,
+      // X-Account-Id (via connectedAccountId) turns this into a direct charge.
+      ...(params.accountId ? { connectedAccountId: params.accountId } : {}),
       body: {
         // Raw amount (no catalog product) — right for dynamic per-order pricing.
         pricing: { currency: params.currency ?? 'NGN', amount: toBachsAmount(params.amount) },
+        // Weave's cut, only meaningful on a direct charge (needs X-Account-Id).
+        ...(params.accountId && params.platformFee != null
+          ? { platform_fee: toBachsAmount(params.platformFee) }
+          : {}),
         ...(customer ? { customer } : {}),
         reference: params.reference,
         ...(params.successUrl ? { success_url: params.successUrl } : {}),
@@ -333,6 +366,16 @@ export class BachsService {
         ...(params.expiresInMinutes ? { expires_in_minutes: params.expiresInMinutes } : {}),
       },
     });
+  }
+
+  /** GET /v1/platform_fees?charge={chargeId} — read back Weave's cut on a direct
+   *  charge (a PlatformFee record: `id` "pf_…", amount, collected_from, earned_by).
+   *  Returns the single fee tied to the charge, or null if none was struck. */
+  async getPlatformFee(chargeId: string, opts: { sandbox?: boolean } = {}): Promise<{ id: string; amount: string; currency: string } | null> {
+    const raw = await this.request<any>('GET', `/v1/platform_fees?charge=${encodeURIComponent(chargeId)}`, { sandbox: opts.sandbox });
+    const items = Array.isArray(raw) ? raw : (raw?.items ?? []);
+    const fee = items[0];
+    return fee ? { id: String(fee.id), amount: String(fee.amount), currency: String(fee.currency ?? 'NGN') } : null;
   }
 
   /** GET /v1/checkout-sessions/{id} — poll a checkout's status (webhook fallback,

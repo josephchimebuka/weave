@@ -13,11 +13,12 @@ import { chainRails } from './chainrails.service';
 import { nearIntents } from './nearintents.service';
 import { paystack } from './paystack.service';
 import { bachs } from './bachs.service';
+import { anchor } from './anchor.service';
 import { parseAsset } from '../lib/assets';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
-import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
+import { PAYSTACK_ENABLED, BACHS_ENABLED, ANCHOR_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 import { qstash } from '../lib/qstash';
 import * as Sentry from '@sentry/node';
 import { recordServerEvent } from './order-event.service';
@@ -52,7 +53,7 @@ export interface ExecutorInput {
 }
 
 export interface FirstStepAction {
-  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout';
+  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout' | 'anchor_transfer';
   depositAddress?: string;                // crypto
   depositMemo?: string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
   amount?: number;                // crypto
@@ -76,6 +77,16 @@ export interface FirstStepAction {
     checkoutUrl: string;
     amount: number;       // NGN charged — shown to payer
     reference: string;
+  };
+  // Anchor bank-transfer: the widget shows a NUBAN for the payer to transfer to.
+  // No SDK — the payer sends a bank transfer, and `payin.received` settles it.
+  anchorTransfer?: {
+    accountNumber: string;
+    bankName: string;
+    accountName?: string;
+    amount: number;       // NGN to transfer — shown to payer
+    reference: string;
+    expiresAt?: string;
   };
   expiresAt?: string;
 }
@@ -267,6 +278,63 @@ export async function scheduleBachsPayout(params: {
     });
   } catch (err: any) {
     console.warn('[executor] failed to schedule Bachs payout:', err.message);
+  }
+}
+
+// ── Anchor tuning ─────────────────────────────────────────────────────────────
+// Weave's total take on an Anchor NGN collection (sender + app fee), in bps. The
+// merchant collects the FULL gross into their own Anchor account; we then skim
+// this via a ₦0 book transfer to Dewdrop's platform account.
+const ANCHOR_FEE_BPS = Number(process.env.ANCHOR_FEE_BPS ?? SENDER_FEE_BPS + APP_FEE_BPS);
+// Delay before the fee-skim book transfer fires. The collection is already settled
+// (payment.settled webhook), so 0 = skim on the next tick; the settle job re-checks
+// the balance and reschedules if the fee isn't yet covered.
+const ANCHOR_SETTLE_DELAY_S      = Number(process.env.ANCHOR_SETTLE_DELAY_S ?? 0);
+const ANCHOR_SETTLE_RETRY_S      = Number(process.env.ANCHOR_SETTLE_RETRY_S ?? 30 * 60); // 30m
+const ANCHOR_SETTLE_MAX_ATTEMPTS = Number(process.env.ANCHOR_SETTLE_MAX_ATTEMPTS ?? 40);
+// Dewdrop's own Anchor DepositAccount — the destination for every fee-skim book
+// transfer. Required before fee-skim can run. `_TEST` is the sandbox-org equivalent
+// (a second sandbox DepositAccount) so real-sandbox orders can demonstrate a genuine
+// book transfer instead of a mock.
+const ANCHOR_PLATFORM_ACCOUNT_ID      = process.env.ANCHOR_PLATFORM_ACCOUNT_ID ?? '';
+const ANCHOR_PLATFORM_ACCOUNT_ID_TEST = process.env.ANCHOR_PLATFORM_ACCOUNT_ID_TEST ?? '';
+// Kobo band around the expected amount that still counts as "paid in full" — absorbs
+// the sub-naira gross-up rounding (the payer is shown a whole-naira figure while the
+// order total carries kobo). ₦1 by default. Beyond +tolerance ⇒ overpaid; below
+// −tolerance ⇒ underpaid (order holds for a top-up).
+const ANCHOR_PAYMENT_TOLERANCE_KOBO = Number(process.env.ANCHOR_PAYMENT_TOLERANCE_KOBO ?? 100);
+
+/**
+ * Schedule the deferred fee-skim for an Anchor order: once the collection settles
+ * into the merchant's Anchor account, book-transfer Weave's fee to Dewdrop's
+ * platform account. Self-reschedules from the settle job until the balance covers
+ * the fee or attempts run out.
+ */
+export async function scheduleAnchorSettle(params: {
+  orderId: string;
+  attempt: number;
+  delaySeconds?: number;
+}): Promise<void> {
+  if (params.attempt > ANCHOR_SETTLE_MAX_ATTEMPTS) {
+    console.error(`[executor] anchor fee-skim gave up for order ${params.orderId} after ${params.attempt} attempts`);
+    Sentry.captureMessage('anchor fee-skim exhausted retries', {
+      level: 'error', tags: { area: 'executor.anchor-settle' }, extra: { orderId: params.orderId, attempt: params.attempt },
+    });
+    return;
+  }
+  const apiBase = process.env.API_BASE;
+  if (!apiBase) {
+    console.warn('[executor] API_BASE not set — cannot schedule Anchor fee-skim');
+    return;
+  }
+  try {
+    await qstash.publishJSON({
+      url:   `${apiBase}/jobs/anchor-settle`,
+      body:  { orderId: params.orderId, attempt: params.attempt },
+      delay: params.delaySeconds ?? ANCHOR_SETTLE_DELAY_S,
+    });
+  } catch (err: any) {
+    console.warn('[executor] failed to schedule Anchor fee-skim:', err.message);
   }
 }
 
@@ -548,25 +616,27 @@ function paystackCustomerEmail(input: ExecutorInput): string {
   return `payer-${input.orderId}@${domain}`;
 }
 
-// ── Bachs Connect (NGN collect → split) ─────────────────────────────────────
+// ── Bachs Connect (NGN direct charge) ───────────────────────────────────────
 //
-// A Bachs NGN order is ONE RouteStep: the collection (a checkout on OUR platform
-// balance, where the payer pays). The order is 'completed' the moment the
-// customer pays — that's the payer- AND merchant-facing success, matching how
-// card platforms work (Stripe: charge succeeds = done).
-//
-// The vendor's split — transferring their share from our platform balance to
-// their connected account — is a POST-completion settlement (funds settle T+1/2
-// before a transfer is possible). It's tracked on `Order.bachsSplitStatus`,
-// decoupled from `status`, so a slow settlement never strands the payer on a
-// "processing" screen. Funds rest transiently in our Bachs balance (custodied by
-// Bachs, the licensed party), never our own bank.
+// A Bachs NGN order is ONE RouteStep: a DIRECT-CHARGE collection. The customer
+// pays the MERCHANT's account directly (checkout created with X-Account-Id), so
+// the charge lands in the merchant's OWN balance and Weave keeps a `platform_fee`
+// (the merchant nets gross − fee = the target). Dewdrop never holds the gross.
+// The order is 'completed' the moment the customer pays — matching card platforms
+// (Stripe: charge succeeds = done). There is no split and no platform-run payout:
+// the merchant is paid by the charge, and withdraws its own balance to its bank on
+// its Bachs payout schedule. (The legacy collect→split helpers below are dormant.)
 
-/** The vendor's net share of a gross NGN collection, after Weave's fee. */
+/** The merchant's net share of a gross NGN direct charge, after Weave's fee. */
 function bachsVendorShare(grossNgn: number): number {
   const share = grossNgn * (1 - BACHS_FEE_BPS / 10000);
   // Round to kobo (2dp) so it matches the decimal-string amount Bachs settles.
   return Math.round(share * 100) / 100;
+}
+
+/** Weave's platform_fee on a gross NGN direct charge (gross − merchant share). */
+function bachsPlatformFee(grossNgn: number): number {
+  return Math.round((grossNgn - bachsVendorShare(grossNgn)) * 100) / 100;
 }
 
 function buildBachsResult(
@@ -612,10 +682,11 @@ async function executeBachsOrder(input: ExecutorInput): Promise<ExecuteResult> {
   // Defense-in-depth kill switch (router already refuses to plan bachs when off).
   if (!BACHS_ENABLED) throw new Error(NAIRA_DISABLED_MESSAGE);
 
-  // Guard: the vendor must have an active Bachs connected account with `transfers`,
-  // otherwise the split at settlement time would fail with nowhere to land.
+  // Guard: the merchant must have a Bachs account with an ACTIVE naira-collection
+  // capability (merchant persona), or the direct charge would fail at the hosted
+  // page with PAYMENT_METHOD_NOT_ENABLED.
   const merchant = await prisma.merchant.findUniqueOrThrow({ where: { id: input.merchantId } });
-  if (!merchant.bachsConnectedAccountId || merchant.bachsTransfersStatus !== 'active') {
+  if (!merchant.bachsConnectedAccountId || merchant.bachsPaymentsStatus !== 'active') {
     throw new Error('This store cannot accept naira payments yet. Please contact the merchant to finish payout setup.');
   }
 
@@ -636,7 +707,12 @@ async function executeBachsOrder(input: ExecutorInput): Promise<ExecuteResult> {
     );
   }
 
-  const grossNgn = input.sourceAmount;
+  const grossNgn    = input.sourceAmount;         // the gross the customer pays
+  const platformFee = bachsPlatformFee(grossNgn); // Weave's cut, taken by Bachs
+
+  // Mark the order as a direct charge so the legacy split/withdrawal jobs never
+  // act on it (they early-return 'stop' on bachsChargeType === 'direct').
+  await prisma.order.update({ where: { id: orderId }, data: { bachsChargeType: 'direct' } });
 
   // Sandbox behaviour mirrors Paystack test mode:
   //   • With sandbox keys (BACHS_SECRET_KEY_TEST): provision a REAL Bachs sandbox
@@ -650,6 +726,9 @@ async function executeBachsOrder(input: ExecutorInput): Promise<ExecuteResult> {
         amount:    grossNgn,
         currency:  'NGN',
         reference: orderId,
+        // Direct charge: the customer pays the merchant's account; Weave keeps the fee.
+        accountId:   merchant.bachsConnectedAccountId,
+        platformFee,
         ...(input.payerEmail ? { customer: { email: input.payerEmail } } : {}),
         allowedPaymentMethodTypes: ['card', 'bank_transfer'],
         metadata:  { orderId },
@@ -661,22 +740,18 @@ async function executeBachsOrder(input: ExecutorInput): Promise<ExecuteResult> {
       externalId:       session.checkout_id,
       bachsCheckoutUrl: session.checkout_url,
       amountIn:         grossNgn,
-      amountOut:        grossNgn,   // gross collected; the split nets the vendor its share
+      amountOut:        bachsVendorShare(grossNgn),   // what the merchant nets after the fee
       status:           'awaiting_deposit',
       startedAt:        new Date(),
     },
   });
 
   // Fully-mocked sandbox (no test keys): no real money moves, so instant-complete
-  // the collection + mark the split settled. The real-sandbox path instead settles
-  // from the actual test-card payment (verified on poll in syncOrder), just like
-  // the live path — so we leave it awaiting the payer.
+  // the collection — that alone completes the single-step order. The real-sandbox
+  // path instead settles from the actual test-card payment (verified on poll in
+  // syncOrder), just like the live path — so we leave it awaiting the payer.
   if (input.sandboxMode && !useRealSandbox) {
-    await markStepDone({ provider: 'bachs', externalId: session.checkout_id, amountOut: grossNgn });
-    await prisma.order.update({
-      where: { id: orderId },
-      data:  { bachsSplitStatus: 'settled', bachsSplitAt: new Date(), bachsPayoutStatus: 'paid', bachsPayoutAt: new Date() },
-    });
+    await markStepDone({ provider: 'bachs', externalId: session.checkout_id, amountOut: bachsVendorShare(grossNgn) });
   }
 
   return buildBachsResult(input, session.checkout_url, session.checkout_id, grossNgn);
@@ -695,6 +770,8 @@ export async function runBachsSplit(orderId: string): Promise<{ status: 'settled
     include: { steps: { orderBy: { sequence: 'asc' } } },
   });
   if (!order) return { status: 'stop', reason: 'order not found' };
+  // Direct-charge orders are paid by the charge itself — there is no split.
+  if (order.bachsChargeType === 'direct') return { status: 'stop', reason: 'direct charge — no split' };
   // Sandbox orders mock the split — the live transfer/getBalances calls must never
   // run for them (defense-in-depth against a stray sandbox trigger).
   if (order.sandboxMode) return { status: 'stop', reason: 'sandbox order' };
@@ -855,6 +932,9 @@ export async function runBachsWithdrawal(orderId: string): Promise<{ status: 'pa
     include: { steps: { orderBy: { sequence: 'asc' } } },
   });
   if (!order) return { status: 'stop', reason: 'order not found' };
+  // Direct-charge orders: the merchant is paid by the charge and withdraws its own
+  // balance on its Bachs payout schedule — Weave never runs a withdrawal for them.
+  if (order.bachsChargeType === 'direct') return { status: 'stop', reason: 'direct charge — no platform payout' };
   // Sandbox orders mock the payout at settlement time — never touch live Bachs here
   // (createWithdrawal/getBalances are live-only). Defense-in-depth against a stray
   // sandbox trigger reaching this live path.
@@ -946,8 +1026,345 @@ export async function runBachsWithdrawal(orderId: string): Promise<{ status: 'pa
   return { status: terminalFailed ? 'failed' : 'paid' };
 }
 
+// ── Anchor (getanchor.co) — NGN collection into the merchant's OWN account ─────
+// Unlike Bachs (collect-on-platform → split), Anchor collects DIRECTLY into the
+// merchant's KYB'd DepositAccount via a per-order virtual NUBAN. The order
+// completes when `payin.received`/`payment.settled` lands; Weave then skims its
+// fee via a ₦0 book transfer to Dewdrop's platform account (a decoupled settle
+// job). Payout to the merchant's external bank is a separate concern — funds
+// accrue in the merchant's Anchor account (D2: accrue, not per-order payout).
+
+/** What the merchant nets from a gross NGN collection after Weave's fee. */
+function anchorMerchantNet(grossNgn: number): number {
+  const net = grossNgn * (1 - ANCHOR_FEE_BPS / 10000);
+  return Math.round(net * 100) / 100;
+}
+
+/** A payment reference Anchor accepts (alphanumeric lowercase, from our order id).
+ *  Echoed on the payin webhook so we can tie the inbound transfer back to the step. */
+function anchorReferenceFor(orderId: string): string {
+  return `weave${orderId.replace(/-/g, '')}`;
+}
+
+function buildAnchorResult(
+  input: ExecutorInput,
+  account: { accountNumber: string; bankName: string; accountName?: string; reference: string; expiresAt?: string },
+  grossNgn: number,
+): ExecuteResult {
+  const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
+  const appFeeUsd    = input.usdEquivalent * (APP_FEE_BPS / 10000);
+  return {
+    firstStep: { sequence: 0, provider: 'anchor', fromAsset: 'fiat:NGN', toAsset: 'fiat:NGN' },
+    nextAction: {
+      screen: 'anchor_transfer',
+      anchorTransfer: {
+        accountNumber: account.accountNumber,
+        bankName:      account.bankName,
+        ...(account.accountName ? { accountName: account.accountName } : {}),
+        amount:        grossNgn,
+        reference:     account.reference,
+        ...(account.expiresAt ? { expiresAt: account.expiresAt } : {}),
+      },
+    },
+    // What the merchant nets after Weave's fee (Anchor's collection fee is separate).
+    destAmount: anchorMerchantNet(grossNgn),
+    steps: [
+      { sequence: 0, externalId: account.reference, amountIn: grossNgn, amountOut: grossNgn },
+    ],
+    feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd: 0 },
+  };
+}
+
+async function executeAnchorOrder(input: ExecutorInput): Promise<ExecuteResult> {
+  const { orderId } = input;
+
+  // Idempotency: rebuild the same nextAction from the persisted collection step so
+  // a widget reload / retry never mints a second virtual account.
+  const existing = await prisma.routeStep.findMany({ where: { orderId }, orderBy: { sequence: 'asc' } });
+  if (existing.length > 0) {
+    const c = existing[0];
+    return buildAnchorResult(
+      input,
+      { accountNumber: c.anchorAccountNumber ?? '', bankName: c.anchorBankName ?? '', reference: c.anchorReference ?? c.externalId ?? anchorReferenceFor(orderId) },
+      Number(c.amountIn ?? input.sourceAmount),
+    );
+  }
+
+  // Defense-in-depth kill switch (router already refuses to plan anchor when off).
+  if (!ANCHOR_ENABLED) throw new Error(NAIRA_DISABLED_MESSAGE);
+
+  // Guard: the merchant must have an approved, KYB'd Anchor deposit account for the
+  // collection to land in — otherwise there is nowhere for the payin to settle.
+  const merchant = await prisma.merchant.findUniqueOrThrow({ where: { id: input.merchantId } });
+  if (!merchant.anchorAccountId || merchant.anchorKybStatus !== 'approved') {
+    throw new Error('This store cannot accept naira payments yet. Please contact the merchant to finish payout setup.');
+  }
+
+  // Pre-create the single collection step (unique [orderId,sequence] guards a
+  // concurrent creator — on conflict we reconstruct below).
+  const reference = anchorReferenceFor(orderId);
+  try {
+    await prisma.routeStep.create({
+      data: { orderId, sequence: 0, provider: 'anchor', fromAsset: 'fiat:NGN', toAsset: 'fiat:NGN', status: 'pending', anchorReference: reference },
+    });
+  } catch {
+    const raced = await prisma.routeStep.findMany({ where: { orderId }, orderBy: { sequence: 'asc' } });
+    const c = raced[0];
+    return buildAnchorResult(
+      input,
+      { accountNumber: c?.anchorAccountNumber ?? '', bankName: c?.anchorBankName ?? '', reference: c?.anchorReference ?? reference },
+      Number(c?.amountIn ?? input.sourceAmount),
+    );
+  }
+
+  const grossNgn = input.sourceAmount;
+
+  // Sandbox mirrors the Bachs/Paystack pattern:
+  //   • With sandbox keys: provision a REAL Anchor sandbox virtual account; the
+  //     sandbox webhook / poll settles it.
+  //   • Without: a synthetic NUBAN, instant-completed here (no real money moves).
+  const useRealSandbox = !!input.sandboxMode && anchor.hasTestKeys();
+  let account: { accountNumber: string; bankName: string; accountName?: string; expiresAt?: string };
+  // Set only when we fall back to a RESERVED (permanent) NUBAN — dynamic accounts self-expire,
+  // so they leave this null. The anchor-nuban-cleanup sweep deactivates reserved ones once the
+  // order is terminal.
+  let reservedNubanId: string | null = null;
+
+  if (input.sandboxMode && !useRealSandbox) {
+    account = { accountNumber: `9${orderId.replace(/\D/g, '').slice(0, 9).padEnd(9, '0')}`, bankName: 'Weave Sandbox Bank' };
+  } else {
+    // Prefer a per-order Dynamic Virtual Account (single-use, ≤1h). If that endpoint
+    // is unavailable (e.g. sandbox where pay-with-transfer is production-gated), fall
+    // back to a Reserved virtual NUBAN on the merchant's deposit account.
+    try {
+      account = await anchor.createDynamicAccount(
+        { reference, customerEmail: input.payerEmail || 'orders@paywithweave.com', amount: grossNgn, description: `Weave order ${orderId}` },
+        { sandbox: useRealSandbox },
+      );
+    } catch (err: any) {
+      console.warn(`[executor] anchor dynamic account failed (${err.message}); falling back to reserved`);
+      const reserved = await anchor.createReservedAccount({ depositAccountId: merchant.anchorAccountId! }, { sandbox: useRealSandbox });
+      account = reserved;
+      reservedNubanId = reserved.id;
+    }
+  }
+
+  await prisma.routeStep.update({
+    where: { orderId_sequence: { orderId, sequence: 0 } },
+    data: {
+      externalId:          reference,   // markStepDone keys on (provider, externalId=reference)
+      anchorAccountNumber: account.accountNumber,
+      anchorBankName:      account.bankName,
+      anchorReference:     reference,
+      anchorReservedNubanId: reservedNubanId,
+      amountIn:            grossNgn,
+      amountOut:           grossNgn,
+      status:              'awaiting_deposit',
+      startedAt:           new Date(),
+    },
+  });
+
+  // Fully-mocked sandbox (no test keys): no real money moves, so instant-complete
+  // the collection + mark it settled/fee-skimmed.
+  if (input.sandboxMode && !useRealSandbox) {
+    await markStepDone({ provider: 'anchor', externalId: reference, amountOut: grossNgn });
+    await prisma.order.update({
+      where: { id: orderId },
+      data:  { anchorSettledAt: new Date(), anchorFeeTransferId: `booktr_sandbox_${orderId}`, amountCollected: grossNgn },
+    });
+  }
+
+  return buildAnchorResult(
+    input,
+    { accountNumber: account.accountNumber, bankName: account.bankName, accountName: account.accountName, reference, expiresAt: account.expiresAt },
+    grossNgn,
+  );
+}
+
+/**
+ * Fee-skim for an Anchor order: once the collection has settled into the merchant's
+ * Anchor account, book-transfer Weave's fee to Dewdrop's platform account. Idempotent
+ * (persisted `anchorFeeTransferId` guard + a deterministic reference). Returns whether
+ * it settled, is still waiting on the balance, or should stop. Does NOT change order
+ * status — the order completed at collection.
+ */
+export async function runAnchorFeeSkim(orderId: string): Promise<{ status: 'settled' | 'waiting' | 'stop'; reason?: string }> {
+  const order = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!order) return { status: 'stop', reason: 'order not found' };
+  if (order.anchorFeeTransferId) return { status: 'settled' };          // already skimmed
+
+  // A sandbox order with REAL test keys moved real money into a real sandbox account, so
+  // it skims through the genuine Anchor sandbox (book transfer to the sandbox platform
+  // account) — same code path as live, just pointed at the sandbox org. A sandbox order
+  // WITHOUT test keys has no real accounts (fully-mocked path), so we stamp a synthetic id.
+  const sandbox = order.sandboxMode && anchor.hasTestKeys();
+  if (order.sandboxMode && !sandbox) {
+    await prisma.order.update({ where: { id: orderId }, data: { anchorFeeTransferId: `booktr_sandbox_${orderId}` } });
+    return { status: 'settled' };
+  }
+
+  const platformAccountId = sandbox ? ANCHOR_PLATFORM_ACCOUNT_ID_TEST : ANCHOR_PLATFORM_ACCOUNT_ID;
+  const merchant = await prisma.merchant.findUnique({ where: { id: order.merchantId } });
+  if (!merchant?.anchorAccountId) return { status: 'stop', reason: 'merchant has no anchor account' };
+  if (!platformAccountId) {
+    console.warn(`[executor] ${sandbox ? 'ANCHOR_PLATFORM_ACCOUNT_ID_TEST' : 'ANCHOR_PLATFORM_ACCOUNT_ID'} not set — cannot skim fee`);
+    return { status: 'stop', reason: 'platform account not configured' };
+  }
+
+  // Fee is Weave's cut of the ORDER amount (not the collected total — an over-payment's
+  // surplus is refunded to the payer, not kept, so it isn't part of the fee base).
+  const grossNgn = Number(order.sourceAmount);
+  const fee = Math.round(grossNgn * (ANCHOR_FEE_BPS / 10000) * 100) / 100;
+  if (fee <= 0) {
+    await prisma.order.update({ where: { id: orderId }, data: { anchorFeeTransferId: 'skip_zero_fee' } });
+    return { status: 'settled' };
+  }
+
+  // Only skim once the merchant's available balance (kobo) covers the fee.
+  const bal = await anchor.getBalance(merchant.anchorAccountId, { sandbox });
+  if (bal.availableBalance < Math.round(fee * 100)) return { status: 'waiting', reason: 'balance below fee' };
+
+  const transfer = await anchor.createBookTransfer({
+    amount:               fee,
+    reason:               `Weave fee ${orderId}`.slice(0, 100),
+    reference:            `feeskim${orderId.replace(/-/g, '')}`,
+    sourceAccountId:      merchant.anchorAccountId,
+    destinationAccountId: platformAccountId,
+    sandbox,
+  });
+  await prisma.order.update({ where: { id: orderId }, data: { anchorFeeTransferId: transfer.id } });
+  console.log(`[executor] anchor fee-skim ${sandbox ? '(sandbox) ' : ''}booked ₦${fee} for order ${orderId} → ${transfer.id}`);
+  return { status: 'settled' };
+}
+
+/**
+ * Reconcile an Anchor collection against what the payer actually transferred.
+ *
+ * Bank transfers settle whatever amount is sent, so we can't assume the order total
+ * arrived. Each order has its OWN persistent virtual NUBAN, so we SUM every Payment
+ * credited to that NUBAN (supporting top-ups) and compare the total to the expected
+ * amount:
+ *   • total ≥ expected − tolerance  → PAID: complete the order + skim the fee. If the
+ *     total also exceeds expected + tolerance, flag `overpaidAmount` for a manual refund.
+ *   • total < expected − tolerance  → UNDERPAID: record the partial (`amountCollected`)
+ *     and HOLD — the step stays `awaiting_deposit` so the payer can top up the same NUBAN.
+ *
+ * Idempotent + safe to call repeatedly (webhook, poll, retries). The source of truth is
+ * Anchor's payment list, not any single webhook, so a missed or duplicated event can't
+ * over- or under-count.
+ */
+export async function reconcileAnchorCollection(
+  orderId: string,
+): Promise<{ changed: boolean; status: 'paid' | 'overpaid' | 'underpaid' | 'none'; collectedNgn: number; expectedNgn: number }> {
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { steps: true } });
+  const expectedNgn0 = order ? Number(order.sourceAmount) : 0;
+  if (!order) return { changed: false, status: 'none', collectedNgn: 0, expectedNgn: 0 };
+  const step = order.steps.find((s) => s.provider === 'anchor' && s.sequence === 0);
+  if (!step || !step.anchorAccountNumber) return { changed: false, status: 'none', collectedNgn: 0, expectedNgn: expectedNgn0 };
+
+  const merchant = await prisma.merchant.findUnique({ where: { id: order.merchantId }, select: { anchorAccountId: true } });
+  if (!merchant?.anchorAccountId) return { changed: false, status: 'none', collectedNgn: 0, expectedNgn: expectedNgn0 };
+
+  const sandbox = order.sandboxMode && anchor.hasTestKeys();
+  const payments = await anchor.listPayments({ sandbox, size: 50 });
+  const mine = payments.filter((p) => p.settlementAccountId === merchant.anchorAccountId);
+
+  // Scope payments to THIS order. A dynamic (per-order) NUBAN echoes OUR reference on every
+  // inbound payment, so the reference is the exact key — a prior order's transfer can never
+  // match. Amount is NOT a key (the naira gross-up makes the total a non-round kobo figure).
+  let matched = step.anchorReference ? mine.filter((p) => p.reference === step.anchorReference) : [];
+
+  // Fallback: a RESERVED/permanent NUBAN (dynamic-account creation failed) is reused across
+  // orders and its payments carry Anchor's own reference, not ours. Match by the VNUBAN's
+  // account number, but exclude any payment already attributed to a DIFFERENT order — else a
+  // previous same-amount order's transfer would instantly "complete" this one.
+  if (matched.length === 0) {
+    const candidates: typeof mine = [];
+    for (const p of mine) {
+      const vn = await anchor.getVirtualNuban(p.virtualNubanId, { sandbox }).catch(() => null);
+      if (vn?.accountNumber === step.anchorAccountNumber) candidates.push(p);
+    }
+    const ids = candidates.map((p) => p.id);
+    const consumed = ids.length
+      ? new Set(
+          (await prisma.order.findMany({
+            where: { anchorPayinId: { in: ids }, id: { not: orderId } },
+            select: { anchorPayinId: true },
+          })).map((o) => o.anchorPayinId),
+        )
+      : new Set<string | null>();
+    matched = candidates.filter((p) => !consumed.has(p.id));
+  }
+
+  let collectedKobo = 0;
+  let firstPaymentId: string | null = null;
+  for (const p of matched) {
+    collectedKobo += p.amount;
+    firstPaymentId = firstPaymentId ?? p.id;
+  }
+
+  const expectedKobo = Math.round(expectedNgn0 * 100);
+  const collectedNgn = collectedKobo / 100;
+  if (collectedKobo === 0) return { changed: false, status: 'none', collectedNgn: 0, expectedNgn: expectedNgn0 };
+
+  // ── Underpaid: record the partial and HOLD (payer tops up the same NUBAN). ──────────
+  if (collectedKobo < expectedKobo - ANCHOR_PAYMENT_TOLERANCE_KOBO) {
+    const prev = order.amountCollected != null ? Number(order.amountCollected) : null;
+    if (prev !== collectedNgn) {
+      await prisma.order.update({ where: { id: orderId }, data: { amountCollected: collectedNgn } });
+      console.log(`[anchor] order ${orderId} underpaid: ${collectedNgn}/${expectedNgn0} — holding for top-up`);
+      return { changed: true, status: 'underpaid', collectedNgn, expectedNgn: expectedNgn0 };
+    }
+    return { changed: false, status: 'underpaid', collectedNgn, expectedNgn: expectedNgn0 };
+  }
+
+  // ── Paid in full (or overpaid) → complete + skim. ───────────────────────────────────
+  const overpaidKobo = collectedKobo - expectedKobo;
+  const isOverpaid = overpaidKobo > ANCHOR_PAYMENT_TOLERANCE_KOBO;
+  const alreadyDone = step.status === 'done';
+
+  await prisma.order.update({
+    where: { id: orderId },
+    data: {
+      amountCollected: collectedNgn,
+      overpaidAmount:  isOverpaid ? Math.round(overpaidKobo) / 100 : null,
+      anchorPayinId:   order.anchorPayinId ?? firstPaymentId,
+      ...(order.anchorSettledAt ? {} : { anchorSettledAt: new Date() }),
+    },
+  });
+
+  if (!alreadyDone) {
+    await markStepDone({ provider: 'anchor', externalId: step.anchorReference ?? step.externalId ?? '' });
+    // Fee-skim retry is the SAME in both modes (sandbox mirrors production): schedule the
+    // deferred, self-rescheduling QStash settle chain, backstopped by the anchor-settle-sweep
+    // cron. runAnchorFeeSkim branches live/sandbox internally, and deferring it (never running
+    // inline here for live) keeps a spoofed/replayed webhook from driving a live transfer.
+    await scheduleAnchorSettle({ orderId, attempt: 1 });
+    if (isOverpaid) console.log(`[anchor] order ${orderId} overpaid by ₦${Math.round(overpaidKobo) / 100} — flagged for manual refund`);
+  }
+  // Sandbox ALSO attempts the skim inline, best-effort — local dev has no QStash, so this is
+  // the only pass that runs there; when QStash is available the scheduled chain + sweep are
+  // the real retry path and this just gives instant feedback. Idempotent (guards on
+  // anchorFeeTransferId); a failure is swallowed since the chain/sweep will retry it.
+  if (order.sandboxMode && !order.anchorFeeTransferId) {
+    try {
+      await runAnchorFeeSkim(orderId);
+    } catch (err: any) {
+      console.warn(`[anchor] inline sandbox fee-skim failed for ${orderId} (will retry via settle chain):`, err.message);
+    }
+  }
+
+  return { changed: !alreadyDone, status: isOverpaid ? 'overpaid' : 'paid', collectedNgn, expectedNgn: expectedNgn0 };
+}
+
 export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult> {
   const { plan, orderId } = input;
+
+  // Anchor collects into the merchant's own account via a per-order virtual NUBAN —
+  // a self-contained path (own idempotency + reconstruction), like Bachs.
+  if (plan.steps[0]?.provider === 'anchor') {
+    return executeAnchorOrder(input);
+  }
 
   // Bachs uses a 2-phase (collect → split) model that doesn't fit the generic
   // reverse-walk chain, so it has its own self-contained path (incl. its own
@@ -1627,6 +2044,13 @@ export async function syncOrder(
           await markStepFailed({ provider: 'bachs', externalId: step.externalId });
           result.changed = true;
         }
+      } else if (step.provider === 'anchor' && step.status === 'awaiting_deposit' && step.anchorAccountNumber) {
+        // Poll fallback for the Anchor collection. The payin/payment.settled webhook is
+        // PRIMARY; this covers a missed/undeliverable webhook (e.g. local dev with no
+        // public URL). Reconciliation sums every payment credited to this order's NUBAN
+        // and either completes (paid/overpaid) or records the partial and holds (underpaid).
+        const recon = await reconcileAnchorCollection(orderId);
+        if (recon.changed) result.changed = true;
       }
     } catch (err: any) {
       console.warn(`[sync] failed to sync step ${step.id} (${step.provider}):`, err.message);

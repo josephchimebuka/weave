@@ -3,6 +3,7 @@ import { chainRails } from '../services/chainrails.service';
 import { paycrest } from '../services/paycrest.service';
 import { paystack } from '../services/paystack.service';
 import { bachs } from '../services/bachs.service';
+import { anchor } from '../services/anchor.service';
 
 const router = Router();
 
@@ -164,6 +165,55 @@ router.post('/bachs', async (req: Request, res: Response) => {
       data:   payload,
     },
   });
+
+  res.json({ success: true });
+});
+
+// POST /api/v1/webhooks/anchor
+router.post('/anchor', async (req: Request, res: Response) => {
+  // express.raw() already ran for /webhooks/* — req.body is a Buffer here.
+  const rawBody   = (req.body as Buffer).toString();
+  const signature = (req.headers['x-anchor-signature'] as string) ?? '';
+
+  // Anchor signs with HMAC-SHA1 over the raw body (no timestamp), Base64-encoded.
+  if (!anchor.verifyWebhookSignature(rawBody, signature)) {
+    return res.status(401).json({ success: false, error: 'Invalid signature' });
+  }
+
+  let payload: any;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid JSON body' });
+  }
+
+  // Anchor's event envelope carries the type on the event resource (`data.type`),
+  // with a relationship reference to the underlying resource. Tolerate a top-level
+  // `type` too.
+  const event = payload?.data?.type ?? payload?.type;
+  if (!event) {
+    return res.status(400).json({ success: false, error: 'Missing event type' });
+  }
+
+  const { qstash } = await import('../lib/qstash');
+  const baseUrl = process.env.API_BASE;
+  if (!baseUrl) throw new Error('API_BASE env is required for job callbacks');
+
+  try {
+    await qstash.publishJSON({
+      url: `${baseUrl}/jobs/process-webhook`,
+      body: {
+        source: 'anchor',
+        event,
+        data:   payload,
+      },
+    });
+  } catch (err: any) {
+    // Don't crash on a QStash failure (e.g. local dev with no valid QSTASH_TOKEN) —
+    // Anchor will retry, and the syncOrder poll-fallback still completes collections.
+    console.warn('[webhook] anchor enqueue to QStash failed:', err.message);
+    return res.status(200).json({ success: true, enqueued: false });
+  }
 
   res.json({ success: true });
 });

@@ -162,7 +162,7 @@ export type InlineInstrument = InlineBankInstrument | InlineWalletInstrument;
 export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstrument };
 
 export interface NextAction {
-  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout';
+  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout' | 'anchor_transfer';
   depositAddress?: string;
   depositMemo?:    string;
   amount?:         number;
@@ -191,6 +191,14 @@ export interface NextAction {
     checkoutUrl: string;
     amount:      number;
     reference:   string;
+  };
+  anchorTransfer?: {
+    accountNumber: string;
+    bankName:      string;
+    accountName?:  string;
+    amount:        number;
+    reference:     string;
+    expiresAt?:    string;
   };
   expiresAt?: string;
 }

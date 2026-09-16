@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2, AlertTriangle } from 'lucide-react';
 import { fetchOrder, fetchOrderEvents } from '../../lib/dashboard-api';
 import { EVENT_TONE, fmtDuration, type OrderEvent } from '../../lib/order-events';
 import { assetLabel, parseAsset, institutionName } from '../../types';
@@ -101,6 +101,18 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
         </div>
       </div>
 
+      {/* Overpayment — the payer sent more than the order total; the surplus landed in
+          your account and should be refunded to them manually. */}
+      {order.overpaidAmount ? (
+        <div className="rounded-[20px] border border-amber-300/70 bg-amber-50 px-6 py-4 flex items-start gap-3 fade-up" style={{ animationDelay: '100ms' }}>
+          <AlertTriangle size={18} strokeWidth={2.2} className="text-amber-600 mt-0.5 shrink-0" />
+          <div className="text-[13.5px] text-amber-900 leading-relaxed">
+            <span className="font-semibold">Overpaid by {money(order.overpaidAmount, 2)}.</span>{' '}
+            The payer sent more than the order total. The surplus settled into your account — refund it to the payer manually.
+          </div>
+        </div>
+      ) : null}
+
       {/* Core details */}
       <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '120ms' }}>
         <div className="px-7 py-5 border-b border-hair-soft">
@@ -110,6 +122,9 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
           <Field label="From" value={assetLabel(order.sourceAssetKey)} />
           <Field label="To" value={assetLabel(order.destAssetKey)} />
           <Field label="Merchant received" value={`${money(order.destAmount, 4)} ${order.destAssetKey.split(':').at(-1)}`} />
+          {typeof order.amountCollected === 'number' && order.amountCollected > 0 && (
+            <Field label="Amount received" value={money(order.amountCollected, 2)} />
+          )}
           <Field label="Created" value={new Date(order.createdAt).toLocaleString('en-GB')} />
           <Field label="Updated" value={new Date(order.updatedAt).toLocaleString('en-GB')} />
           <Field

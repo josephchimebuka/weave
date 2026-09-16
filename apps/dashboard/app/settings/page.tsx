@@ -109,6 +109,13 @@ function SettingsContent() {
   const [bachsRemaining, setBachsRemaining] = useState<BachsRemainingField[]>([]);
   const [bachsFieldValues, setBachsFieldValues] = useState<Record<string, string>>({});
   const [bachsSubmitting, setBachsSubmitting] = useState(false);
+  // Anchor (naira collection into the merchant's own KYB'd account) onboarding
+  const [anchorStatus, setAnchorStatus] = useState<any>(null);
+  const [anchorConnecting, setAnchorConnecting] = useState(false);
+  const [anchorDocs, setAnchorDocs] = useState<Array<{ documentType: string; format: string; submitted: boolean; verified: boolean; description: string }>>([]);
+  const [anchorDocText, setAnchorDocText] = useState<Record<string, string>>({});
+  const [anchorUploading, setAnchorUploading] = useState<string | null>(null);
+  const [anchorSetupError, setAnchorSetupError] = useState<string | null>(null);
   // Branding (themes the hosted cash-out page)
   const [brand, setBrand] = useState<Record<string, string>>({});
   const [brandSaving, setBrandSaving] = useState(false);
@@ -226,13 +233,16 @@ function SettingsContent() {
     toast.success('Branding saved.');
   }
 
-  type BachsResult = { connectedAccountId?: string; setupStatus?: string; transfersStatus?: string; payoutsStatus?: string; remaining?: BachsRemainingField[] };
+  // Direct-charge model: `paymentsStatus` is the naira-collection capability that
+  // gates whether the store can accept naira (`transfersStatus` is legacy).
+  type BachsResult = { connectedAccountId?: string; setupStatus?: string; paymentsStatus?: string; payoutsStatus?: string; transfersStatus?: string; remaining?: BachsRemainingField[] };
 
   function applyBachsResult(d: BachsResult) {
-    setBachsStatus((prev: any) => ({ ...prev, connectedAccountId: d.connectedAccountId ?? prev?.connectedAccountId, transfersStatus: d.transfersStatus, payoutsStatus: d.payoutsStatus, canCollectNaira: d.transfersStatus === 'active' }));
+    const active = d.paymentsStatus === 'active';
+    setBachsStatus((prev: any) => ({ ...prev, connectedAccountId: d.connectedAccountId ?? prev?.connectedAccountId, paymentsStatus: d.paymentsStatus, payoutsStatus: d.payoutsStatus, canCollectNaira: active }));
     setBachsRemaining(d.remaining ?? []);
     setBachsFieldValues({});
-    if (d.transfersStatus === 'active') toast.success('Naira payouts connected.');
+    if (active) toast.success('Naira payments connected.');
     else if ((d.remaining ?? []).length) toast('A few more details are needed to finish.');
     else toast('Details submitted — your account is under review.');
   }
@@ -253,6 +263,62 @@ function SettingsContent() {
     if (!res.ok) { toast.error(res.error || 'Could not submit details.'); return; }
     applyBachsResult(res.data);
   }
+
+  // ── Anchor (naira collection) ─────────────────────────────────────────────
+  const refreshAnchor = useCallback(() => {
+    fetch('/api/merchant/anchor/status').then((r) => r.ok ? r.json() : null).then((d) => { if (d) setAnchorStatus(d); }).catch(() => {});
+  }, []);
+  const refreshAnchorDocs = useCallback(() => {
+    fetch('/api/merchant/anchor/documents').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.documents) setAnchorDocs(d.documents); }).catch(() => {});
+  }, []);
+  useEffect(() => { refreshAnchor(); }, [refreshAnchor]);
+  useEffect(() => {
+    if (anchorStatus?.customerId && anchorStatus?.kybStatus !== 'approved') refreshAnchorDocs();
+  }, [anchorStatus?.customerId, anchorStatus?.kybStatus, refreshAnchorDocs]);
+
+  async function connectAnchor() {
+    setAnchorConnecting(true);
+    setAnchorSetupError(null);
+    const res = await apiFetch<any>('/api/merchant/anchor/connect', { method: 'POST' });
+    setAnchorConnecting(false);
+    if (!res.ok) { setAnchorSetupError(res.error || 'Could not start naira setup.'); toast.error(res.error || 'Could not start naira setup.'); return; }
+    setAnchorStatus((p: any) => ({ ...p, ...res.data }));
+    if (res.data?.canCollectNaira) toast.success('Naira payments active.');
+    else { toast('Verification started — upload your documents below.'); refreshAnchorDocs(); }
+  }
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file); });
+  }
+
+  async function uploadAnchorText(documentType: string) {
+    const textData = (anchorDocText[documentType] ?? '').trim();
+    if (!textData) return;
+    setAnchorUploading(documentType);
+    const res = await apiFetch<any>('/api/merchant/anchor/documents/upload', { method: 'POST', body: JSON.stringify({ documentType, textData }) });
+    setAnchorUploading(null);
+    if (!res.ok) { toast.error(res.error || 'Could not submit.'); return; }
+    if (res.data?.documents) setAnchorDocs(res.data.documents);
+    toast.success('Submitted.');
+  }
+
+  async function uploadAnchorFile(documentType: string, file: File) {
+    setAnchorUploading(documentType);
+    try {
+      const fileBase64 = await fileToBase64(file);
+      const res = await apiFetch<any>('/api/merchant/anchor/documents/upload', { method: 'POST', body: JSON.stringify({ documentType, fileBase64, fileName: file.name, contentType: file.type }) });
+      if (!res.ok) { toast.error(res.error || 'Could not upload.'); return; }
+      if (res.data?.documents) setAnchorDocs(res.data.documents);
+      toast.success('Uploaded.');
+    } catch { toast.error('Could not read the file.'); }
+    finally { setAnchorUploading(null); }
+  }
+
+  const anchorDocLabel = (t: string) => ({
+    RC_NUMBER: 'RC Number', TIN: 'Tax ID (TIN)', CERTIFICATE_OF_INCORPORATION: 'Certificate of Incorporation',
+    MEMORANDUM_OF_ASSOCIATION: 'Memorandum of Association', CAC_STATUS_REPORT: 'CAC Status Report',
+    PROOF_OF_ADDRESS: 'Proof of Address', FORM_CAC_3: 'CAC Form 3',
+  } as Record<string, string>)[t] || t.replace(/_/g, ' ');
 
   // Fetch banks
   useEffect(() => {
@@ -899,6 +965,123 @@ export default function CheckoutPage() {
                     <button onClick={connectBachs} disabled={bachsConnecting}
                       className="px-6 py-2.5 rounded-full bg-forest text-cream-soft hover:bg-forest-deep transition-all text-[14px] font-medium disabled:opacity-50 disabled:cursor-not-allowed">
                       {bachsConnecting ? 'Connecting…' : (started ? 'Refresh status' : 'Connect naira payouts')}
+                    </button>
+                  </div>
+                );
+              })()}
+            </Card>
+          )}
+
+          {anchorStatus?.enabled && (
+            <Card delay={160}>
+              <div className="flex items-center gap-3 mb-6 text-forest-deep">
+                <Banknote size={18} strokeWidth={1.9} />
+                <h2 className="font-display text-[22px] font-semibold text-ink">Naira Payments</h2>
+              </div>
+
+              <p className="text-[14px] text-ink-muted mb-6 leading-relaxed">
+                Accept naira bank transfers straight into an account in your own name — Weave never holds your funds. We reuse your existing business verification; you just confirm a few CAC documents to complete setup.
+              </p>
+
+              {(() => {
+                const active = anchorStatus?.canCollectNaira;
+                const started = !!anchorStatus?.customerId;
+                const kyb = anchorStatus?.kybStatus;
+
+                if (active) {
+                  return (
+                    <div className="rounded-xl border border-forest-light bg-forest-mist px-4 py-3.5 flex items-start gap-3">
+                      <Check size={18} className="text-forest mt-0.5 shrink-0" />
+                      <div className="text-[13px] text-forest-deep leading-relaxed">
+                        <span className="font-semibold">Active.</span> Your naira account is verified and ready to accept payments.
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (!started) {
+                  return (
+                    <div className="space-y-4">
+                      {anchorSetupError && (
+                        <div className="rounded-xl border border-terracotta/30 bg-terracotta/5 px-4 py-3.5 text-[13px] text-terracotta leading-relaxed">
+                          {anchorSetupError}{' '}
+                          <a href="/onboarding/kyb" className="font-semibold underline hover:no-underline">Update your business verification →</a>
+                        </div>
+                      )}
+                      <button onClick={connectAnchor} disabled={anchorConnecting}
+                        className="px-6 py-2.5 rounded-full bg-forest text-cream-soft hover:bg-forest-deep transition-all text-[14px] font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                        {anchorConnecting ? 'Starting…' : 'Set up naira payments'}
+                      </button>
+                    </div>
+                  );
+                }
+
+                const pending = anchorDocs.filter((d) => !d.submitted);
+                return (
+                  <div className="space-y-5">
+                    {kyb === 'rejected' ? (
+                      <div className="rounded-xl border border-terracotta/30 bg-terracotta/5 px-4 py-3.5 text-[13px] text-terracotta leading-relaxed">
+                        Your verification was declined. Please review your documents below and re-submit, or contact support.
+                      </div>
+                    ) : kyb === 'manualReview' ? (
+                      <div className="rounded-xl border border-hair-strong bg-tan-mist px-4 py-3.5 text-[13px] text-tan-deep leading-relaxed">
+                        Your documents are in review. This usually clears shortly — check back soon.
+                      </div>
+                    ) : pending.length > 0 ? (
+                      <p className="text-[13px] text-ink-soft">Upload these documents to complete your naira verification:</p>
+                    ) : (
+                      <div className="rounded-xl border border-hair-strong bg-tan-mist px-4 py-3.5 text-[13px] text-tan-deep leading-relaxed">
+                        All documents submitted — your verification is being reviewed.
+                      </div>
+                    )}
+
+                    {anchorDocs.length > 0 && (
+                      <div className="space-y-3">
+                        {anchorDocs.map((doc) => (
+                          <div key={doc.documentType} className="rounded-xl border border-hair-soft px-4 py-3.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-[13px] font-semibold text-ink">{anchorDocLabel(doc.documentType)}</div>
+                                {doc.description && <div className="text-[11.5px] text-ink-muted mt-0.5 leading-snug">{doc.description}</div>}
+                              </div>
+                              {doc.submitted && (
+                                <span className="inline-flex items-center gap-1 text-[12px] font-medium text-forest shrink-0">
+                                  <Check size={14} /> Submitted
+                                </span>
+                              )}
+                            </div>
+
+                            {!doc.submitted && doc.format === 'TEXT' && (
+                              <div className="flex items-center gap-2 mt-3">
+                                <input
+                                  value={anchorDocText[doc.documentType] ?? ''}
+                                  onChange={(e) => setAnchorDocText((v) => ({ ...v, [doc.documentType]: e.target.value }))}
+                                  placeholder={`Enter ${anchorDocLabel(doc.documentType)}`}
+                                  className="flex-1 px-3.5 py-2 rounded-lg border border-hair-soft bg-white text-[14px] outline-none focus:border-forest"
+                                />
+                                <button onClick={() => uploadAnchorText(doc.documentType)} disabled={anchorUploading === doc.documentType || !(anchorDocText[doc.documentType] ?? '').trim()}
+                                  className="px-4 py-2 rounded-lg bg-forest text-cream-soft hover:bg-forest-deep transition-all text-[13px] font-medium disabled:opacity-50 shrink-0">
+                                  {anchorUploading === doc.documentType ? 'Saving…' : 'Submit'}
+                                </button>
+                              </div>
+                            )}
+
+                            {!doc.submitted && doc.format === 'FILE' && (
+                              <label className="inline-flex items-center gap-2 mt-3 px-4 py-2 rounded-lg border border-hair-strong bg-white text-[13px] font-medium text-ink-soft hover:border-forest cursor-pointer transition-all">
+                                {anchorUploading === doc.documentType ? 'Uploading…' : 'Upload file'}
+                                <input type="file" accept="image/*,application/pdf" className="hidden"
+                                  disabled={anchorUploading === doc.documentType}
+                                  onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAnchorFile(doc.documentType, f); e.target.value = ''; }} />
+                              </label>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <button onClick={() => { refreshAnchor(); refreshAnchorDocs(); }}
+                      className="text-[13px] font-medium text-forest-deep hover:text-forest transition-colors">
+                      Refresh status
                     </button>
                   </div>
                 );

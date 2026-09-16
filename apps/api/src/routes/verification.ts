@@ -43,6 +43,11 @@ router.patch('/', requireAuth, async (req, res) => {
       supportEmail:       data.supportEmail,
       productCategory:    data.productCategory,
       socialMedia:        data.socialMedia,
+      businessBvn:         data.businessBvn,
+      dateOfRegistration:  data.dateOfRegistration,
+      directorBvn:         data.directorBvn,
+      directorPhone:       data.directorPhone,
+      ownershipPercentage: data.ownershipPercentage,
       documentUrls:    data.documentUrls,
     };
 

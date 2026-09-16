@@ -144,6 +144,11 @@ app.use('/api', apiLimiter);
 // Webhook routes need the raw Buffer for HMAC verification — must run BEFORE express.json.
 app.use('/api/v1/webhooks', express.raw({ type: 'application/json' }));
 
+// Anchor KYB document relay carries base64 file payloads — needs a larger body limit
+// than the default 100kb. Runs BEFORE the global json parser so it wins for this path
+// (the global parser then skips, seeing the body already read).
+app.use('/api/v1/merchant/anchor/documents', express.json({ limit: '20mb' }));
+
 app.use(express.json({
   verify: (req: any, _res, buf) => {
     req.rawBody = buf.toString();

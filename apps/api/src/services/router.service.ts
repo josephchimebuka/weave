@@ -5,9 +5,9 @@
 
 import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
-import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
+import { PAYSTACK_ENABLED, BACHS_ENABLED, ANCHOR_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 
-export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs' | 'anchor';
 
 // Which checkout flow the caller is in. 'self' means the user signs with a
 // connected wallet (ChainRails can do this once it's fully wired). 'external'
@@ -56,6 +56,19 @@ type Edge = {
 const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM', 'BSC', 'AVALANCHE'];
 
 const EDGES: Edge[] = [
+  // Anchor: Direct NGN to NGN (licensed BaaS collection into the merchant's own
+  // KYB'd account). Listed FIRST so it wins the BFS for NGN→NGN over Bachs/Paystack
+  // whenever ANCHOR_ENABLED. Anchor is the current naira rail; Bachs/Paystack are
+  // kept behind their kill switches as fallbacks / history.
+  {
+    provider: 'anchor',
+    from: (a) => a.kind === 'fiat' && a.currency === 'NGN',
+    to: (a) => a.kind === 'fiat' && a.currency === 'NGN',
+    expectedFeeBps: 85, // Weave fee (SENDER_FEE_BPS + APP_FEE_BPS); Anchor's 0.5% collection is separate
+    expectedSecs: 60,
+    note: 'anchor (domestic NGN collection to merchant account)',
+    flows: ['external'],
+  },
   // Bachs Connect: Direct NGN to NGN (licensed split-payment collection). Listed
   // BEFORE the Paystack edge so that if both were ever enabled, Bachs wins the
   // BFS for NGN→NGN. In practice Paystack is disabled and Bachs is its successor.
@@ -159,6 +172,7 @@ export function planRoute(req: RouteRequest): RoutePlan {
   const edges = EDGES.filter(e =>
     (e.provider !== 'paystack' || PAYSTACK_ENABLED) &&
     (e.provider !== 'bachs'    || BACHS_ENABLED) &&
+    (e.provider !== 'anchor'   || ANCHOR_ENABLED) &&
     (!e.flows || e.flows.includes(flow)),
   );
 
@@ -185,8 +199,8 @@ export function planRoute(req: RouteRequest): RoutePlan {
         const nextAsset = parseAsset(nextKey);
         if (!edge.to(nextAsset)) continue;
         // Same-asset hops are normally rejected, but the domestic NGN→NGN
-        // collectors (Bachs, Paystack) legitimately have identical from/to.
-        if (cur.key === nextKey && edge.provider !== 'paystack' && edge.provider !== 'bachs') continue;
+        // collectors (Anchor, Bachs, Paystack) legitimately have identical from/to.
+        if (cur.key === nextKey && edge.provider !== 'paystack' && edge.provider !== 'bachs' && edge.provider !== 'anchor') continue;
 
         const step: RoutePlanStep = {
           provider: edge.provider,

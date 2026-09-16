@@ -2,7 +2,9 @@ import { Router, Request, Response } from 'express';
 import * as Sentry from '@sentry/node';
 import { qstashReceiver } from '../lib/qstash';
 import { prisma } from '../lib/prisma';
-import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll, runBachsSplit, scheduleBachsSettle, runBachsWithdrawal, scheduleBachsPayout } from '../services/executor.service';
+import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll, runBachsSplit, scheduleBachsSettle, runBachsWithdrawal, scheduleBachsPayout, runAnchorFeeSkim, scheduleAnchorSettle, reconcileAnchorCollection } from '../services/executor.service';
+import { anchor } from '../services/anchor.service';
+import { bachs } from '../services/bachs.service';
 import { webhookService } from '../services/webhook.service';
 import { sendMerchantPaymentNotification, sendCustomerReceiptEmail, sendAdminKYBNotification } from '../services/email.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
@@ -96,14 +98,21 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
     return res.json({ success: true });
   }
 
-  // ── Bachs Connect (NGN collect → split) ────────────────────────────────────
+  // ── Bachs Connect (NGN direct charge) ──────────────────────────────────────
   if (source === 'bachs') {
     // `data` is the full webhook envelope { id, type, account?, data }.
     const evt = data?.data ?? {};
 
-    if (event === 'collection.succeeded') {
+    // A direct charge's completion arrives as `collection.succeeded` or as
+    // `checkout.completed` with data.payment_status === 'paid' (the account-origin
+    // event, delivered on a connect/all endpoint). Treat both as the paid signal.
+    const isPaidCompletion =
+      event === 'collection.succeeded' ||
+      (event === 'checkout.completed' && String(evt?.payment_status ?? '') === 'paid');
+
+    if (isPaidCompletion) {
       const checkoutId = String(evt?.checkout_id ?? '');
-      const chargeId   = String(evt?.charge_id ?? '');
+      const chargeId   = String(evt?.charge_id ?? evt?.charge?.id ?? '');
       if (!checkoutId) return res.status(200).json({ skipped: true, reason: 'missing checkout_id' });
 
       const logKey = { source_event_externalId: { source, event, externalId: checkoutId } };
@@ -112,22 +121,32 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
 
       const step = await prisma.routeStep.findFirst({
         where: { provider: 'bachs', externalId: checkoutId, sequence: 0 },
-        select: { id: true, orderId: true, order: { select: { sandboxMode: true } } },
+        select: { id: true, orderId: true, order: { select: { sandboxMode: true, bachsChargeType: true } } },
       });
       if (!step) return res.status(200).json({ skipped: true, reason: 'no collection step found' });
 
-      // Tag the collection step with the charge id (= transfer_group for the
-      // split + reconciliation).
+      // Tag the collection step with the charge id (reconciliation / platform-fee lookup).
       if (chargeId) {
         await prisma.routeStep.update({ where: { id: step.id }, data: { transferGroup: chargeId } });
       }
 
-      // Collection done → single-step order COMPLETES. Sandbox orders MOCK the split +
-      // payout (no live money) exactly like syncOrder does; only LIVE orders schedule
-      // the real deferred split. This keeps a sandbox webhook from ever driving a live
-      // transfer even if it reaches this handler.
+      // Direct charge: the charge already belongs to the merchant, so completing the
+      // single step completes the order — no split, no platform-run payout. (Legacy
+      // collect→split orders — bachsChargeType null — still schedule the deferred
+      // split; sandbox mocks it, never driving a live transfer from a webhook.)
       await markStepDone({ provider: 'bachs', externalId: checkoutId });
-      if (step.order.sandboxMode) {
+      const isDirect = step.order.bachsChargeType === 'direct';
+      if (isDirect) {
+        // Best-effort: read Weave's cut back as a PlatformFee record.
+        if (chargeId && !step.order.sandboxMode) {
+          try {
+            const fee = await bachs.getPlatformFee(chargeId);
+            if (fee) await prisma.order.update({ where: { id: step.orderId }, data: { bachsPlatformFeeId: fee.id } });
+          } catch (err: any) {
+            console.warn('[jobs] bachs platform-fee lookup failed:', err.message);
+          }
+        }
+      } else if (step.order.sandboxMode) {
         await prisma.order.update({
           where: { id: step.orderId },
           data:  { bachsSplitStatus: 'settled', bachsSplitAt: new Date(), bachsPayoutStatus: 'paid', bachsPayoutAt: new Date() },
@@ -145,7 +164,7 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
       return res.json({ success: true });
     }
 
-    if (event === 'collection.failed') {
+    if (event === 'collection.failed' || event === 'checkout.failed') {
       const checkoutId = String(evt?.checkout_id ?? '');
       if (!checkoutId) return res.status(200).json({ skipped: true, reason: 'missing checkout_id' });
       await markStepFailed({ provider: 'bachs', externalId: checkoutId });
@@ -175,12 +194,16 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
     }
 
     if (event === 'capability.updated') {
-      // Connect event: the origin is the connected account (top-level `account`).
+      // Connect event: the origin is the account (top-level `account`).
       const accountId  = String(data?.account ?? evt?.account ?? '');
-      const capability = String(evt?.capability ?? '');
+      const capability = String(evt?.capability ?? evt?.name ?? '');
       const status     = String(evt?.status ?? '');
-      const field = capability === 'transfers' ? 'bachsTransfersStatus'
+      // Naira collection (merchant persona) gates order creation; payouts lets the
+      // merchant withdraw its own balance. `transfers` is legacy (split model).
+      const field = (capability === 'ngn_card_collection' || capability === 'bank_transfer')
+                      ? 'bachsPaymentsStatus'
                   : capability === 'payouts'   ? 'bachsPayoutsStatus'
+                  : capability === 'transfers' ? 'bachsTransfersStatus'
                   : null;
       if (accountId && field) {
         await prisma.merchant.updateMany({
@@ -192,6 +215,147 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
     }
 
     return res.status(200).json({ skipped: true, reason: 'unhandled bachs event' });
+  }
+
+  // ── Anchor (NGN collect into merchant's own account → fee-skim) ─────────────
+  if (source === 'anchor') {
+    // Anchor's envelope: { data: { id, type, attributes, relationships } }. The
+    // referenced resource id lives under relationships; shapes are confirmed
+    // against the sandbox during E2E, so we extract defensively.
+    const evt  = data?.data ?? data ?? {};
+    const rels = evt?.relationships ?? {};
+    const attrs = evt?.attributes ?? {};
+    const relId = (...keys: string[]): string => {
+      for (const k of keys) { const id = rels?.[k]?.data?.id; if (id) return String(id); }
+      for (const k of Object.keys(rels)) { const id = rels[k]?.data?.id; if (id) return String(id); }
+      return '';
+    };
+
+    // Inbound payment landed in the merchant's collection account.
+    if (event === 'payin.received' || event === 'payment.received' || event === 'payment.settled' || event === 'nip.inbound.completed') {
+      // Anchor has two inbound-collection shapes:
+      //  • payment.received/settled → a Payment on a Virtual NUBAN (/api/v1/virtual-nubans,
+      //    the sandbox path). Carries Anchor's own reference; the credited account is a
+      //    VNUBAN referenced by id → resolve its 10-digit number.
+      //  • payin.received/nip.inbound.completed → a PayIn (/pay/*, dynamic pay-with-transfer,
+      //    production). Carries OUR reference.
+      // We resolve both `reference` and `accountNumber`, then match the order by either.
+      const isPayment  = event === 'payment.received' || event === 'payment.settled';
+      const resourceId = isPayment
+        ? (relId('payment', 'Payment') || String(evt?.id ?? ''))
+        : (relId('payin', 'payIn', 'PayIn') || String(attrs?.payinId ?? evt?.id ?? ''));
+
+      // Fetch a resource with a live→sandbox fallback (the webhook doesn't say which).
+      const fetchDual = async <T>(fn: (sandbox: boolean) => Promise<T>): Promise<T | null> => {
+        try { return await fn(false); }
+        catch { if (anchor.hasTestKeys()) { try { return await fn(true); } catch { /* noop */ } } return null; }
+      };
+
+      let reference     = String(attrs?.reference ?? '');
+      let accountNumber = String(attrs?.accountNumber ?? '');
+      if (resourceId) {
+        if (isPayment) {
+          const payment = await fetchDual((sb) => anchor.getPayment(resourceId, { sandbox: sb }));
+          if (payment?.virtualNubanId) {
+            const vn = await fetchDual((sb) => anchor.getVirtualNuban(payment.virtualNubanId, { sandbox: sb }));
+            if (vn?.accountNumber) accountNumber = accountNumber || vn.accountNumber;
+          }
+        } else {
+          const payin = await fetchDual((sb) => anchor.getPayin(resourceId, { sandbox: sb }));
+          if (payin) {
+            reference     = reference     || String(payin.reference ?? '');
+            accountNumber = accountNumber || String(payin.accountNumber ?? '');
+          }
+        }
+      }
+      if (!reference && !accountNumber) return res.status(200).json({ skipped: true, reason: 'no reference/account on inbound payment' });
+
+      const idKey = resourceId || reference || accountNumber;
+      const logKey = { source_event_externalId: { source, event, externalId: idKey } };
+      const existing = await prisma.webhookLog.findUnique({ where: logKey });
+      if (existing?.processed) return res.status(200).json({ skipped: true, reason: 'already processed' });
+
+      const step = await prisma.routeStep.findFirst({
+        where: {
+          provider: 'anchor', sequence: 0,
+          OR: [
+            ...(reference ? [{ anchorReference: reference }] : []),
+            ...(accountNumber ? [{ anchorAccountNumber: accountNumber }] : []),
+          ],
+        },
+        select: { id: true, orderId: true, anchorReference: true, order: { select: { sandboxMode: true } } },
+      });
+      if (!step) return res.status(200).json({ skipped: true, reason: 'no collection step found' });
+
+      // A payment landed — reconcile received-vs-expected. Reconciliation sums every
+      // payment credited to this order's NUBAN and either COMPLETES the order (paid or
+      // overpaid, then skims Weave's fee — sandbox mocks the book transfer, live schedules
+      // the deferred fee-skim so a webhook can never drive a live transfer) or records the
+      // partial and HOLDS for a top-up (underpaid). Anchor's payment list is the source of
+      // truth, so a duplicate/out-of-order webhook can't over- or under-count.
+      const recon = await reconcileAnchorCollection(step.orderId);
+      console.log(`[jobs] anchor collection ${step.orderId}: ${recon.status} (₦${recon.collectedNgn}/₦${recon.expectedNgn})`);
+
+      await prisma.webhookLog.upsert({
+        where: logKey,
+        create: { orderId: step.orderId, source, event, externalId: idKey, payload: data, processed: true },
+        update: { processed: true },
+      });
+      return res.json({ success: true });
+    }
+
+    // KYB outcome → update the merchant's cached Anchor KYB status.
+    const KYB_STATUS: Record<string, string> = {
+      'customer.identification.approved':            'approved',
+      'customer.identification.rejected':            'rejected',
+      'customer.identification.manualReview':        'manualReview',
+      'customer.identification.awaitingDocument':    'awaitingDocument',
+      'customer.identification.error':               'rejected',
+      'customer.identification.reenter_information':  'rejected',
+    };
+    if (KYB_STATUS[event]) {
+      const customerId = relId('customer', 'Customer', 'businessCustomer', 'BusinessCustomer');
+      if (customerId) {
+        const mapped = KYB_STATUS[event];
+        const merchant = await prisma.merchant.findFirst({ where: { anchorCustomerId: customerId }, select: { id: true } });
+        if (merchant) {
+          // Anchor is the KYB authority: when it approves the business, mark the merchant
+          // verified in Weave too (drives kycLevel gating + the dashboard KYB card);
+          // on rejection, reset to 'basic' per the rejection convention (email stays verified).
+          await prisma.merchant.update({
+            where: { id: merchant.id },
+            data: {
+              anchorKybStatus: mapped,
+              ...(mapped === 'approved' ? { kycLevel: 'verified' } : {}),
+              ...(mapped === 'rejected' ? { kycLevel: 'basic' } : {}),
+            },
+          });
+          if (mapped === 'approved' || mapped === 'rejected') {
+            await prisma.businessVerification.updateMany({
+              where: { merchantId: merchant.id },
+              data: { status: mapped === 'approved' ? 'verified' : 'rejected' },
+            });
+          }
+        }
+      }
+      return res.json({ success: true });
+    }
+
+    // Deposit-account NUBAN generated → cache it on the merchant.
+    if (event === 'accountNumber.created' || event === 'account.opened') {
+      const accountId     = relId('account', 'Account', 'depositAccount', 'DepositAccount');
+      const accountNumber = String(attrs?.accountNumber ?? '');
+      const bankName      = String(attrs?.bank?.name ?? attrs?.bankName ?? '');
+      if (accountId && accountNumber) {
+        await prisma.merchant.updateMany({
+          where: { anchorAccountId: accountId },
+          data:  { anchorAccountNumber: accountNumber, ...(bankName ? { anchorBankName: bankName } : {}) },
+        });
+      }
+      return res.json({ success: true });
+    }
+
+    return res.status(200).json({ skipped: true, reason: 'unhandled anchor event' });
   }
 
   // ── Paycrest + ChainRails ──────────────────────────────────────────────────
@@ -612,6 +776,100 @@ router.post('/bachs-payout-sweep', verifyQStash, async (req, res) => {
   }
 
   res.json({ success: true, swept: stuck.length, paid, waiting, blocked });
+});
+
+// ── Anchor fee-skim (book transfer of Weave's fee to the platform account) ──
+// Fired after the collection settles into the merchant's Anchor account. Skims
+// Weave's fee via a ₦0 book transfer; self-reschedules until the balance covers
+// the fee or attempts run out. The order already COMPLETED at collection, so a
+// delayed/failed skim never strands the payer — only Weave's own fee.
+router.post('/anchor-settle', verifyQStash, async (req, res) => {
+  const { orderId, attempt } = req.body as { orderId: string; attempt: number };
+  if (!orderId) return res.status(400).json({ error: 'missing orderId' });
+
+  try {
+    const result = await runAnchorFeeSkim(orderId);
+    if (result.status === 'waiting') {
+      await scheduleAnchorSettle({ orderId, attempt: (attempt ?? 1) + 1 });
+      return res.json({ success: true, rescheduled: true, nextAttempt: (attempt ?? 1) + 1, reason: result.reason });
+    }
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    // Transient failure (e.g. Anchor API blip) — reschedule rather than drop the skim.
+    await scheduleAnchorSettle({ orderId, attempt: (attempt ?? 1) + 1 });
+    return res.json({ success: true, rescheduled: true, error: err.message });
+  }
+});
+
+// ── Anchor fee-skim recovery sweep ──────────────────────────────────────────
+// Backstop for the self-scheduling fee-skim chain: re-drives any completed Anchor
+// order that settled but whose fee hasn't been skimmed yet (a lost QStash message).
+// Wire to an infrequent QStash cron. Covers BOTH live and sandbox — runAnchorFeeSkim
+// branches internally (real book transfer for live/real-sandbox, mock for keyless
+// sandbox), so sandbox mirrors production. Fully-mocked sandbox orders already carry a
+// booktr_sandbox_ id at completion, so the anchorFeeTransferId:null filter excludes them.
+router.post('/anchor-settle-sweep', verifyQStash, async (req, res) => {
+  const stuck = await prisma.order.findMany({
+    where: {
+      status:              'completed',
+      anchorSettledAt:     { not: null },
+      anchorFeeTransferId: null,
+    },
+    select: { id: true },
+    take: 25,
+    orderBy: { createdAt: 'asc' },
+  });
+
+  let settled = 0, waiting = 0;
+  for (const o of stuck) {
+    try {
+      const result = await runAnchorFeeSkim(o.id);
+      if (result.status === 'settled') settled++;
+      else if (result.status === 'waiting') { waiting++; await scheduleAnchorSettle({ orderId: o.id, attempt: 1 }); }
+    } catch (err: any) {
+      console.warn(`[jobs] anchor-settle-sweep failed for ${o.id}:`, err.message);
+    }
+  }
+
+  res.json({ success: true, swept: stuck.length, settled, waiting });
+});
+
+// ── Anchor reserved-NUBAN cleanup sweep ─────────────────────────────────────
+// A RESERVED (permanent) virtual NUBAN never expires, so a per-order reserved account
+// (the sandbox / dynamic-fallback path) would accumulate forever and stay payable long
+// after its order is done. This sweep deactivates the reserved NUBAN of any order that
+// has reached a terminal state. Dynamic accounts self-expire and never set
+// `anchorReservedNubanId`, so they're naturally excluded. Best-effort + idempotent
+// (`anchorNubanReleasedAt` marks done; failures retry next sweep). Wire to a QStash cron.
+router.post('/anchor-nuban-cleanup', verifyQStash, async (_req, res) => {
+  const steps = await prisma.routeStep.findMany({
+    where: {
+      provider:              'anchor',
+      anchorReservedNubanId: { not: null },
+      anchorNubanReleasedAt: null,
+      order:                 { status: { in: ['completed', 'failed', 'refunded', 'expired'] } },
+    },
+    select: { id: true, anchorReservedNubanId: true, order: { select: { sandboxMode: true } } },
+    take: 25,
+    orderBy: { createdAt: 'asc' },
+  });
+
+  let released = 0, failed = 0;
+  for (const s of steps) {
+    try {
+      // Real-sandbox reserved accounts live in the sandbox org; live ones in prod.
+      // Fully-mocked sandbox orders never set anchorReservedNubanId, so they don't appear.
+      const sandbox = s.order.sandboxMode && anchor.hasTestKeys();
+      await anchor.deactivateVirtualNuban(s.anchorReservedNubanId!, { sandbox });
+      await prisma.routeStep.update({ where: { id: s.id }, data: { anchorNubanReleasedAt: new Date() } });
+      released++;
+    } catch (err: any) {
+      failed++;
+      console.warn(`[jobs] anchor-nuban-cleanup failed for step ${s.id}:`, err.message);
+    }
+  }
+
+  res.json({ success: true, swept: steps.length, released, failed });
 });
 
 // ── Expire Checkout Sessions ────────────────────────────────────────────────

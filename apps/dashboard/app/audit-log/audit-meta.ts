@@ -61,6 +61,22 @@ const ACTIONS: Record<string, ActionMeta> = {
     label: 'Naira payout details submitted', severity: 'info', category: 'compliance',
     describe: (m) => (s(m, 'fields') ? `${s(m, 'fields')} field(s) · setup ${s(m, 'setupStatus')}` : ''),
   },
+  'anchor.customer.created': {
+    label: 'Naira account started', severity: 'sensitive', category: 'settlements',
+    describe: (m) => s(m, 'customerId'),
+  },
+  'anchor.kyb.triggered': {
+    label: 'Naira verification submitted', severity: 'info', category: 'compliance',
+    describe: (m) => s(m, 'customerId'),
+  },
+  'anchor.deposit_account.created': {
+    label: 'Naira account ready', severity: 'sensitive', category: 'settlements',
+    describe: (m) => s(m, 'accountId'),
+  },
+  'anchor.document.uploaded': {
+    label: 'Verification document submitted', severity: 'info', category: 'compliance',
+    describe: (m) => s(m, 'documentType'),
+  },
   'brand.updated': {
     label: 'Branding updated', severity: 'info', category: 'account',
     describe: (m) => {

@@ -18,9 +18,18 @@ export const PAYSTACK_ENABLED = process.env.PAYSTACK_ENABLED === 'true';
 // `planRoute` routes NGN→NGN through Bachs instead of Paystack.
 export const BACHS_ENABLED = process.env.BACHS_ENABLED === 'true';
 
+// ANCHOR: Anchor (getanchor.co) is the banking-as-a-service naira rail that
+// replaces Bachs. Each merchant gets a KYB'd DepositAccount in their OWN name;
+// customers pay by bank transfer into a per-order dynamic virtual NUBAN, and
+// Weave skims its fee via a ₦0 book transfer to Dewdrop's platform account.
+// Funds are custodied by Anchor's licensed banking partner, never by Dewdrop.
+// Defaults OFF; set `ANCHOR_ENABLED=true` once sandbox is proven. When enabled,
+// `planRoute` routes NGN→NGN through Anchor ahead of Bachs/Paystack.
+export const ANCHOR_ENABLED = process.env.ANCHOR_ENABLED === 'true';
+
 // True when SOME naira corridor is live. The naira kill switch (in planRoute)
 // only rejects a pure NGN→NGN collection when EVERY corridor is down.
-export const NAIRA_ENABLED = PAYSTACK_ENABLED || BACHS_ENABLED;
+export const NAIRA_ENABLED = PAYSTACK_ENABLED || BACHS_ENABLED || ANCHOR_ENABLED;
 
 // User-facing message when a naira collection is attempted while every naira
 // corridor is disabled. Kept here so the copy is identical everywhere it surfaces.

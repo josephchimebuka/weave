@@ -42,6 +42,8 @@ export interface Order {
   bachsSplitStatus?:  string | null;
   bachsPayoutStatus?: string | null;   // "pending" | "processing" | "paid" | "blocked" | "failed"
   bachsPayoutAt?:     string | null;
+  amountCollected?:   number | null;   // NGN actually credited to the order's NUBAN (bank-transfer collections)
+  overpaidAmount?:    number | null;   // NGN received above the order total — flag for manual refund
   steps:              RouteStep[];
   sourceInstrument?:  {
     bankInstitution?: string | null;

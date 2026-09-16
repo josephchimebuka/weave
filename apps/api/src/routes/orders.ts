@@ -249,6 +249,7 @@ router.post('/', requireAuth, async (req, res) => {
           
           const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
           const isPureBachs    = plan.steps.length === 1 && plan.steps[0].provider === 'bachs';
+          const isPureAnchor   = plan.steps.length === 1 && plan.steps[0].provider === 'anchor';
 
           if (isPurePaystack) {
             // Paystack handles its own gross-up in the executor.
@@ -257,16 +258,17 @@ router.post('/', requireAuth, async (req, res) => {
             usdEquivalent = targetFiat.div(sellRate).toNumber(); // for reporting
             appFeeBps = 0; // handled by paystack.grossUp
             destAmountFiat = body.amount;
-          } else if (isPureBachs) {
-            // Bachs split: the payer pays a grossed-up amount so the vendor nets
-            // exactly the target after Weave's fee (the fee comes out of the split,
-            // not added on top in the executor). vendorShare = collected × (1−fee)
-            // = target ⇒ collected = target / (1−fee). No rate needed for the
-            // source leg (pure NGN); sellRate only feeds usdEquivalent reporting.
+          } else if (isPureBachs || isPureAnchor) {
+            // Bachs split / Anchor fee-skim: the payer pays a grossed-up amount so the
+            // merchant nets exactly the target after Weave's fee (Bachs takes it from
+            // the split; Anchor skims it via a book transfer post-settlement). Either
+            // way merchantNet = collected × (1−fee) = target ⇒ collected = target/(1−fee).
+            // No rate needed for the source leg (pure NGN); sellRate only feeds
+            // usdEquivalent reporting.
             const feePct = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS).div(10000);
             sourceAmount = targetFiat.div(new Decimal(1).minus(feePct)).toNumber();
             usdEquivalent = new Decimal(sourceAmount).div(sellRate).toNumber();
-            appFeeBps = 0; // realized in the split
+            appFeeBps = 0; // realized in the split / fee-skim
             destAmountFiat = body.amount;
           } else {
             const sr = new Decimal(sellRate);
@@ -325,11 +327,12 @@ router.post('/', requireAuth, async (req, res) => {
     // Pin it to the requested amount so the charge is always well-formed.
     const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
     const isPureBachs    = plan.steps.length === 1 && plan.steps[0].provider === 'bachs';
-    if ((isPurePaystack || isPureBachs) && (!sourceAmount || sourceAmount <= 0)) {
+    const isPureAnchor   = plan.steps.length === 1 && plan.steps[0].provider === 'anchor';
+    if ((isPurePaystack || isPureBachs || isPureAnchor) && (!sourceAmount || sourceAmount <= 0)) {
       // Rate fetch failed (common in sandbox) → pin the source leg so the charge
-      // is well-formed. Paystack charges 1:1 (grosses up in the executor); Bachs
-      // grosses up here so the vendor still nets the target after the split fee.
-      if (isPureBachs) {
+      // is well-formed. Paystack charges 1:1 (grosses up in the executor); Bachs/Anchor
+      // gross up here so the merchant still nets the target after Weave's fee.
+      if (isPureBachs || isPureAnchor) {
         const feePct = (SENDER_FEE_BPS + APP_FEE_BPS) / 10000;
         sourceAmount = body.amount / (1 - feePct);
       } else {
