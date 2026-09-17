@@ -613,7 +613,8 @@ router.post('/:id/steps/:seq/approve-tx', requireAuth, async (req, res) => {
   try {
     const step = await loadLifiStep(req, res);
     if (!step) return;
-    res.json({ success: true, data: await buildLifiApproveTx(step) });
+    // { standing: true } → approve a bounded standing allowance so later sends need one signature.
+    res.json({ success: true, data: await buildLifiApproveTx(step, { standing: req.body?.standing === true }) });
   } catch (err: any) {
     res.status(502).json({ success: false, error: err.message || 'Could not build the approval transaction' });
   }

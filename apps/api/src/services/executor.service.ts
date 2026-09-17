@@ -591,16 +591,29 @@ async function runLifiBridge(
  * (Re)build the SAC `approve` XDR for a LI.FI step — null when the on-chain
  * allowance already covers the amount. Used on page resume / re-quote.
  */
-export async function buildLifiApproveTx(step: RouteStep): Promise<{ unsignedXdr: string | null }> {
+// Standing allowance: approve once for repeat sends. Soroban allowances carry
+// an expiration ledger, so this is bounded in both amount and time. The spender
+// is Circle's CCTP TokenMessenger, whose deposit_for_burn requires the sender's
+// own auth — a standing allowance cannot be drained by a third party.
+const STANDING_ALLOWANCE_USDC   = Number(process.env.STELLAR_STANDING_ALLOWANCE_USDC ?? 1000);
+const STANDING_ALLOWANCE_LEDGERS = Number(process.env.STELLAR_STANDING_ALLOWANCE_LEDGERS ?? 30 * 24 * 60 * 12); // ~30 days at 5s
+
+export async function buildLifiApproveTx(step: RouteStep, opts: { standing?: boolean } = {}): Promise<{ unsignedXdr: string | null; amount: number; expiresInLedgers: number | null }> {
   const pd = (step.providerData as any)?.lifi;
   if (!pd?.step) throw new Error('lifi: step has no route data');
   const lstep = pd.step as LifiStep;
-  if (!pd.approvalAddress || lstep.estimate.skipApproval) return { unsignedXdr: null };
+  if (!pd.approvalAddress || lstep.estimate.skipApproval) return { unsignedXdr: null, amount: 0, expiresInLedgers: null };
   const fromMeta = lifiAsset(step.fromAsset);
+  const need = BigInt(lstep.action.fromAmount);
   const have = await lifi.stellarAllowance({ from: pd.fromAddress, spender: pd.approvalAddress, tokenContract: fromMeta.token }).catch(() => 0n);
-  if (have >= BigInt(lstep.action.fromAmount)) return { unsignedXdr: null };
-  const { xdr } = await lifi.buildStellarApproveXdr({ from: pd.fromAddress, spender: pd.approvalAddress, tokenContract: fromMeta.token, amountRaw: lstep.action.fromAmount });
-  return { unsignedXdr: xdr };
+  if (have >= need) return { unsignedXdr: null, amount: 0, expiresInLedgers: null };
+
+  // Standing: cover this send AND future ones, for ~30 days.
+  const standingRaw = BigInt(Math.round(STANDING_ALLOWANCE_USDC * 10 ** fromMeta.decimals));
+  const amountRaw = opts.standing ? (standingRaw > need ? standingRaw : need).toString() : lstep.action.fromAmount;
+  const ttlLedgers = opts.standing ? STANDING_ALLOWANCE_LEDGERS : undefined;
+  const { xdr } = await lifi.buildStellarApproveXdr({ from: pd.fromAddress, spender: pd.approvalAddress, tokenContract: fromMeta.token, amountRaw, ttlLedgers });
+  return { unsignedXdr: xdr, amount: Number(amountRaw) / 10 ** fromMeta.decimals, expiresInLedgers: ttlLedgers ?? 720 };
 }
 
 /**
