@@ -19,6 +19,8 @@ import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
 import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 import { qstash } from '../lib/qstash';
+import { lifi, lifiAsset, fromBaseUnits, LIFI_STELLAR_CHAIN_ID, type LifiStep } from './lifi.service';
+import { stellarSimulator, simulatorMemoFor, STELLAR_SIMULATOR_PROVIDER } from './stellar-simulator.service';
 import * as Sentry from '@sentry/node';
 import { recordServerEvent } from './order-event.service';
 import { recordAudit } from './audit.service';
@@ -52,7 +54,7 @@ export interface ExecutorInput {
 }
 
 export interface FirstStepAction {
-  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout';
+  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout' | 'sign_stellar_tx';
   depositAddress?: string;                // crypto
   depositMemo?: string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
   amount?: number;                // crypto
@@ -76,6 +78,22 @@ export interface FirstStepAction {
     checkoutUrl: string;
     amount: number;       // NGN charged — shown to payer
     reference: string;
+  };
+  // LI.FI Stellar leg: the payer's wallet signs `approveXdr`, then fetches the
+  // bridge XDR from `bridgeTxPath` (it can only be simulated once the allowance
+  // is on-chain), signs that too, and reports the hash to `submittedPath`.
+  stellarSigning?: {
+    fromAddress: string;
+    amount: number;               // USDC leaving the wallet
+    token: string;                // 'USDC'
+    chain: string;                // 'STELLAR'
+    approveXdr: string | null;    // null when the allowance already covers the amount
+    approvalAddress: string;
+    approveTxPath: string;        // POST → { unsignedXdr | null } (re-issue on resume)
+    bridgeTxPath: string;         // POST → { unsignedXdr }
+    submittedPath: string;        // POST { txHash }
+    estimatedSecs: number;
+    tool: string;                 // 'cctp'
   };
   expiresAt?: string;
 }
@@ -118,9 +136,13 @@ export type DepositInstruction =
       publicKey: string;
       amount: number;
       reference: string;
-    };
+    }
+  | ({ type: 'stellar_sign' } & NonNullable<FirstStepAction['stellarSigning']>);
 
 export function toDepositInstruction(action: FirstStepAction): DepositInstruction {
+  if (action.screen === 'sign_stellar_tx' && action.stellarSigning) {
+    return { type: 'stellar_sign', ...action.stellarSigning };
+  }
   if (action.screen === 'collect_crypto') {
     return {
       type: 'crypto_transfer',
@@ -307,6 +329,8 @@ interface StepExecution {
   bankDetails?: FirstStepAction['bankDetails'];
   note?: string;
   paystackAccessCode?: string;
+  providerData?: Record<string, unknown>;
+  stellarSigning?: FirstStepAction['stellarSigning'];
 }
 
 async function runPaycrestOfframp(
@@ -447,6 +471,12 @@ async function runNearIntentsSwap(
   ref: string,
   exactOutputTarget?: number,
   appFeeBps?: number,
+  // True when this hop is fed by an UPSTREAM provider (e.g. Paycrest onramp →
+  // NEAR → Stellar) rather than by the payer. The exact amount that lands is
+  // then the upstream's net-of-fees output, unknown at quote time, so we ask
+  // NEAR for FLEX_INPUT: it swaps whatever arrives instead of refunding a
+  // deposit that is a few bps short of the quoted amountIn.
+  fedByUpstream = false,
 ): Promise<StepExecution> {
   const from = parseAsset(step.fromAsset);
   const to = parseAsset(step.toAsset);
@@ -461,7 +491,7 @@ async function runNearIntentsSwap(
       sourceAssetKey: step.fromAsset,
       destAssetKey: step.toAsset,
       amount: exactOutputTarget ?? amountIn, // Target output amount or fallback to input amount
-      swapType: exactOutputTarget ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
+      swapType: exactOutputTarget ? 'EXACT_OUTPUT' : fedByUpstream ? 'FLEX_INPUT' : 'EXACT_INPUT',
       refundTo: refundAddress,
       recipient: downstreamRecipient,
       slippageBps: exactOutputTarget ? undefined : SLIPPAGE_BUFFER_BPS, // EXACT_OUTPUT leaves slippage risk to solver
@@ -486,6 +516,135 @@ async function runNearIntentsSwap(
     }
     throw err;
   }
+}
+
+// ── LI.FI (Circle CCTP) Stellar → Base ───────────────────────────────────────
+// Forward-bound like every other hop: `toAddress` is the downstream deposit
+// address (Paycrest's Base receive address), so USDC mints straight into the
+// next provider. The payer signs on Stellar; Weave never holds the funds.
+async function runLifiBridge(
+  step: RoutePlanStep,
+  amountIn: number,
+  downstreamRecipient: string,
+  fromAddress: string,
+  orderId: string,
+  sequence: number,
+): Promise<StepExecution> {
+  const from = parseAsset(step.fromAsset);
+  const to = parseAsset(step.toAsset);
+  if (from.kind !== 'crypto' || to.kind !== 'crypto') throw new Error('lifi: asset mismatch');
+  if (!downstreamRecipient) throw new Error('lifi: missing downstream recipient');
+  if (!/^G[A-Z2-7]{55}$/.test(fromAddress)) {
+    throw new Error('A Stellar wallet address (G…) is required to pay with USDC on Stellar.');
+  }
+
+  const route = await lifi.getRoute({
+    fromAssetKey: step.fromAsset, toAssetKey: step.toAsset, amount: amountIn,
+    fromAddress, toAddress: downstreamRecipient,
+  });
+  const lstep: LifiStep = route.steps[0];
+  const fromMeta = lifiAsset(step.fromAsset);
+  const toMeta = lifiAsset(step.toAsset);
+  const amountOut = fromBaseUnits(lstep.estimate.toAmountMin, toMeta.decimals);
+  const feeUsd = (lstep.estimate.feeCosts ?? []).reduce((s, f) => s + (Number(f.amountUSD) || 0), 0);
+
+  // Approval: build the SAC `approve` XDR now unless the allowance already covers it.
+  const approvalAddress = lstep.estimate.approvalAddress ?? '';
+  let approveXdr: string | null = null;
+  if (approvalAddress && !lstep.estimate.skipApproval) {
+    const have = await lifi.stellarAllowance({ from: fromAddress, spender: approvalAddress, tokenContract: fromMeta.token }).catch(() => 0n);
+    if (have < BigInt(lstep.action.fromAmount)) {
+      approveXdr = (await lifi.buildStellarApproveXdr({
+        from: fromAddress, spender: approvalAddress, tokenContract: fromMeta.token, amountRaw: lstep.action.fromAmount,
+      })).xdr;
+    }
+  }
+
+  return {
+    externalId: `lifi:${route.id}`,          // replaced by the Stellar tx hash once the wallet submits
+    amountIn,
+    amountOut,
+    depositAddress: null,
+    depositMemo: null,
+    expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    feeUsd,
+    note: `lifi ${lstep.tool}`,
+    providerData: {
+      lifi: { routeId: route.id, step: lstep, fromAddress, toAddress: downstreamRecipient, approvalAddress, tool: lstep.tool },
+    },
+    stellarSigning: {
+      fromAddress,
+      amount: amountIn,
+      token: from.token,
+      chain: from.chain,
+      approveXdr,
+      approvalAddress,
+      approveTxPath: `/orders/${orderId}/steps/${sequence}/approve-tx`,
+      bridgeTxPath: `/orders/${orderId}/steps/${sequence}/bridge-tx`,
+      submittedPath: `/orders/${orderId}/steps/${sequence}/submitted`,
+      estimatedSecs: lstep.estimate.executionDuration,
+      tool: lstep.tool,
+    },
+  };
+}
+
+/**
+ * (Re)build the SAC `approve` XDR for a LI.FI step — null when the on-chain
+ * allowance already covers the amount. Used on page resume / re-quote.
+ */
+// Standing allowance: approve once for repeat sends. Soroban allowances carry
+// an expiration ledger, so this is bounded in both amount and time. The spender
+// is Circle's CCTP TokenMessenger, whose deposit_for_burn requires the sender's
+// own auth — a standing allowance cannot be drained by a third party.
+const STANDING_ALLOWANCE_USDC   = Number(process.env.STELLAR_STANDING_ALLOWANCE_USDC ?? 1000);
+const STANDING_ALLOWANCE_LEDGERS = Number(process.env.STELLAR_STANDING_ALLOWANCE_LEDGERS ?? 30 * 24 * 60 * 12); // ~30 days at 5s
+
+export async function buildLifiApproveTx(step: RouteStep, opts: { standing?: boolean } = {}): Promise<{ unsignedXdr: string | null; amount: number; expiresInLedgers: number | null }> {
+  const pd = (step.providerData as any)?.lifi;
+  if (!pd?.step) throw new Error('lifi: step has no route data');
+  const lstep = pd.step as LifiStep;
+  if (!pd.approvalAddress || lstep.estimate.skipApproval) return { unsignedXdr: null, amount: 0, expiresInLedgers: null };
+  const fromMeta = lifiAsset(step.fromAsset);
+  const need = BigInt(lstep.action.fromAmount);
+  const have = await lifi.stellarAllowance({ from: pd.fromAddress, spender: pd.approvalAddress, tokenContract: fromMeta.token }).catch(() => 0n);
+  if (have >= need) return { unsignedXdr: null, amount: 0, expiresInLedgers: null };
+
+  // Standing: cover this send AND future ones, for ~30 days.
+  const standingRaw = BigInt(Math.round(STANDING_ALLOWANCE_USDC * 10 ** fromMeta.decimals));
+  const amountRaw = opts.standing ? (standingRaw > need ? standingRaw : need).toString() : lstep.action.fromAmount;
+  const ttlLedgers = opts.standing ? STANDING_ALLOWANCE_LEDGERS : undefined;
+  const { xdr } = await lifi.buildStellarApproveXdr({ from: pd.fromAddress, spender: pd.approvalAddress, tokenContract: fromMeta.token, amountRaw, ttlLedgers });
+  return { unsignedXdr: xdr, amount: Number(amountRaw) / 10 ** fromMeta.decimals, expiresInLedgers: ttlLedgers ?? 720 };
+}
+
+/**
+ * Build the LI.FI bridge XDR for a step whose allowance is now on-chain.
+ * Called by POST /orders/:id/steps/:seq/bridge-tx.
+ */
+export async function buildLifiBridgeTx(step: RouteStep): Promise<{ unsignedXdr: string }> {
+  const pd = (step.providerData as any)?.lifi;
+  if (!pd?.step) throw new Error('lifi: step has no route data');
+  const tr = await lifi.getStepTransaction(pd.step as LifiStep);
+  return { unsignedXdr: tr.data };
+}
+
+/**
+ * The wallet submitted the Stellar bridge tx — record its hash so syncOrder can
+ * track it on LI.FI, and move the step to in_flight.
+ */
+export async function recordLifiSubmission(step: RouteStep, txHash: string) {
+  const hash = txHash.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('txHash must be a 64-hex Stellar transaction hash');
+  await prisma.routeStep.update({
+    where: { id: step.id },
+    data: {
+      externalId: hash,
+      status: 'in_flight',
+      providerData: { ...((step.providerData as any) ?? {}), lifi: { ...((step.providerData as any)?.lifi ?? {}), sourceTxHash: hash, submittedAt: new Date().toISOString() } },
+    },
+  });
+  await prisma.order.updateMany({ where: { id: step.orderId, status: 'awaiting_deposit' }, data: { status: 'processing' } });
+  recordServerEvent(step.orderId, 'deposit.detected', 'Stellar bridge transaction submitted', { provider: 'lifi', txHash: hash });
 }
 
 function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): ExecuteResult {
@@ -518,7 +677,7 @@ function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): Execute
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
   const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
   const bridgeFeeUsd = steps.reduce((s, e) => {
-    return s + ((e.provider === 'chainrails' || e.provider === 'nearintents') ? (e.feeUsd ?? 0) : 0);
+    return s + ((e.provider === 'chainrails' || e.provider === 'nearintents' || e.provider === 'lifi') ? (e.feeUsd ?? 0) : 0);
   }, 0);
 
   return {
@@ -533,6 +692,11 @@ function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): Execute
     })),
     feeSummary: { senderFeeUsd, appFeeUsd, bridgeFeeUsd },
   };
+}
+
+function touchesStellar(step: RoutePlanStep): boolean {
+  const f = parseAsset(step.fromAsset); const t = parseAsset(step.toAsset);
+  return (f.kind === 'crypto' && f.chain === 'STELLAR') || (t.kind === 'crypto' && t.chain === 'STELLAR');
 }
 
 // ── Orchestrator ────────────────────────────────────────────────────────────
@@ -1000,6 +1164,9 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
   // Walk steps last → first, each step's depositAddress feeds the previous.
   const executions: StepExecution[] = new Array(plan.steps.length);
+  // Provider actually used per step when it differs from the plan (sandbox
+  // swaps Stellar-touching hops to the testnet simulator).
+  const providerOverrides: Record<number, string> = {};
   let downstreamRecipient: string | null = null;
   let exactTargetUsdc: number | null = null;
 
@@ -1043,6 +1210,36 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
           amount:     Math.round(amountIn * 100),
           reference:  paystackRef,
         };
+      } else if (stellarSimulator.enabled && touchesStellar(step)) {
+        // ── SANDBOX · TESTNET SIMULATOR ──────────────────────────────────
+        // Stands in for the bridge counterparty (NEAR Intents / CCTP) so the
+        // handoff to the user's Stellar wallet is REAL on testnet: deposits
+        // pay testnet USDC into their wallet; cash-outs wait for their memo
+        // payment into the simulator. Never reachable from a live order.
+        const from = parseAsset(step.fromAsset);
+        const memo = simulatorMemoFor(orderId);
+        if (from.kind === 'crypto' && from.chain === 'STELLAR') {
+          exec = {
+            externalId: `sim:${orderId}:${i}`, amountIn, amountOut: amountIn,
+            depositAddress: stellarSimulator.publicKey(true), depositMemo: memo,
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), feeUsd: 0,
+            note: 'stellar simulator (cash-out, awaiting memo payment)',
+          };
+        } else {
+          // Deposit direction: fail fast if the wallet can't take USDC — the
+          // payer shouldn't be handed bank details for a deposit that can't land.
+          const dest = downstreamRecipient ?? input.destWallet ?? '';
+          const { exists, trusts } = await stellarSimulator.accountAcceptsUsdc(true, dest);
+          if (!exists) throw new Error('Your Stellar wallet is not active on testnet yet. Sign in to your wallet app once so it gets created, then try again.');
+          if (!trusts) throw new Error('Your Stellar wallet needs a testnet USDC trustline before it can receive this deposit.');
+          exec = {
+            externalId: `sim:${orderId}:${i}`, amountIn, amountOut: amountIn * 0.998,
+            depositAddress: dest, depositMemo: null,
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), feeUsd: amountIn * 0.002,
+            note: 'stellar simulator (deposit, pays testnet USDC)',
+          };
+        }
+        providerOverrides[i] = STELLAR_SIMULATOR_PROVIDER;
       } else {
         exec = sandboxDispatch(step, amountIn, orderId, i) as any;
       }
@@ -1135,7 +1332,14 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     } else if (step.provider === 'nearintents') {
       const from = parseAsset(step.fromAsset);
       const sourceIsEvm = from.kind === 'crypto' && ['BASE', 'ETHEREUM', 'ARBITRUM', 'OPTIMISM', 'POLYGON', 'BSC', 'AVALANCHE'].includes(from.chain.toUpperCase());
-      const refundTo = input.refundAddress || (sourceIsEvm ? (input.destWallet || downstreamRecipient) : '');
+      // refundTo must be valid on the ORIGIN chain. For an EVM-sourced hop with
+      // no explicit refund address, prefer the system EVM refund wallet — the
+      // destination may be non-EVM (e.g. a Stellar G-address on the NGN →
+      // Stellar USDC route, where this hop is fed by Paycrest, not the payer),
+      // so `destWallet` is only an acceptable fallback when it is itself EVM.
+      const isEvmAddress = (v: string | null | undefined) => !!v && /^0x[0-9a-fA-F]{40}$/.test(v);
+      const evmFallback = [WEAVE_EVM_REFUND_ADDRESS, input.destWallet, downstreamRecipient].find(isEvmAddress) ?? '';
+      const refundTo = input.refundAddress || (sourceIsEvm ? evmFallback : '');
 
       if (!refundTo) {
         throw new Error(`Refund address is required for ${from.kind === 'crypto' ? from.chain : from.currency} payments.`);
@@ -1148,8 +1352,14 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         refundTo,
         stepRef,
         exactTargetUsdc ?? undefined,
-        input.appFeeBps
+        input.appFeeBps,
+        i > 0, // fed by the previous hop, not the payer
       );
+    } else if (step.provider === 'lifi') {
+      if (!downstreamRecipient) throw new Error('lifi step needs downstreamRecipient');
+      // The payer's own Stellar account: explicit refundAddress (widget/corridor)
+      // or the source instrument's wallet.
+      exec = await runLifiBridge(step, amountIn, downstreamRecipient, input.refundAddress ?? '', orderId, i);
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');
@@ -1176,6 +1386,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     prisma.routeStep.update({
       where: { orderId_sequence: { orderId, sequence: i } },
       data: {
+        ...(providerOverrides[i] ? { provider: providerOverrides[i] } : {}),
         externalId: e.externalId,
         amountIn: e.amountIn,
         amountOut: e.amountOut,
@@ -1183,6 +1394,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         depositMemo: e.depositMemo,
         depositBankDetails: e.bankDetails ?? undefined,
         paystackAccessCode: e.paystackAccessCode ?? undefined,
+        providerData: (e.providerData as any) ?? undefined,
         status: i === 0 ? 'awaiting_deposit' : 'pending',
         feeUsd: e.feeUsd,
         startedAt: new Date(),
@@ -1215,9 +1427,22 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     for (let i = 0; i < plan.steps.length; i++) {
       if (plan.steps[i].provider === 'paystack' && paystack.hasTestKeys()) continue;
       const eId = executions[i].externalId;
-      if (eId) {
-        await markStepDone({ provider: plan.steps[i].provider, externalId: eId, amountOut: executions[i].amountOut });
+      if (!eId) continue;
+      if (providerOverrides[i] === STELLAR_SIMULATOR_PROVIDER) {
+        const from = parseAsset(plan.steps[i].fromAsset);
+        // Cash-out: nothing downstream may complete before the user's memo
+        // payment lands — markStepDone forward-completes earlier hops, so
+        // auto-completing the Paycrest mock here would finish the order early.
+        // syncOrder completes the remaining mocks once the payment is seen.
+        if (from.kind === 'crypto' && from.chain === 'STELLAR') break;
+        // Deposit: the mocked upstream leg is instant, so pay the wallet now.
+        const hash = await stellarSimulator.payUsdc(true, { to: executions[i].depositAddress!, amount: executions[i].amountOut, memo: simulatorMemoFor(orderId) });
+        await prisma.routeStep.update({ where: { orderId_sequence: { orderId, sequence: i } }, data: { providerData: { simulator: { txHash: hash, network: 'testnet' } } } });
+        recordServerEvent(orderId, 'simulator.paid', `Testnet USDC delivered to wallet (simulated bridge)`, { txHash: hash, amount: executions[i].amountOut });
+        await markStepDone({ provider: STELLAR_SIMULATOR_PROVIDER, externalId: eId, amountOut: executions[i].amountOut });
+        continue;
       }
+      await markStepDone({ provider: plan.steps[i].provider, externalId: eId, amountOut: executions[i].amountOut });
     }
   }
 
@@ -1226,7 +1451,16 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   const firstStep = plan.steps[0];
   const firstFrom = parseAsset(firstStep.fromAsset);
   const nextAction: FirstStepAction =
-    firstFrom.kind === 'crypto'
+    firstStep.provider === 'lifi' && firstExec.stellarSigning
+      ? {
+        screen: 'sign_stellar_tx',
+        stellarSigning: firstExec.stellarSigning,
+        amount: firstExec.amountIn,
+        token: firstFrom.kind === 'crypto' ? firstFrom.token : undefined,
+        chain: firstFrom.kind === 'crypto' ? firstFrom.chain : undefined,
+        expiresAt: firstExec.expiresAt ?? undefined,
+      }
+      : firstFrom.kind === 'crypto'
       ? {
         screen: 'collect_crypto',
         depositAddress: firstExec.depositAddress ?? undefined,
@@ -1250,13 +1484,13 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
   const totalBridgeFee = executions.reduce((s, e, i) => {
     const p = plan.steps[i].provider;
-    return s + ((p === 'chainrails' || p === 'nearintents') ? e.feeUsd : 0);
+    return s + ((p === 'chainrails' || p === 'nearintents' || p === 'lifi') ? e.feeUsd : 0);
   }, 0);
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
   const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
 
   return {
-    firstStep: { sequence: 0, provider: firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
+    firstStep: { sequence: 0, provider: providerOverrides[0] ?? firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
     nextAction,
     destAmount: executions[last].amountOut,
     steps: executions.map((e, i) => ({
@@ -1516,6 +1750,9 @@ export async function syncOrder(
   // round trips into 1.
   await Promise.all(order.steps.map(async (step) => {
     if (step.status === 'done' || step.status === 'failed') return;
+    // Sandbox mocks (externalId 'sandbox-…') have no provider to poll — they
+    // complete when the leg ahead of them does (see the simulator branch).
+    if (order.sandboxMode && String(step.externalId ?? '').startsWith('sandbox-')) return;
 
     try {
       if (step.provider === 'nearintents' && step.depositAddress) {
@@ -1595,6 +1832,45 @@ export async function syncOrder(
         if (confirmedAmount != null) {
           console.log(`[sync] direct payment confirmed on-chain: ${confirmedAmount} USDC`);
           await markStepDone({ provider: 'direct', externalId: step.externalId, amountOut: confirmedAmount });
+          result.changed = true;
+        }
+      } else if (step.provider === STELLAR_SIMULATOR_PROVIDER && step.externalId) {
+        // Sandbox cash-out: has the user's memo payment reached the simulator on testnet?
+        if (!order.sandboxMode || !step.depositMemo) return;
+        const incoming = await stellarSimulator.findIncoming(true, step.depositMemo);
+        if (!incoming) return;
+        const expected = Number(step.amountIn ?? 0);
+        if (incoming.amount + 1e-6 < expected * 0.99) {
+          if (step.status === 'awaiting_deposit') {
+            await markStepProgress({ provider: STELLAR_SIMULATOR_PROVIDER, externalId: step.externalId });
+            recordServerEvent(orderId, 'deposit.underpaid', `Received ${incoming.amount} of ${expected} USDC (testnet)`, { received: incoming.amount, expected });
+            result.changed = true;
+          }
+          return;
+        }
+        await prisma.routeStep.update({ where: { id: step.id }, data: { providerData: { simulator: { txHash: incoming.txHash, from: incoming.from, network: 'testnet' } } } });
+        recordServerEvent(orderId, 'deposit.detected', 'Testnet USDC received (simulated bridge)', { txHash: incoming.txHash, amount: incoming.amount });
+        await markStepDone({ provider: STELLAR_SIMULATOR_PROVIDER, externalId: step.externalId, amountOut: incoming.amount });
+        // Now let the downstream sandbox mocks (Paycrest offramp etc.) settle,
+        // in order — they were deliberately left pending at creation.
+        for (const next of [...order.steps].sort((a, b) => a.sequence - b.sequence)) {
+          if (next.sequence <= step.sequence || next.status === 'done' || next.status === 'failed' || !next.externalId) continue;
+          if (!String(next.externalId).startsWith('sandbox-')) continue; // only mocked legs
+          await markStepDone({ provider: next.provider, externalId: next.externalId, amountOut: Number(next.amountOut ?? 0) || undefined });
+        }
+        result.changed = true;
+      } else if (step.provider === 'lifi' && step.externalId && !step.externalId.startsWith('lifi:')) {
+        // externalId is the Stellar source tx hash once the wallet reported it.
+        const pd = (step.providerData as any)?.lifi ?? {};
+        const st = await lifi.getStatus({ txHash: step.externalId, fromChain: LIFI_STELLAR_CHAIN_ID, toChain: 8453, bridge: pd.tool });
+        console.log(`[sync] lifi status for ${step.id}: ${st.status}${st.substatus ? ` (${st.substatus})` : ''}`);
+        if (st.status === 'DONE') {
+          const dec = st.receiving?.token?.decimals ?? 6;
+          const amountOut = st.receiving?.amount ? fromBaseUnits(st.receiving.amount, dec) : undefined;
+          await markStepDone({ provider: 'lifi', externalId: step.externalId, amountOut });
+          result.changed = true;
+        } else if (st.status === 'FAILED' || st.status === 'INVALID') {
+          await markStepFailed({ provider: 'lifi', externalId: step.externalId, reason: st.substatusMessage, isRefund: st.substatus === 'REFUNDED' });
           result.changed = true;
         }
       } else if (step.provider === 'bachs' && step.externalId) {

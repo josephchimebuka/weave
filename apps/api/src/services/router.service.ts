@@ -7,7 +7,7 @@ import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
 import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 
-export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'lifi' | 'stellar_simulator' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
 
 // Which checkout flow the caller is in. 'self' means the user signs with a
 // connected wallet (ChainRails can do this once it's fully wired). 'external'
@@ -97,16 +97,32 @@ const EDGES: Edge[] = [
     expectedSecs: 180,
     note: 'paycrest fiat→USDC(Base)',
   },
-  // NEAR Intents: anything NEAR supports → USDC on Base. External-wallet flow.
-  // This is the primary cross-chain edge today. Coverage spans ~30 chains so
-  // we gate on nearIntents.chainIsKnown rather than an EVM allowlist.
+  // LI.FI (Circle CCTP): USDC on Stellar → USDC on Base. The user's wallet signs
+  // two Soroban txs (approve + bridge) and USDC mints on Base straight into the
+  // next hop — non-custodial. Listed BEFORE NEAR so Stellar-sourced payments
+  // take this edge while NEAR's Stellar route is paused; NEAR still serves the
+  // reverse (Base → Stellar) direction, which CCTP-via-LI.FI does not.
+  {
+    provider: 'lifi',
+    from: (a) => a.kind === 'crypto' && a.chain === 'STELLAR' && a.token === 'USDC',
+    to: (a) => a.kind === 'crypto' && a.chain === 'BASE' && a.token === 'USDC',
+    expectedFeeBps: 25,
+    expectedSecs: 180,
+    note: 'lifi/cctp USDC(Stellar)→USDC(Base)',
+    flows: ['external'],
+  },
+  // NEAR Intents: anything NEAR supports → USDC on Base (Paycrest's settlement
+  // chain) OR USDC on Stellar (the Pollar / SEP-24 anchor settlement asset).
+  // External-wallet flow. This is the primary cross-chain edge today. Coverage
+  // spans ~30 chains so we gate on nearIntents.chainIsKnown rather than an EVM
+  // allowlist. Same-chain USDC→USDC is rejected below (no swap needed).
   {
     provider: 'nearintents',
     from: (a) => a.kind === 'crypto' && nearIntents.chainIsKnown(a.chain),
-    to: (a) => a.kind === 'crypto' && a.chain === 'BASE' && a.token === 'USDC',
+    to: (a) => a.kind === 'crypto' && a.token === 'USDC' && (a.chain === 'BASE' || a.chain === 'STELLAR'),
     expectedFeeBps: 25,
     expectedSecs: 90,
-    note: 'nearintents → USDC on Base',
+    note: 'nearintents → USDC (Base | Stellar)',
     flows: ['external'],
   },
   // ChainRails: any EVM USDC → USDC on Base. Self-wallet flow (user signs).
@@ -177,7 +193,9 @@ export function planRoute(req: RouteRequest): RoutePlan {
 
       // Candidate downstream assets: the destination, or a known intermediate.
       // Today the only productive intermediate is USDC on Base (Paycrest's
-      // settlement chain). Add more as routes fan out.
+      // settlement chain). Stellar USDC is reachable only as a *destination*
+      // (Pollar wallets / SEP-24), never used as an intermediate, so it isn't
+      // listed here. Add more as routes fan out.
       const candidates: AssetKey[] = [req.destAsset, 'crypto:BASE:USDC'];
 
       for (const nextKey of candidates) {

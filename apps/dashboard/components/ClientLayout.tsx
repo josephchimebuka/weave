@@ -31,7 +31,9 @@ export function ClientLayout({
   // Full-bleed, no wrapper: the cash-out page is a merchant-BRANDED surface that
   // must theme the entire viewport (its own bg color/image edge-to-edge), so it
   // can't sit inside the centered, cream-padded auth container.
-  const isFullBleed = pathname.startsWith('/cashout/');
+  // /ramp/* are the SEP-24 anchor pages opened inside a wallet's webview — same
+  // edge-to-edge treatment.
+  const isFullBleed = pathname.startsWith('/cashout/') || pathname.startsWith('/ramp/');
 
   if (isFullBleed) {
     return <>{children}</>;

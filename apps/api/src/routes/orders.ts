@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma';
 import { requireAuth, requireApiKey } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
-import { executeOrder, syncOrder, toDepositInstruction } from '../services/executor.service';
+import { executeOrder, syncOrder, toDepositInstruction, buildLifiApproveTx, buildLifiBridgeTx, recordLifiSubmission } from '../services/executor.service';
 import { recordServerEvent, recordOrderEvent } from '../services/order-event.service';
 import { deviceTypeFromUA } from '../lib/user-agent';
 import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
@@ -588,6 +588,63 @@ router.get('/:id', requireAuth, async (req, res) => {
     res.json({ success: true, data: { ...serializeOrder(order), paycrestStatus, nearStatus } });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── LI.FI Stellar leg: bridge XDR + submission hash ──────────────────────────
+// The payer's wallet signs the `approve` XDR returned at creation, then asks
+// for the bridge XDR here (LI.FI can only simulate it once the allowance is
+// on-chain), signs it, and reports the resulting Stellar tx hash.
+
+async function loadLifiStep(req: any, res: any) {
+  const seq = Number(req.params.seq);
+  const order = await prisma.order.findFirst({
+    where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
+    select: { id: true, status: true },
+  });
+  if (!order) { res.status(404).json({ success: false, error: 'Order not found' }); return null; }
+  const step = await prisma.routeStep.findUnique({ where: { orderId_sequence: { orderId: order.id, sequence: seq } } });
+  if (!step || step.provider !== 'lifi') { res.status(404).json({ success: false, error: 'No LI.FI step at that sequence' }); return null; }
+  if (['done', 'failed'].includes(step.status)) { res.status(409).json({ success: false, error: `Step already ${step.status}` }); return null; }
+  return step;
+}
+
+router.post('/:id/steps/:seq/approve-tx', requireAuth, async (req, res) => {
+  try {
+    const step = await loadLifiStep(req, res);
+    if (!step) return;
+    // { standing: true } → approve a bounded standing allowance so later sends need one signature.
+    res.json({ success: true, data: await buildLifiApproveTx(step, { standing: req.body?.standing === true }) });
+  } catch (err: any) {
+    res.status(502).json({ success: false, error: err.message || 'Could not build the approval transaction' });
+  }
+});
+
+router.post('/:id/steps/:seq/bridge-tx', requireAuth, async (req, res) => {
+  try {
+    const step = await loadLifiStep(req, res);
+    if (!step) return;
+    const { unsignedXdr } = await buildLifiBridgeTx(step);
+    res.json({ success: true, data: { unsignedXdr } });
+  } catch (err: any) {
+    // Simulation failure before the allowance lands is the common case — tell the client to retry.
+    const allowance = /allowance/i.test(err.message ?? '');
+    res.status(allowance ? 409 : 502).json({
+      success: false,
+      error: allowance ? 'Approval not confirmed on-chain yet — retry in a few seconds.' : (err.message || 'Could not build the bridge transaction'),
+      code: allowance ? 'ALLOWANCE_PENDING' : 'BRIDGE_TX_FAILED',
+    });
+  }
+});
+
+router.post('/:id/steps/:seq/submitted', requireAuth, async (req, res) => {
+  try {
+    const step = await loadLifiStep(req, res);
+    if (!step) return;
+    await recordLifiSubmission(step, String(req.body?.txHash ?? ''));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
