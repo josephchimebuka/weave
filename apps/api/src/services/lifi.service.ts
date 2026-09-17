@@ -84,6 +84,16 @@ export interface LifiStatus {
   receiving?: { txHash?: string; amount?: string; token?: { decimals: number } };
 }
 
+// LI.FI's reasons quote raw base units; rewrite the common ones into money.
+function humanizeLifiReason(reason: string): string {
+  const range = reason.match(/out of acceptable range \(min: (\d+), max: (\d+)\)/);
+  if (range) return `Amount is below the bridge minimum of ${fromBaseUnits(range[1], 7)} USDC.`;
+  const xlm = reason.match(/holds ([\d.]+) XLM but needs ([\d.]+) XLM/);
+  if (xlm) return `Your Stellar wallet needs at least ${xlm[2]} XLM for network fees (it holds ${xlm[1]}).`;
+  if (/trustline/i.test(reason)) return 'The destination Stellar wallet needs a USDC trustline first.';
+  return reason;
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 export class LifiService {
@@ -117,7 +127,7 @@ export class LifiService {
   }): Promise<LifiRoute> {
     const from = lifiAsset(params.fromAssetKey);
     const to = lifiAsset(params.toAssetKey);
-    const res = await this.request<{ routes: LifiRoute[] }>('POST', '/advanced/routes', {
+    const res = await this.request<{ routes: LifiRoute[]; unavailableRoutes?: { filteredOut?: Array<{ reason?: string }>; failed?: Array<{ subpaths?: Record<string, Array<{ message?: string }>> }> } }>('POST', '/advanced/routes', {
       fromChainId: from.chainId, toChainId: to.chainId,
       fromTokenAddress: from.token, toTokenAddress: to.token,
       fromAmount: toBaseUnits(params.amount, from.decimals),
@@ -125,7 +135,14 @@ export class LifiService {
       options: { integrator: LIFI_INTEGRATOR, slippage: params.slippage ?? 0.005, order: 'RECOMMENDED' },
     });
     const route = res.routes?.[0];
-    if (!route) throw new Error(`LI.FI: no route from ${params.fromAssetKey} to ${params.toAssetKey}`);
+    if (!route) {
+      // LI.FI explains why each candidate was dropped (amount floors, missing
+      // XLM for fees, no trustline…) — pass the first reason through, it's
+      // exactly what the payer needs to fix.
+      const reason = res.unavailableRoutes?.filteredOut?.[0]?.reason
+        ?? Object.values(res.unavailableRoutes?.failed?.[0]?.subpaths ?? {})[0]?.[0]?.message;
+      throw new Error(reason ? humanizeLifiReason(reason) : `LI.FI: no route from ${params.fromAssetKey} to ${params.toAssetKey}`);
+    }
     return route;
   }
 
