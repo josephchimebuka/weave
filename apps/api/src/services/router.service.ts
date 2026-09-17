@@ -7,7 +7,7 @@ import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
 import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 
-export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'lifi' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'lifi' | 'stellar_simulator' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
 
 // Which checkout flow the caller is in. 'self' means the user signs with a
 // connected wallet (ChainRails can do this once it's fully wired). 'external'

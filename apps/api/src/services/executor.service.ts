@@ -20,6 +20,7 @@ import { sandboxDispatch } from './sandbox-executor';
 import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 import { qstash } from '../lib/qstash';
 import { lifi, lifiAsset, fromBaseUnits, LIFI_STELLAR_CHAIN_ID, type LifiStep } from './lifi.service';
+import { stellarSimulator, simulatorMemoFor, STELLAR_SIMULATOR_PROVIDER } from './stellar-simulator.service';
 import * as Sentry from '@sentry/node';
 import { recordServerEvent } from './order-event.service';
 import { recordAudit } from './audit.service';
@@ -693,6 +694,11 @@ function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): Execute
   };
 }
 
+function touchesStellar(step: RoutePlanStep): boolean {
+  const f = parseAsset(step.fromAsset); const t = parseAsset(step.toAsset);
+  return (f.kind === 'crypto' && f.chain === 'STELLAR') || (t.kind === 'crypto' && t.chain === 'STELLAR');
+}
+
 // ── Orchestrator ────────────────────────────────────────────────────────────
 
 // Paystack requires a customer email. Prefer the real payer's email (same one
@@ -1158,6 +1164,9 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
   // Walk steps last → first, each step's depositAddress feeds the previous.
   const executions: StepExecution[] = new Array(plan.steps.length);
+  // Provider actually used per step when it differs from the plan (sandbox
+  // swaps Stellar-touching hops to the testnet simulator).
+  const providerOverrides: Record<number, string> = {};
   let downstreamRecipient: string | null = null;
   let exactTargetUsdc: number | null = null;
 
@@ -1201,6 +1210,36 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
           amount:     Math.round(amountIn * 100),
           reference:  paystackRef,
         };
+      } else if (stellarSimulator.enabled && touchesStellar(step)) {
+        // ── SANDBOX · TESTNET SIMULATOR ──────────────────────────────────
+        // Stands in for the bridge counterparty (NEAR Intents / CCTP) so the
+        // handoff to the user's Stellar wallet is REAL on testnet: deposits
+        // pay testnet USDC into their wallet; cash-outs wait for their memo
+        // payment into the simulator. Never reachable from a live order.
+        const from = parseAsset(step.fromAsset);
+        const memo = simulatorMemoFor(orderId);
+        if (from.kind === 'crypto' && from.chain === 'STELLAR') {
+          exec = {
+            externalId: `sim:${orderId}:${i}`, amountIn, amountOut: amountIn,
+            depositAddress: stellarSimulator.publicKey(true), depositMemo: memo,
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), feeUsd: 0,
+            note: 'stellar simulator (cash-out, awaiting memo payment)',
+          };
+        } else {
+          // Deposit direction: fail fast if the wallet can't take USDC — the
+          // payer shouldn't be handed bank details for a deposit that can't land.
+          const dest = downstreamRecipient ?? input.destWallet ?? '';
+          const { exists, trusts } = await stellarSimulator.accountAcceptsUsdc(true, dest);
+          if (!exists) throw new Error('Your Stellar wallet is not active on testnet yet. Sign in to your wallet app once so it gets created, then try again.');
+          if (!trusts) throw new Error('Your Stellar wallet needs a testnet USDC trustline before it can receive this deposit.');
+          exec = {
+            externalId: `sim:${orderId}:${i}`, amountIn, amountOut: amountIn * 0.998,
+            depositAddress: dest, depositMemo: null,
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), feeUsd: amountIn * 0.002,
+            note: 'stellar simulator (deposit, pays testnet USDC)',
+          };
+        }
+        providerOverrides[i] = STELLAR_SIMULATOR_PROVIDER;
       } else {
         exec = sandboxDispatch(step, amountIn, orderId, i) as any;
       }
@@ -1347,6 +1386,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     prisma.routeStep.update({
       where: { orderId_sequence: { orderId, sequence: i } },
       data: {
+        ...(providerOverrides[i] ? { provider: providerOverrides[i] } : {}),
         externalId: e.externalId,
         amountIn: e.amountIn,
         amountOut: e.amountOut,
@@ -1387,9 +1427,22 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     for (let i = 0; i < plan.steps.length; i++) {
       if (plan.steps[i].provider === 'paystack' && paystack.hasTestKeys()) continue;
       const eId = executions[i].externalId;
-      if (eId) {
-        await markStepDone({ provider: plan.steps[i].provider, externalId: eId, amountOut: executions[i].amountOut });
+      if (!eId) continue;
+      if (providerOverrides[i] === STELLAR_SIMULATOR_PROVIDER) {
+        const from = parseAsset(plan.steps[i].fromAsset);
+        // Cash-out: nothing downstream may complete before the user's memo
+        // payment lands — markStepDone forward-completes earlier hops, so
+        // auto-completing the Paycrest mock here would finish the order early.
+        // syncOrder completes the remaining mocks once the payment is seen.
+        if (from.kind === 'crypto' && from.chain === 'STELLAR') break;
+        // Deposit: the mocked upstream leg is instant, so pay the wallet now.
+        const hash = await stellarSimulator.payUsdc(true, { to: executions[i].depositAddress!, amount: executions[i].amountOut, memo: simulatorMemoFor(orderId) });
+        await prisma.routeStep.update({ where: { orderId_sequence: { orderId, sequence: i } }, data: { providerData: { simulator: { txHash: hash, network: 'testnet' } } } });
+        recordServerEvent(orderId, 'simulator.paid', `Testnet USDC delivered to wallet (simulated bridge)`, { txHash: hash, amount: executions[i].amountOut });
+        await markStepDone({ provider: STELLAR_SIMULATOR_PROVIDER, externalId: eId, amountOut: executions[i].amountOut });
+        continue;
       }
+      await markStepDone({ provider: plan.steps[i].provider, externalId: eId, amountOut: executions[i].amountOut });
     }
   }
 
@@ -1437,7 +1490,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
 
   return {
-    firstStep: { sequence: 0, provider: firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
+    firstStep: { sequence: 0, provider: providerOverrides[0] ?? firstStep.provider, fromAsset: firstStep.fromAsset, toAsset: firstStep.toAsset },
     nextAction,
     destAmount: executions[last].amountOut,
     steps: executions.map((e, i) => ({
@@ -1697,6 +1750,9 @@ export async function syncOrder(
   // round trips into 1.
   await Promise.all(order.steps.map(async (step) => {
     if (step.status === 'done' || step.status === 'failed') return;
+    // Sandbox mocks (externalId 'sandbox-…') have no provider to poll — they
+    // complete when the leg ahead of them does (see the simulator branch).
+    if (order.sandboxMode && String(step.externalId ?? '').startsWith('sandbox-')) return;
 
     try {
       if (step.provider === 'nearintents' && step.depositAddress) {
@@ -1778,6 +1834,31 @@ export async function syncOrder(
           await markStepDone({ provider: 'direct', externalId: step.externalId, amountOut: confirmedAmount });
           result.changed = true;
         }
+      } else if (step.provider === STELLAR_SIMULATOR_PROVIDER && step.externalId) {
+        // Sandbox cash-out: has the user's memo payment reached the simulator on testnet?
+        if (!order.sandboxMode || !step.depositMemo) return;
+        const incoming = await stellarSimulator.findIncoming(true, step.depositMemo);
+        if (!incoming) return;
+        const expected = Number(step.amountIn ?? 0);
+        if (incoming.amount + 1e-6 < expected * 0.99) {
+          if (step.status === 'awaiting_deposit') {
+            await markStepProgress({ provider: STELLAR_SIMULATOR_PROVIDER, externalId: step.externalId });
+            recordServerEvent(orderId, 'deposit.underpaid', `Received ${incoming.amount} of ${expected} USDC (testnet)`, { received: incoming.amount, expected });
+            result.changed = true;
+          }
+          return;
+        }
+        await prisma.routeStep.update({ where: { id: step.id }, data: { providerData: { simulator: { txHash: incoming.txHash, from: incoming.from, network: 'testnet' } } } });
+        recordServerEvent(orderId, 'deposit.detected', 'Testnet USDC received (simulated bridge)', { txHash: incoming.txHash, amount: incoming.amount });
+        await markStepDone({ provider: STELLAR_SIMULATOR_PROVIDER, externalId: step.externalId, amountOut: incoming.amount });
+        // Now let the downstream sandbox mocks (Paycrest offramp etc.) settle,
+        // in order — they were deliberately left pending at creation.
+        for (const next of [...order.steps].sort((a, b) => a.sequence - b.sequence)) {
+          if (next.sequence <= step.sequence || next.status === 'done' || next.status === 'failed' || !next.externalId) continue;
+          if (!String(next.externalId).startsWith('sandbox-')) continue; // only mocked legs
+          await markStepDone({ provider: next.provider, externalId: next.externalId, amountOut: Number(next.amountOut ?? 0) || undefined });
+        }
+        result.changed = true;
       } else if (step.provider === 'lifi' && step.externalId && !step.externalId.startsWith('lifi:')) {
         // externalId is the Stellar source tx hash once the wallet reported it.
         const pd = (step.providerData as any)?.lifi ?? {};

@@ -17,7 +17,7 @@ import {
   Address, Contract, Keypair, TransactionBuilder, nativeToScVal, scValToNative, rpc, BASE_FEE,
 } from '@stellar/stellar-sdk';
 import { parseAsset } from '../lib/assets';
-import { STELLAR_NETWORK, STELLAR_NETWORK_PASSPHRASE } from '../lib/stellar-anchor-config';
+import { Networks } from '@stellar/stellar-sdk';
 
 const LIFI_API_URL = (process.env.LIFI_API_URL || 'https://li.quest/v1').replace(/\/$/, '');
 const LIFI_API_KEY = process.env.LIFI_API_KEY || '';
@@ -170,7 +170,7 @@ export class LifiService {
   async buildStellarApproveXdr(params: {
     from: string; spender: string; tokenContract: string; amountRaw: string; ttlLedgers?: number;
   }): Promise<{ xdr: string; expirationLedger: number }> {
-    if (STELLAR_NETWORK !== 'mainnet') throw new Error('LI.FI Stellar routing runs on the public network only');
+    // LI.FI's Stellar routing exists on the public network only — live orders.
     const server = new rpc.Server(SOROBAN_RPC_URL);
     const [account, latest] = await Promise.all([server.getAccount(params.from), server.getLatestLedger()]);
     const expirationLedger = latest.sequence + (params.ttlLedgers ?? 720);
@@ -182,7 +182,7 @@ export class LifiService {
       nativeToScVal(BigInt(params.amountRaw), { type: 'i128' }),
       nativeToScVal(expirationLedger, { type: 'u32' }),
     );
-    const tx = new TransactionBuilder(account, { fee: String(Number(BASE_FEE) * 100), networkPassphrase: STELLAR_NETWORK_PASSPHRASE })
+    const tx = new TransactionBuilder(account, { fee: String(Number(BASE_FEE) * 100), networkPassphrase: Networks.PUBLIC })
       .addOperation(op).setTimeout(300).build();
     const sim = await server.simulateTransaction(tx);
     if (rpc.Api.isSimulationError(sim)) throw new Error(`Stellar approve simulation failed: ${sim.error}`);
@@ -195,7 +195,7 @@ export class LifiService {
     const server = new rpc.Server(SOROBAN_RPC_URL);
     const account = await server.getAccount(params.from);
     const contract = new Contract(params.tokenContract);
-    const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: STELLAR_NETWORK_PASSPHRASE })
+    const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.PUBLIC })
       .addOperation(contract.call('allowance', new Address(params.from).toScVal(), new Address(params.spender).toScVal()))
       .setTimeout(60).build();
     const sim = await server.simulateTransaction(tx);
@@ -205,7 +205,7 @@ export class LifiService {
 
   /** Hash of a signed/unsigned Stellar tx envelope (for correlating a wallet's submission). */
   static txHashFromXdr(envelopeXdr: string): string {
-    return Buffer.from(TransactionBuilder.fromXDR(envelopeXdr, STELLAR_NETWORK_PASSPHRASE).hash()).toString('hex');
+    return Buffer.from(TransactionBuilder.fromXDR(envelopeXdr, Networks.PUBLIC).hash()).toString('hex');
   }
 
   /** Utility for tests: a throwaway keypair. */

@@ -12,6 +12,7 @@
 import crypto from 'crypto';
 import type { Order, RouteStep, StellarAnchorTransaction } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { STELLAR_SIMULATOR_LABEL, STELLAR_SIMULATOR_PROVIDER } from './stellar-simulator.service';
 import {
   STELLAR_ANCHOR_MERCHANT_EMAIL,
   STELLAR_ANCHOR_SANDBOX,
@@ -174,7 +175,7 @@ export function serializeSep24Transaction(
     updated_at:               (order?.updatedAt ?? tx.updatedAt).toISOString(),
     stellar_transaction_id:   tx.stellarTransactionId,
     external_transaction_id:  tx.externalTransactionId ?? (steps.find(s => s.provider === 'paycrest')?.externalId ?? null),
-    message:                  tx.message,
+    message:                  tx.message ?? (steps.some(s => s.provider === STELLAR_SIMULATOR_PROVIDER) ? STELLAR_SIMULATOR_LABEL : null),
     refunded:                 tx.refunded || order?.status === 'refunded',
     // Non-standard but useful to integrators: the underlying Weave order id.
     weave_order_id:           order?.id ?? null,

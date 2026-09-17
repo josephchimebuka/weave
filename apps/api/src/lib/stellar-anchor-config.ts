@@ -19,15 +19,39 @@ export const STELLAR_USDC_ISSUER: Record<StellarNetworkName, string> = {
   testnet: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
 };
 
-export const STELLAR_NETWORK: StellarNetworkName =
-  process.env.STELLAR_NETWORK === 'testnet' ? 'testnet' : 'mainnet';
+// The Stellar network FOLLOWS THE CREDENTIALS, exactly like the rest of Weave:
+// live keys (pk_live_/sk_live_) → mainnet, sandbox keys (pk_test_/sk_test_) →
+// testnet. There is no global network switch. Every Stellar-touching code path
+// asks for `stellarNet(order.sandboxMode)`.
+export interface StellarNet {
+  network: StellarNetworkName;
+  passphrase: string;
+  horizonUrl: string;
+  usdcIssuer: string;
+}
+export function stellarNet(sandbox: boolean): StellarNet {
+  const network: StellarNetworkName = sandbox ? 'testnet' : 'mainnet';
+  return {
+    network,
+    passphrase: network === 'testnet' ? Networks.TESTNET : Networks.PUBLIC,
+    horizonUrl: network === 'testnet'
+      ? (process.env.STELLAR_HORIZON_TESTNET_URL || 'https://horizon-testnet.stellar.org')
+      : (process.env.STELLAR_HORIZON_URL || 'https://horizon.stellar.org'),
+    usdcIssuer: STELLAR_USDC_ISSUER[network],
+  };
+}
 
-export const STELLAR_NETWORK_PASSPHRASE =
-  STELLAR_NETWORK === 'testnet' ? Networks.TESTNET : Networks.PUBLIC;
+// When true, the ANCHOR on this host is a sandbox anchor: its interactive pages
+// use the anchor merchant's pk_test_ key (sandbox orders → testnet), and its
+// stellar.toml / SEP-10 advertise the testnet passphrase. One network per
+// domain is a Stellar constraint, so this is the anchor-level analogue of the
+// per-credential rule above.
+export const STELLAR_ANCHOR_SANDBOX = process.env.STELLAR_ANCHOR_SANDBOX === 'true';
 
-export const HORIZON_URL =
-  process.env.STELLAR_HORIZON_URL ||
-  (STELLAR_NETWORK === 'testnet' ? 'https://horizon-testnet.stellar.org' : 'https://horizon.stellar.org');
+const ANCHOR_NET = stellarNet(STELLAR_ANCHOR_SANDBOX);
+export const STELLAR_NETWORK: StellarNetworkName = ANCHOR_NET.network;
+export const STELLAR_NETWORK_PASSPHRASE = ANCHOR_NET.passphrase;
+export const HORIZON_URL = ANCHOR_NET.horizonUrl;
 
 // The domain whose /.well-known/stellar.toml advertises this anchor. Wallets
 // pass it back as `home_domain` in SEP-10, and it is baked into the challenge.
@@ -72,10 +96,6 @@ export const SEP10_JWT_SECRET: string =
 // Which Weave merchant owns anchor-originated orders (see ensureStellarAnchorMerchant).
 export const STELLAR_ANCHOR_MERCHANT_EMAIL =
   (process.env.STELLAR_ANCHOR_MERCHANT_EMAIL || 'stellar-anchor@paywithweave.com').toLowerCase();
-
-// When true, the interactive pages use the anchor merchant's SANDBOX
-// publishable key, so anchor orders are Weave sandbox orders (mocked rails).
-export const STELLAR_ANCHOR_SANDBOX = process.env.STELLAR_ANCHOR_SANDBOX === 'true';
 
 // Corridor limits advertised in SEP-24 /info (NGN for deposit-in / withdraw-out).
 export const SEP24_NGN_MIN = Number(process.env.SEP24_NGN_MIN ?? 1000);
