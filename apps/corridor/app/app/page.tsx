@@ -9,6 +9,7 @@ import { useNetwork, explorerTx } from '../../lib/network';
 import { bestQuote, bobFromUsdcOfframp, usdcFromBobOnramp, type RampQuote } from '../../lib/pollar-ramps';
 import { runFlow, type To, type From, type FlowEvent, type FlowResult } from '../../lib/flows';
 import { Tour, TOUR_EVENT, tourPending, markTourDone } from '../../components/Tour';
+import { NEXT_AFRICA } from '../../lib/countries';
 
 // Dashboard (design handoff "Dashboard v3"): balance, three secondary actions,
 // and a conversational Send flow that reveals one sentence at a time:
@@ -87,7 +88,7 @@ export default function Dashboard() {
   const [ngBankQ, setNgBankQ] = useState(''); const [ngBank, setNgBank] = useState<Bank | null>(null); const [ngAcct, setNgAcct] = useState(''); const [ngName, setNgName] = useState(''); const [ngErr, setNgErr] = useState<string | null>(null); const [ngResolving, setNgResolving] = useState(false);
   const [boQuote, setBoQuote] = useState<RampQuote | null>(null); const [boFields, setBoFields] = useState<Record<string, string>>({});
   const [frInput, setFrInput] = useState(''); const [frAddr, setFrAddr] = useState<string | null>(null); const [frHandle, setFrHandle] = useState<string | null>(null); const [frErr, setFrErr] = useState<string | null>(null);
-  // payer bank (naira transfers → Paycrest refund account)
+  // payer bank (naira transfers → Weave refund account)
   const [pBankQ, setPBankQ] = useState(''); const [pBank, setPBank] = useState<Bank | null>(null); const [pAcct, setPAcct] = useState(''); const [pName, setPName] = useState(''); const [pErr, setPErr] = useState<string | null>(null);
   // execution
   const [running, setRunning] = useState(false);
@@ -299,6 +300,14 @@ export default function Dashboard() {
                 <Pill on={to === 'ng'} dot="#4F7A5C" onClick={() => pickTo('ng')}>a bank in Nigeria</Pill>
                 <Pill on={to === 'bo'} dot="#B8C7BA" onClick={() => pickTo('bo')}>a bank in Bolivia</Pill>
                 <Pill on={to === 'fr'} dot="#2F4A3B" onClick={() => pickTo('fr')}>a friend on Corridor</Pill>
+              </div>
+              {/* The rest of the African side: on Weave's rail already, waiting on a switch. */}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                {NEXT_AFRICA.map(c => (
+                  <Pill key={c.code} on={false} dot={c.dot} disabled title={`${c.currency} payouts run on the same Weave rail as naira — switching on soon.`} onClick={() => {}}>
+                    a bank in {c.name}<span style={{ font: '11px var(--font-mono)', letterSpacing: '.06em', color: '#8A8A80', marginLeft: 4 }}>SOON</span>
+                  </Pill>
+                ))}
               </div>
             </div>
 
