@@ -26,6 +26,7 @@ import jobsRouter         from './routes/jobs';
 import accessRequestsRouter from './routes/access-requests';
 import kycRouter            from './routes/kyc';
 import checkoutRouter       from './routes/checkout';
+import { tomlRouter, sep10Router, sep24Router } from './routes/stellar-anchor';
 
 import { ensureMerchantDefaultInstruments } from './lib/merchant';
 import { prisma } from './lib/prisma';
@@ -83,7 +84,11 @@ app.use(cors((req: any, callback) => {
     req.path.startsWith('/api/v1/orders') || 
     req.path.startsWith('/api/v1/assets') ||
     req.path.startsWith('/api/v1/links/public') ||
-    req.path.startsWith('/api/v1/payout-links/public');
+    req.path.startsWith('/api/v1/payout-links/public') ||
+    // Stellar anchor (SEP-1/10/24): called by third-party wallets + Pollar.
+    req.path.startsWith('/api/v1/sep10') ||
+    req.path.startsWith('/api/v1/sep24') ||
+    req.path === '/.well-known/stellar.toml';
 
   // 1. If it's a public/widget route, allow the origin (browser won't send credentials unless origin is reflected)
   if (isPublicRoute) {
@@ -168,6 +173,11 @@ app.use('/api/v1/jobs',           jobsRouter);
 app.use('/api/v1/access-requests', accessRequestsRouter);
 app.use('/api/v1/kyc',             kycRouter);
 app.use('/api/v1/checkout',        checkoutRouter);
+// Stellar anchor (SEP-1 / SEP-10 / SEP-24) — Weave as an NGN on/off-ramp for
+// Stellar wallets and Pollar. stellar.toml MUST be served from the domain root.
+app.use(tomlRouter);
+app.use('/api/v1/sep10',           sep10Router);
+app.use('/api/v1/sep24',           sep24Router);
 
 app.get('/',       (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Weave API v1' }));

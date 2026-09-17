@@ -234,6 +234,7 @@ model Order {
   steps              RouteStep[]
   webhookLogs        WebhookLog[]
   events             OrderEvent[]
+  stellarAnchorTx    StellarAnchorTransaction?
 
   @@index([merchantId])
   @@index([status])
@@ -444,4 +445,52 @@ model CheckoutSession {
   @@index([merchantId])
   @@index([status])
   @@index([orderId])
+}
+
+// ── Stellar SEP-24 anchor ────────────────────────────────────────────────────
+// Weave as a Stellar anchor. Any SEP-24 wallet or platform (Pollar's ramp modal,
+// Lobstr, Vibrant…) authenticates the user with SEP-10, then opens our
+// interactive page to deposit NGN → USDC on Stellar into the user's OWN account,
+// or withdraw USDC → an NGN bank account. Each anchor transaction wraps exactly
+// one Weave Order (created from the interactive page, forward-bound through
+// Paycrest ↔ Base USDC ↔ NEAR Intents ↔ Stellar) and derives its SEP-24
+// `status` from that order's steps. NOT related to getanchor.co (`anchor*`
+// fields on Merchant/Order/RouteStep) — that is the Nigerian BaaS rail.
+model StellarAnchorTransaction {
+  id                    String    @id @default(uuid())
+  kind                  String    // "deposit" | "withdrawal"
+  account               String    // SEP-10 authenticated Stellar account (G…)
+  accountMemo           String?   // SEP-10 memo for shared/omnibus accounts
+  assetCode             String    @default("USDC")
+  status                String    @default("incomplete") // SEP-24 status vocabulary
+  lang                  String?
+  // Requested / settled amounts. deposit: in = NGN, out = USDC. withdrawal: in = USDC, out = NGN.
+  amountIn              Decimal?  @db.Decimal(36, 18)
+  amountOut             Decimal?  @db.Decimal(36, 18)
+  amountFee             Decimal?  @db.Decimal(36, 18)
+
+  orderId               String?   @unique
+  order                 Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  // Withdrawal: where the wallet must send the USDC (NEAR Intents Stellar
+  // deposit address + per-order memo). SEP-24 `withdraw_anchor_account` /
+  // `withdraw_memo` / `withdraw_memo_type`.
+  withdrawAnchorAccount String?
+  withdrawMemo          String?
+  withdrawMemoType      String?   // "text" | "id" | "hash"
+  stellarTransactionId  String?   // hash of the Stellar leg once known
+  externalTransactionId String?   // Paycrest order id (the fiat leg)
+  message               String?
+  refunded              Boolean   @default(false)
+
+  // sha256 of the one-time bearer token embedded in the interactive URL; the
+  // hosted page presents it to read/link this transaction. Never store plaintext.
+  interactiveTokenHash  String    @unique
+
+  startedAt             DateTime  @default(now())
+  completedAt           DateTime?
+  updatedAt             DateTime  @updatedAt
+
+  @@index([account, startedAt])
+  @@index([status])
 }

@@ -447,6 +447,12 @@ async function runNearIntentsSwap(
   ref: string,
   exactOutputTarget?: number,
   appFeeBps?: number,
+  // True when this hop is fed by an UPSTREAM provider (e.g. Paycrest onramp →
+  // NEAR → Stellar) rather than by the payer. The exact amount that lands is
+  // then the upstream's net-of-fees output, unknown at quote time, so we ask
+  // NEAR for FLEX_INPUT: it swaps whatever arrives instead of refunding a
+  // deposit that is a few bps short of the quoted amountIn.
+  fedByUpstream = false,
 ): Promise<StepExecution> {
   const from = parseAsset(step.fromAsset);
   const to = parseAsset(step.toAsset);
@@ -461,7 +467,7 @@ async function runNearIntentsSwap(
       sourceAssetKey: step.fromAsset,
       destAssetKey: step.toAsset,
       amount: exactOutputTarget ?? amountIn, // Target output amount or fallback to input amount
-      swapType: exactOutputTarget ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
+      swapType: exactOutputTarget ? 'EXACT_OUTPUT' : fedByUpstream ? 'FLEX_INPUT' : 'EXACT_INPUT',
       refundTo: refundAddress,
       recipient: downstreamRecipient,
       slippageBps: exactOutputTarget ? undefined : SLIPPAGE_BUFFER_BPS, // EXACT_OUTPUT leaves slippage risk to solver
@@ -1135,7 +1141,14 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
     } else if (step.provider === 'nearintents') {
       const from = parseAsset(step.fromAsset);
       const sourceIsEvm = from.kind === 'crypto' && ['BASE', 'ETHEREUM', 'ARBITRUM', 'OPTIMISM', 'POLYGON', 'BSC', 'AVALANCHE'].includes(from.chain.toUpperCase());
-      const refundTo = input.refundAddress || (sourceIsEvm ? (input.destWallet || downstreamRecipient) : '');
+      // refundTo must be valid on the ORIGIN chain. For an EVM-sourced hop with
+      // no explicit refund address, prefer the system EVM refund wallet — the
+      // destination may be non-EVM (e.g. a Stellar G-address on the NGN →
+      // Stellar USDC route, where this hop is fed by Paycrest, not the payer),
+      // so `destWallet` is only an acceptable fallback when it is itself EVM.
+      const isEvmAddress = (v: string | null | undefined) => !!v && /^0x[0-9a-fA-F]{40}$/.test(v);
+      const evmFallback = [WEAVE_EVM_REFUND_ADDRESS, input.destWallet, downstreamRecipient].find(isEvmAddress) ?? '';
+      const refundTo = input.refundAddress || (sourceIsEvm ? evmFallback : '');
 
       if (!refundTo) {
         throw new Error(`Refund address is required for ${from.kind === 'crypto' ? from.chain : from.currency} payments.`);
@@ -1148,7 +1161,8 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         refundTo,
         stepRef,
         exactTargetUsdc ?? undefined,
-        input.appFeeBps
+        input.appFeeBps,
+        i > 0, // fed by the previous hop, not the payer
       );
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
