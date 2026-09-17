@@ -36,6 +36,10 @@ async function proxy(request: NextRequest, path: string) {
     // Forward the public API Key
     const apiKey = request.headers.get('x-api-key');
     if (apiKey) headers.set('x-api-key', apiKey);
+    // Stellar-anchor interactive pages (/ramp/*) authenticate with a one-time
+    // bearer token from their SEP-24 interactive URL instead of an API key.
+    const auth = request.headers.get('authorization');
+    if (auth && path.startsWith('sep24/')) headers.set('authorization', auth);
     headers.set('Content-Type', 'application/json');
 
     const options: RequestInit = {
