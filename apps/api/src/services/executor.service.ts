@@ -19,6 +19,7 @@ import type { RoutePlan, RoutePlanStep } from './router.service';
 import { sandboxDispatch } from './sandbox-executor';
 import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 import { qstash } from '../lib/qstash';
+import { lifi, lifiAsset, fromBaseUnits, LIFI_STELLAR_CHAIN_ID, type LifiStep } from './lifi.service';
 import * as Sentry from '@sentry/node';
 import { recordServerEvent } from './order-event.service';
 import { recordAudit } from './audit.service';
@@ -52,7 +53,7 @@ export interface ExecutorInput {
 }
 
 export interface FirstStepAction {
-  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout';
+  screen: 'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout' | 'sign_stellar_tx';
   depositAddress?: string;                // crypto
   depositMemo?: string;                // crypto — required for XRP/TON/XLM/NEAR when using NEAR Intents
   amount?: number;                // crypto
@@ -76,6 +77,21 @@ export interface FirstStepAction {
     checkoutUrl: string;
     amount: number;       // NGN charged — shown to payer
     reference: string;
+  };
+  // LI.FI Stellar leg: the payer's wallet signs `approveXdr`, then fetches the
+  // bridge XDR from `bridgeTxPath` (it can only be simulated once the allowance
+  // is on-chain), signs that too, and reports the hash to `submittedPath`.
+  stellarSigning?: {
+    fromAddress: string;
+    amount: number;               // USDC leaving the wallet
+    token: string;                // 'USDC'
+    chain: string;                // 'STELLAR'
+    approveXdr: string | null;    // null when the allowance already covers the amount
+    approvalAddress: string;
+    bridgeTxPath: string;         // POST → { unsignedXdr }
+    submittedPath: string;        // POST { txHash }
+    estimatedSecs: number;
+    tool: string;                 // 'cctp'
   };
   expiresAt?: string;
 }
@@ -118,9 +134,13 @@ export type DepositInstruction =
       publicKey: string;
       amount: number;
       reference: string;
-    };
+    }
+  | ({ type: 'stellar_sign' } & NonNullable<FirstStepAction['stellarSigning']>);
 
 export function toDepositInstruction(action: FirstStepAction): DepositInstruction {
+  if (action.screen === 'sign_stellar_tx' && action.stellarSigning) {
+    return { type: 'stellar_sign', ...action.stellarSigning };
+  }
   if (action.screen === 'collect_crypto') {
     return {
       type: 'crypto_transfer',
@@ -307,6 +327,8 @@ interface StepExecution {
   bankDetails?: FirstStepAction['bankDetails'];
   note?: string;
   paystackAccessCode?: string;
+  providerData?: Record<string, unknown>;
+  stellarSigning?: FirstStepAction['stellarSigning'];
 }
 
 async function runPaycrestOfframp(
@@ -494,6 +516,105 @@ async function runNearIntentsSwap(
   }
 }
 
+// ── LI.FI (Circle CCTP) Stellar → Base ───────────────────────────────────────
+// Forward-bound like every other hop: `toAddress` is the downstream deposit
+// address (Paycrest's Base receive address), so USDC mints straight into the
+// next provider. The payer signs on Stellar; Weave never holds the funds.
+async function runLifiBridge(
+  step: RoutePlanStep,
+  amountIn: number,
+  downstreamRecipient: string,
+  fromAddress: string,
+  orderId: string,
+  sequence: number,
+): Promise<StepExecution> {
+  const from = parseAsset(step.fromAsset);
+  const to = parseAsset(step.toAsset);
+  if (from.kind !== 'crypto' || to.kind !== 'crypto') throw new Error('lifi: asset mismatch');
+  if (!downstreamRecipient) throw new Error('lifi: missing downstream recipient');
+  if (!/^G[A-Z2-7]{55}$/.test(fromAddress)) {
+    throw new Error('A Stellar wallet address (G…) is required to pay with USDC on Stellar.');
+  }
+
+  const route = await lifi.getRoute({
+    fromAssetKey: step.fromAsset, toAssetKey: step.toAsset, amount: amountIn,
+    fromAddress, toAddress: downstreamRecipient,
+  });
+  const lstep: LifiStep = route.steps[0];
+  const fromMeta = lifiAsset(step.fromAsset);
+  const toMeta = lifiAsset(step.toAsset);
+  const amountOut = fromBaseUnits(lstep.estimate.toAmountMin, toMeta.decimals);
+  const feeUsd = (lstep.estimate.feeCosts ?? []).reduce((s, f) => s + (Number(f.amountUSD) || 0), 0);
+
+  // Approval: build the SAC `approve` XDR now unless the allowance already covers it.
+  const approvalAddress = lstep.estimate.approvalAddress ?? '';
+  let approveXdr: string | null = null;
+  if (approvalAddress && !lstep.estimate.skipApproval) {
+    const have = await lifi.stellarAllowance({ from: fromAddress, spender: approvalAddress, tokenContract: fromMeta.token }).catch(() => 0n);
+    if (have < BigInt(lstep.action.fromAmount)) {
+      approveXdr = (await lifi.buildStellarApproveXdr({
+        from: fromAddress, spender: approvalAddress, tokenContract: fromMeta.token, amountRaw: lstep.action.fromAmount,
+      })).xdr;
+    }
+  }
+
+  return {
+    externalId: `lifi:${route.id}`,          // replaced by the Stellar tx hash once the wallet submits
+    amountIn,
+    amountOut,
+    depositAddress: null,
+    depositMemo: null,
+    expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    feeUsd,
+    note: `lifi ${lstep.tool}`,
+    providerData: {
+      lifi: { routeId: route.id, step: lstep, fromAddress, toAddress: downstreamRecipient, approvalAddress, tool: lstep.tool },
+    },
+    stellarSigning: {
+      fromAddress,
+      amount: amountIn,
+      token: from.token,
+      chain: from.chain,
+      approveXdr,
+      approvalAddress,
+      bridgeTxPath: `/orders/${orderId}/steps/${sequence}/bridge-tx`,
+      submittedPath: `/orders/${orderId}/steps/${sequence}/submitted`,
+      estimatedSecs: lstep.estimate.executionDuration,
+      tool: lstep.tool,
+    },
+  };
+}
+
+/**
+ * Build the LI.FI bridge XDR for a step whose allowance is now on-chain.
+ * Called by POST /orders/:id/steps/:seq/bridge-tx.
+ */
+export async function buildLifiBridgeTx(step: RouteStep): Promise<{ unsignedXdr: string }> {
+  const pd = (step.providerData as any)?.lifi;
+  if (!pd?.step) throw new Error('lifi: step has no route data');
+  const tr = await lifi.getStepTransaction(pd.step as LifiStep);
+  return { unsignedXdr: tr.data };
+}
+
+/**
+ * The wallet submitted the Stellar bridge tx — record its hash so syncOrder can
+ * track it on LI.FI, and move the step to in_flight.
+ */
+export async function recordLifiSubmission(step: RouteStep, txHash: string) {
+  const hash = txHash.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('txHash must be a 64-hex Stellar transaction hash');
+  await prisma.routeStep.update({
+    where: { id: step.id },
+    data: {
+      externalId: hash,
+      status: 'in_flight',
+      providerData: { ...((step.providerData as any) ?? {}), lifi: { ...((step.providerData as any)?.lifi ?? {}), sourceTxHash: hash, submittedAt: new Date().toISOString() } },
+    },
+  });
+  await prisma.order.updateMany({ where: { id: step.orderId, status: 'awaiting_deposit' }, data: { status: 'processing' } });
+  recordServerEvent(step.orderId, 'deposit.detected', 'Stellar bridge transaction submitted', { provider: 'lifi', txHash: hash });
+}
+
 function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): ExecuteResult {
   const first = steps[0];
   const last = steps[steps.length - 1];
@@ -524,7 +645,7 @@ function reconstructResultFromSteps(input: ExecutorInput, steps: any[]): Execute
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
   const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
   const bridgeFeeUsd = steps.reduce((s, e) => {
-    return s + ((e.provider === 'chainrails' || e.provider === 'nearintents') ? (e.feeUsd ?? 0) : 0);
+    return s + ((e.provider === 'chainrails' || e.provider === 'nearintents' || e.provider === 'lifi') ? (e.feeUsd ?? 0) : 0);
   }, 0);
 
   return {
@@ -1164,6 +1285,11 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         input.appFeeBps,
         i > 0, // fed by the previous hop, not the payer
       );
+    } else if (step.provider === 'lifi') {
+      if (!downstreamRecipient) throw new Error('lifi step needs downstreamRecipient');
+      // The payer's own Stellar account: explicit refundAddress (widget/corridor)
+      // or the source instrument's wallet.
+      exec = await runLifiBridge(step, amountIn, downstreamRecipient, input.refundAddress ?? '', orderId, i);
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');
@@ -1197,6 +1323,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         depositMemo: e.depositMemo,
         depositBankDetails: e.bankDetails ?? undefined,
         paystackAccessCode: e.paystackAccessCode ?? undefined,
+        providerData: (e.providerData as any) ?? undefined,
         status: i === 0 ? 'awaiting_deposit' : 'pending',
         feeUsd: e.feeUsd,
         startedAt: new Date(),
@@ -1240,7 +1367,16 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   const firstStep = plan.steps[0];
   const firstFrom = parseAsset(firstStep.fromAsset);
   const nextAction: FirstStepAction =
-    firstFrom.kind === 'crypto'
+    firstStep.provider === 'lifi' && firstExec.stellarSigning
+      ? {
+        screen: 'sign_stellar_tx',
+        stellarSigning: firstExec.stellarSigning,
+        amount: firstExec.amountIn,
+        token: firstFrom.kind === 'crypto' ? firstFrom.token : undefined,
+        chain: firstFrom.kind === 'crypto' ? firstFrom.chain : undefined,
+        expiresAt: firstExec.expiresAt ?? undefined,
+      }
+      : firstFrom.kind === 'crypto'
       ? {
         screen: 'collect_crypto',
         depositAddress: firstExec.depositAddress ?? undefined,
@@ -1264,7 +1400,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
 
   const totalBridgeFee = executions.reduce((s, e, i) => {
     const p = plan.steps[i].provider;
-    return s + ((p === 'chainrails' || p === 'nearintents') ? e.feeUsd : 0);
+    return s + ((p === 'chainrails' || p === 'nearintents' || p === 'lifi') ? e.feeUsd : 0);
   }, 0);
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
   const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
@@ -1609,6 +1745,20 @@ export async function syncOrder(
         if (confirmedAmount != null) {
           console.log(`[sync] direct payment confirmed on-chain: ${confirmedAmount} USDC`);
           await markStepDone({ provider: 'direct', externalId: step.externalId, amountOut: confirmedAmount });
+          result.changed = true;
+        }
+      } else if (step.provider === 'lifi' && step.externalId && !step.externalId.startsWith('lifi:')) {
+        // externalId is the Stellar source tx hash once the wallet reported it.
+        const pd = (step.providerData as any)?.lifi ?? {};
+        const st = await lifi.getStatus({ txHash: step.externalId, fromChain: LIFI_STELLAR_CHAIN_ID, toChain: 8453, bridge: pd.tool });
+        console.log(`[sync] lifi status for ${step.id}: ${st.status}${st.substatus ? ` (${st.substatus})` : ''}`);
+        if (st.status === 'DONE') {
+          const dec = st.receiving?.token?.decimals ?? 6;
+          const amountOut = st.receiving?.amount ? fromBaseUnits(st.receiving.amount, dec) : undefined;
+          await markStepDone({ provider: 'lifi', externalId: step.externalId, amountOut });
+          result.changed = true;
+        } else if (st.status === 'FAILED' || st.status === 'INVALID') {
+          await markStepFailed({ provider: 'lifi', externalId: step.externalId, reason: st.substatusMessage, isRefund: st.substatus === 'REFUNDED' });
           result.changed = true;
         }
       } else if (step.provider === 'bachs' && step.externalId) {

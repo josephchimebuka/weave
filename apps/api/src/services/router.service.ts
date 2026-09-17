@@ -7,7 +7,7 @@ import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
 import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
 
-export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
+export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'lifi' | 'stellar_anchor' | 'direct' | 'paystack' | 'bachs';
 
 // Which checkout flow the caller is in. 'self' means the user signs with a
 // connected wallet (ChainRails can do this once it's fully wired). 'external'
@@ -96,6 +96,20 @@ const EDGES: Edge[] = [
     expectedFeeBps: 85,
     expectedSecs: 180,
     note: 'paycrest fiat→USDC(Base)',
+  },
+  // LI.FI (Circle CCTP): USDC on Stellar → USDC on Base. The user's wallet signs
+  // two Soroban txs (approve + bridge) and USDC mints on Base straight into the
+  // next hop — non-custodial. Listed BEFORE NEAR so Stellar-sourced payments
+  // take this edge while NEAR's Stellar route is paused; NEAR still serves the
+  // reverse (Base → Stellar) direction, which CCTP-via-LI.FI does not.
+  {
+    provider: 'lifi',
+    from: (a) => a.kind === 'crypto' && a.chain === 'STELLAR' && a.token === 'USDC',
+    to: (a) => a.kind === 'crypto' && a.chain === 'BASE' && a.token === 'USDC',
+    expectedFeeBps: 25,
+    expectedSecs: 180,
+    note: 'lifi/cctp USDC(Stellar)→USDC(Base)',
+    flows: ['external'],
   },
   // NEAR Intents: anything NEAR supports → USDC on Base (Paycrest's settlement
   // chain) OR USDC on Stellar (the Pollar / SEP-24 anchor settlement asset).

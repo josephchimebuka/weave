@@ -86,6 +86,16 @@ export function sandboxDispatch(
         feeUsd: amountIn * 0.002,
       };
 
+    case 'lifi':
+      // Mocked Stellar → Base bridge. No XDR to sign in sandbox — the order
+      // auto-completes like every other mocked leg.
+      return {
+        externalId, amountIn,
+        amountOut: amountIn * 0.9975,
+        depositAddress: null, depositMemo: null, expiresAt,
+        feeUsd: amountIn * 0.0025,
+      };
+
     case 'chainrails':
       return {
         externalId, amountIn,

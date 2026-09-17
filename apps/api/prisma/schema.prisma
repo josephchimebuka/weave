@@ -252,7 +252,7 @@ model RouteStep {
   orderId        String
   order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   sequence       Int
-  provider       String    // "paycrest" | "chainrails" | "nearintents" | "direct"
+  provider       String    // "paycrest" | "chainrails" | "nearintents" | "lifi" | "paystack" | "bachs" | "direct"
   fromAsset      String
   toAsset        String
   amountIn       Decimal?     @db.Decimal(36, 18)
@@ -270,6 +270,11 @@ model RouteStep {
   // seq 1 = transfer (vendor's share). Both carry the same transferGroup = charge id.
   transferGroup  String?
   bachsCheckoutUrl String? // hosted checkout URL for the widget overlay (collection step)
+  // Provider-specific state that doesn't fit a column. LI.FI: the route step
+  // (re-submitted to /advanced/stepTransaction to build the bridge XDR), the
+  // sender address, and the approval coordinates. Whitelisted by the service
+  // that writes it — never raw request bodies.
+  providerData   Json?
   startedAt      DateTime?
   completedAt    DateTime?
 

@@ -155,6 +155,9 @@ router.get('/', requireAuth, async (req, res) => {
         }
       } else if (step.provider === 'nearintents') {
         bridgeFeeUsd += usdEquivalent * slippageBuffer;
+      } else if (step.provider === 'lifi') {
+        // LI.FI fixed fee on the CCTP route (25 bps) — no slippage on a 1:1 USDC burn/mint.
+        bridgeFeeUsd += usdEquivalent * 0.0025;
       }
     }));
 
