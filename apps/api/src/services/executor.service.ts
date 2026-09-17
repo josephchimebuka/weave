@@ -88,6 +88,7 @@ export interface FirstStepAction {
     chain: string;                // 'STELLAR'
     approveXdr: string | null;    // null when the allowance already covers the amount
     approvalAddress: string;
+    approveTxPath: string;        // POST → { unsignedXdr | null } (re-issue on resume)
     bridgeTxPath: string;         // POST → { unsignedXdr }
     submittedPath: string;        // POST { txHash }
     estimatedSecs: number;
@@ -577,12 +578,29 @@ async function runLifiBridge(
       chain: from.chain,
       approveXdr,
       approvalAddress,
+      approveTxPath: `/orders/${orderId}/steps/${sequence}/approve-tx`,
       bridgeTxPath: `/orders/${orderId}/steps/${sequence}/bridge-tx`,
       submittedPath: `/orders/${orderId}/steps/${sequence}/submitted`,
       estimatedSecs: lstep.estimate.executionDuration,
       tool: lstep.tool,
     },
   };
+}
+
+/**
+ * (Re)build the SAC `approve` XDR for a LI.FI step — null when the on-chain
+ * allowance already covers the amount. Used on page resume / re-quote.
+ */
+export async function buildLifiApproveTx(step: RouteStep): Promise<{ unsignedXdr: string | null }> {
+  const pd = (step.providerData as any)?.lifi;
+  if (!pd?.step) throw new Error('lifi: step has no route data');
+  const lstep = pd.step as LifiStep;
+  if (!pd.approvalAddress || lstep.estimate.skipApproval) return { unsignedXdr: null };
+  const fromMeta = lifiAsset(step.fromAsset);
+  const have = await lifi.stellarAllowance({ from: pd.fromAddress, spender: pd.approvalAddress, tokenContract: fromMeta.token }).catch(() => 0n);
+  if (have >= BigInt(lstep.action.fromAmount)) return { unsignedXdr: null };
+  const { xdr } = await lifi.buildStellarApproveXdr({ from: pd.fromAddress, spender: pd.approvalAddress, tokenContract: fromMeta.token, amountRaw: lstep.action.fromAmount });
+  return { unsignedXdr: xdr };
 }
 
 /**

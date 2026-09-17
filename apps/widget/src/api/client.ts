@@ -162,7 +162,7 @@ export type InlineInstrument = InlineBankInstrument | InlineWalletInstrument;
 export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstrument };
 
 export interface NextAction {
-  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout';
+  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout' | 'sign_stellar_tx';
   depositAddress?: string;
   depositMemo?:    string;
   amount?:         number;
@@ -191,6 +191,24 @@ export interface NextAction {
     checkoutUrl: string;
     amount:      number;
     reference:   string;
+  };
+  // LI.FI Stellar leg (USDC on Stellar → Base via Circle CCTP). The payer's
+  // Stellar wallet signs `approveXdr`, fetches the bridge XDR from
+  // `bridgeTxPath`, signs it, and reports the hash to `submittedPath`.
+  // The embeddable widget does not sign Stellar transactions itself; the
+  // hosted /ramp pages and the corridor app do.
+  stellarSigning?: {
+    fromAddress:     string;
+    amount:          number;
+    token:           string;
+    chain:           string;
+    approveXdr:      string | null;
+    approvalAddress: string;
+    approveTxPath:   string;
+    bridgeTxPath:    string;
+    submittedPath:   string;
+    estimatedSecs:   number;
+    tool:            string;
   };
   expiresAt?: string;
 }

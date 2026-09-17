@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { connectStellarWallet, runStellarBridgeFlow, signAndSubmitXdr } from '../lib/stellar-signing';
 
 // SEP-24 interactive page — Weave as a Stellar anchor for NGN. A wallet
 // (Pollar's ramp modal, Lobstr, …) opens this URL after SEP-10 auth with a
@@ -62,6 +63,9 @@ export default function RampClient({ id, kind, token, lang }: { id: string; kind
   const [order, setOrder] = useState<any>(null);
   const [nextAction, setNextAction] = useState<any>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [signStage, setSignStage] = useState<'idle' | 'connect' | 'approve' | 'bridge' | 'submitting' | 'done'>('idle');
+  const [signError, setSignError] = useState<string | null>(null);
+  const [bridgeHash, setBridgeHash] = useState<string | null>(null);
   const accountRef = useRef<HTMLInputElement>(null);
 
   const isDeposit = kind === 'deposit';
@@ -91,9 +95,26 @@ export default function RampClient({ id, kind, token, lang }: { id: string; kind
       if (!j?.success) throw new Error();
       setOrder(j.data);
       const first = j.data.steps?.[0];
-      setNextAction(c.kind === 'deposit'
-        ? { screen: 'collect_fiat', bankDetails: first?.depositBankDetails ?? null }
-        : { screen: 'collect_crypto', depositAddress: first?.depositAddress, depositMemo: first?.depositMemo, amount: Number(first?.amountIn ?? j.data.sourceAmount) });
+      if (c.kind === 'deposit') {
+        setNextAction({ screen: 'collect_fiat', bankDetails: first?.depositBankDetails ?? null });
+      } else if (first?.provider === 'lifi') {
+        // Rebuild the signing payload (approve XDR is re-issued by the API when needed;
+        // on resume we simply let the wallet re-run the flow — approve is idempotent).
+        setNextAction({
+          screen: 'sign_stellar_tx',
+          stellarSigning: {
+            fromAddress: c.account, amount: Number(first?.amountIn ?? j.data.sourceAmount),
+            approveXdr: null,
+            approveTxPath: `/orders/${j.data.id}/steps/${first.sequence}/approve-tx`,
+            bridgeTxPath: `/orders/${j.data.id}/steps/${first.sequence}/bridge-tx`,
+            submittedPath: `/orders/${j.data.id}/steps/${first.sequence}/submitted`,
+          },
+          amount: Number(first?.amountIn ?? j.data.sourceAmount),
+        });
+        if (first?.status === 'in_flight') setSignStage('done');
+      } else {
+        setNextAction({ screen: 'collect_crypto', depositAddress: first?.depositAddress, depositMemo: first?.depositMemo, amount: Number(first?.amountIn ?? j.data.sourceAmount) });
+      }
       setMode(j.data.status === 'completed' ? 'done' : 'instructions');
     } catch { setMode('form'); }
   }
@@ -205,6 +226,26 @@ export default function RampClient({ id, kind, token, lang }: { id: string; kind
 
   function copy(k: string, text: string) { navigator.clipboard.writeText(text).then(() => { setCopied(k); setTimeout(() => setCopied(null), 1600); }).catch(() => {}); }
 
+  // LI.FI leg: connect an external Stellar wallet and sign approve → bridge.
+  // The wallet MUST be the SEP-10 authenticated account — funds leave that account.
+  async function signWithWallet() {
+    const ss = nextAction?.stellarSigning; if (!ss || !ctx) return;
+    setSignError(null); setSignStage('connect');
+    try {
+      const addr = await connectStellarWallet();
+      if (addr !== ctx.account) throw new Error(`Please connect the wallet you authenticated with (${shortG(ctx.account)}), not ${shortG(addr)}.`);
+      const api = async (path: string, body?: unknown) => {
+        const r = await fetch(`${PROXY}${path}`, { method: 'POST', headers: { 'x-api-key': key, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+        const j = await r.json().catch(() => ({}));
+        return { ok: r.ok && j?.success !== false, status: r.status, data: j?.data, error: j?.error };
+      };
+      const { bridgeHash: h } = await runStellarBridgeFlow(ss, api, (xdr) => signAndSubmitXdr(xdr, addr), (stage) => setSignStage(stage));
+      setBridgeHash(h);
+    } catch (e: any) {
+      setSignStage('idle'); setSignError(e?.message ?? 'Signing was cancelled.');
+    }
+  }
+
   // ── styles ───────────────────────────────────────────────────────────────
   const accent = '#0F5D4C', ink = '#1C1B17', mute = '#7C7568', hair = '#E2D9C0', panel = '#fff';
   const card: React.CSSProperties = { position: 'relative', zIndex: 20, background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', border: `1px solid ${hair}`, borderRadius: 26, padding: 24, boxShadow: '0 20px 60px -28px rgba(0,0,0,0.28)' };
@@ -313,6 +354,31 @@ export default function RampClient({ id, kind, token, lang }: { id: string; kind
                   ) : <div style={{ color: mute, fontSize: 14 }}>Preparing your bank details…</div>}
                   <p style={{ fontSize: 13, color: mute, margin: 0 }}>Once your transfer lands, USDC is delivered to <span style={{ fontFamily: 'ui-monospace, monospace' }}>{shortG(ctx.account)}</span>. Keep this page open or return to your wallet — it tracks the same transaction.</p>
                 </>
+              ) : nextAction?.screen === 'sign_stellar_tx' ? (
+                <>
+                  <div style={{ fontSize: 15, fontWeight: 600 }}>Approve and send from your Stellar wallet</div>
+                  <p style={{ fontSize: 13.5, color: mute, margin: 0 }}>
+                    Two quick signatures: an expiring USDC allowance, then the bridge. <b style={{ color: ink }}>{fmtUsdc(Number(nextAction.stellarSigning?.amount ?? amount))}</b> burns on Stellar and mints on Base straight into the payout — Weave never holds it.
+                  </p>
+                  <div>
+                    {[
+                      ['From', shortG(ctx.account), 'from'],
+                      ['Naira arriving', fmtNgn(order?.destAmount ?? estimate), 'ngn'],
+                      ['Bridge', 'Circle CCTP via LI.FI · ~3 min', 'tool'],
+                    ].map(([l, v, k]) => (
+                      <div key={k} style={row}><span style={{ fontSize: 13, color: mute }}>{l}</span><span style={{ ...mono, fontFamily: k === 'from' ? mono.fontFamily : undefined }}>{v}</span></div>
+                    ))}
+                  </div>
+                  {signStage === 'done' ? (
+                    <div style={{ fontSize: 13, color: accent, fontWeight: 600 }}>Bridge submitted{bridgeHash ? ` · ${bridgeHash.slice(0, 10)}…` : ''} — settling to your bank.</div>
+                  ) : (
+                    <button onClick={signWithWallet} disabled={signStage !== 'idle'} style={primaryBtn(signStage === 'idle')}>
+                      {signStage === 'idle' ? 'Connect wallet & sign' : signStage === 'connect' ? 'Waiting for wallet…' : signStage === 'approve' ? 'Sign 1 of 2 — approve USDC' : signStage === 'bridge' ? 'Sign 2 of 2 — bridge' : 'Submitting…'}
+                    </button>
+                  )}
+                  {signError && <div style={{ fontSize: 13, color: '#A8321E' }}>{signError}</div>}
+                  <p style={{ fontSize: 12, color: mute, margin: 0 }}>Using a Pollar wallet? Finish this transfer inside your Pollar app — it signs the same two transactions for you.</p>
+                </>
               ) : (
                 <>
                   <div style={{ fontSize: 15, fontWeight: 600 }}>Return to your wallet to confirm</div>
@@ -334,7 +400,7 @@ export default function RampClient({ id, kind, token, lang }: { id: string; kind
               )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: mute }}>
                 <span style={{ width: 14, height: 14, border: `2px solid ${hair}`, borderTopColor: accent, borderRadius: '50%', animation: 'wspin .9s linear infinite' }} />
-                Waiting for {isDeposit ? 'your bank transfer' : 'the Stellar payment'}… ({order?.status})
+                {isDeposit ? 'Waiting for your bank transfer' : signStage === 'done' || order?.status === 'processing' ? 'Bridging and paying out' : 'Waiting for your signature'}… ({order?.status})
               </div>
             </div>
           )}

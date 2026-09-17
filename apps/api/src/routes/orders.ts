@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma';
 import { requireAuth, requireApiKey } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
-import { executeOrder, syncOrder, toDepositInstruction, buildLifiBridgeTx, recordLifiSubmission } from '../services/executor.service';
+import { executeOrder, syncOrder, toDepositInstruction, buildLifiApproveTx, buildLifiBridgeTx, recordLifiSubmission } from '../services/executor.service';
 import { recordServerEvent, recordOrderEvent } from '../services/order-event.service';
 import { deviceTypeFromUA } from '../lib/user-agent';
 import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
@@ -608,6 +608,16 @@ async function loadLifiStep(req: any, res: any) {
   if (['done', 'failed'].includes(step.status)) { res.status(409).json({ success: false, error: `Step already ${step.status}` }); return null; }
   return step;
 }
+
+router.post('/:id/steps/:seq/approve-tx', requireAuth, async (req, res) => {
+  try {
+    const step = await loadLifiStep(req, res);
+    if (!step) return;
+    res.json({ success: true, data: await buildLifiApproveTx(step) });
+  } catch (err: any) {
+    res.status(502).json({ success: false, error: err.message || 'Could not build the approval transaction' });
+  }
+});
 
 router.post('/:id/steps/:seq/bridge-tx', requireAuth, async (req, res) => {
   try {
