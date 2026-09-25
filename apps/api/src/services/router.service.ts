@@ -31,6 +31,10 @@ export interface RouteRequest {
   amount: number; // denominated in sourceAsset
   urgency?: 'cheapest' | 'fastest';
   flow?: Flow;   // selects which cross-chain provider handles the crypto leg
+  // The account the money leaves from, when the caller knows it (a connected
+  // or embedded wallet that will sign). Absent in anonymous deposit flows,
+  // where all we can give the payer is an address to send to.
+  sourceWallet?: string;
 }
 
 export interface RoutePlan {
@@ -51,6 +55,9 @@ type Edge = {
   note?: string;
   // Which checkout flow this edge is valid for. Omit = both.
   flows?: Flow[];
+  // The payer must sign this hop from a wallet we can name at planning time.
+  // Edges with this set are skipped unless the request carries a sourceWallet.
+  needsSourceSigner?: boolean;
 };
 
 const EVM_CHAINS = ['BASE', 'ETHEREUM', 'POLYGON', 'ARBITRUM', 'OPTIMISM', 'BSC', 'AVALANCHE'];
@@ -97,11 +104,16 @@ const EDGES: Edge[] = [
     expectedSecs: 180,
     note: 'paycrest fiat→USDC(Base)',
   },
-  // LI.FI (Circle CCTP): USDC on Stellar → USDC on Base. The user's wallet signs
-  // two Soroban txs (approve + bridge) and USDC mints on Base straight into the
-  // next hop — non-custodial. Listed BEFORE NEAR so Stellar-sourced payments
-  // take this edge while NEAR's Stellar route is paused; NEAR still serves the
-  // reverse (Base → Stellar) direction, which CCTP-via-LI.FI does not.
+  // LI.FI (Circle CCTP): USDC on Stellar → USDC on Base. The payer's own wallet
+  // signs two Soroban txs (approve + bridge) and USDC mints on Base straight
+  // into the next hop — non-custodial. Listed BEFORE NEAR so a Stellar payer we
+  // can ask for a signature takes this edge.
+  //
+  // It is ONLY usable when we know which Stellar account is paying, because
+  // there is nothing to hand a payer but an unsigned XDR: no deposit address
+  // exists on this rail. Anonymous deposit flows (payment links, cash-out
+  // links — anyone who sends from an exchange or a phone wallet) fall through
+  // to NEAR Intents below, which issues a real Stellar address + memo.
   {
     provider: 'lifi',
     from: (a) => a.kind === 'crypto' && a.chain === 'STELLAR' && a.token === 'USDC',
@@ -110,6 +122,7 @@ const EDGES: Edge[] = [
     expectedSecs: 180,
     note: 'lifi/cctp USDC(Stellar)→USDC(Base)',
     flows: ['external'],
+    needsSourceSigner: true,
   },
   // NEAR Intents: anything NEAR supports → USDC on Base (Paycrest's settlement
   // chain) OR USDC on Stellar (the Pollar / SEP-24 anchor settlement asset).
@@ -175,7 +188,8 @@ export function planRoute(req: RouteRequest): RoutePlan {
   const edges = EDGES.filter(e =>
     (e.provider !== 'paystack' || PAYSTACK_ENABLED) &&
     (e.provider !== 'bachs'    || BACHS_ENABLED) &&
-    (!e.flows || e.flows.includes(flow)),
+    (!e.flows || e.flows.includes(flow)) &&
+    (!e.needsSourceSigner || !!req.sourceWallet),
   );
 
   // BFS with depth ≤ 3. Small edge set; swap for Dijkstra when

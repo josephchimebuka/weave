@@ -27,9 +27,22 @@ describe('planRoute', () => {
     expect(plan.steps[1].toAsset).toBe('crypto:STELLAR:USDC');
   });
 
-  it('USDC(Stellar) → NGN: lifi (CCTP) to Base, then paycrest offramp', () => {
-    const plan = planRoute({ sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50 });
+  it('USDC(Stellar) → NGN with a named payer: lifi (CCTP) to Base, then paycrest offramp', () => {
+    const plan = planRoute({
+      sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50,
+      sourceWallet: 'GBJDOLDVIETPWPCNTIXYI425UISNNC2OKBH3L2EX5RB5232FHZRMDEDR',
+    });
     expect(plan.steps.map(s => s.provider)).toEqual(['lifi', 'paycrest']);
+    expect(plan.steps[0].toAsset).toBe('crypto:BASE:USDC');
+  });
+
+  // Payment links / cash-out links: the payer sends from an exchange or a phone
+  // wallet we cannot ask for a signature, so LI.FI (which has no deposit
+  // address, only an XDR to sign) must not be planned. NEAR Intents issues a
+  // Stellar address + memo, which is what those screens render.
+  it('USDC(Stellar) → NGN with an anonymous payer: nearintents, not lifi', () => {
+    const plan = planRoute({ sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50 });
+    expect(plan.steps.map(s => s.provider)).toEqual(['nearintents', 'paycrest']);
     expect(plan.steps[0].toAsset).toBe('crypto:BASE:USDC');
   });
 

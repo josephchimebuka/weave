@@ -47,6 +47,10 @@ export interface ExecutorInput {
   payerEmail?: string;
   // Source-side context, set per source-asset kind:
   refundAddress?: string;  // crypto source
+  // The paying wallet itself, when the caller named it. Signing rails (LI.FI
+  // on Stellar) build their XDRs for this account; the router only plans them
+  // when it is present.
+  sourceWallet?: string;
   refundAccount?: { institution: string; accountIdentifier: string; accountName: string }; // fiat source
   // Destination-side context, set per dest-asset kind:
   destBank?: { institution: string; accountIdentifier: string; accountName: string }; // fiat dest
@@ -1357,9 +1361,10 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
       );
     } else if (step.provider === 'lifi') {
       if (!downstreamRecipient) throw new Error('lifi step needs downstreamRecipient');
-      // The payer's own Stellar account: explicit refundAddress (widget/corridor)
-      // or the source instrument's wallet.
-      exec = await runLifiBridge(step, amountIn, downstreamRecipient, input.refundAddress ?? '', orderId, i);
+      // The payer's own Stellar account — the one that signs. Prefer the named
+      // source wallet; fall back to refundAddress, which the corridor and the
+      // SEP-24 ramp set to the same account.
+      exec = await runLifiBridge(step, amountIn, downstreamRecipient, input.sourceWallet || input.refundAddress || '', orderId, i);
     } else if (step.provider === 'direct') {
       const from = parseAsset(step.fromAsset);
       if (from.kind !== 'crypto') throw new Error('direct: only crypto supported');

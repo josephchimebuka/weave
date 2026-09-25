@@ -175,11 +175,16 @@ router.post('/', requireAuth, async (req, res) => {
     // 2. Plan route across provider edges. Flow defaults to 'external' so
     //    NEAR Intents handles the cross-chain leg via deposit address; pass
     //    'self' to bias toward ChainRails (wired-in-wallet flow) once ready.
+    //    sourceWallet tells the planner whether a signature can be collected
+    //    from the payer: it is set when the caller names the paying wallet
+    //    (corridor, the SEP-24 ramp) and empty in anonymous deposit flows
+    //    (payment links, cash-out links), where signing rails are unusable.
     const plan = planRoute({
       sourceAsset: sourceInstrument.assetKey,
       destAsset: destInstrument.assetKey,
       amount: body.amount,
       flow: body.flow ?? 'external',
+      sourceWallet: sourceInstrument.walletAddress || undefined,
     });
 
     // 3. Snapshot a Paycrest rate when the route touches fiat (for the quote
@@ -471,6 +476,10 @@ router.post('/', requireAuth, async (req, res) => {
     const refundAddress = srcP.kind === 'crypto'
       ? (body.refundAddress || sourceInstrument.walletAddress || '')
       : undefined;
+    // The wallet that signs (as opposed to the one we refund to). Only set
+    // when the caller named it; the planner has already ruled out signing
+    // rails when it is absent.
+    const sourceWallet = srcP.kind === 'crypto' ? (sourceInstrument.walletAddress || undefined) : undefined;
     const refundAccount = srcP.kind === 'fiat' ? (bankFromInstrument(sourceInstrument) ?? undefined) : undefined;
     const destBank = dstP.kind === 'fiat' ? (bankFromInstrument(destInstrument) ?? undefined) : undefined;
     const destWallet = dstP.kind === 'crypto' ? (destInstrument.walletAddress ?? '') : undefined;
@@ -489,6 +498,7 @@ router.post('/', requireAuth, async (req, res) => {
       // it as the customer email so charges aren't attributed to the merchant.
       payerEmail: (order.customer as any)?.email,
       refundAddress,
+      sourceWallet,
       refundAccount,
       destBank,
       destWallet,
