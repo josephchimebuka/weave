@@ -8,7 +8,7 @@ import { recordServerEvent, recordOrderEvent } from '../services/order-event.ser
 import { deviceTypeFromUA } from '../lib/user-agent';
 import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
-import { paycrest } from '../services/paycrest.service';
+import { paycrest, rateUnavailable } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { Decimal } from 'decimal.js';
 
@@ -203,6 +203,11 @@ router.post('/', requireAuth, async (req, res) => {
     let sourceAmount = body.amountIn === 'dest' ? 0 : body.amount;
     let destAmountFiat: number | undefined = undefined;
     let appFeeBps: number | undefined = undefined;
+    // A corridor Paycrest has no provider for is a real, reportable condition —
+    // not a calculation slip — so it is tracked outside the try below, whose
+    // catch only logs. Without this the order would be created with the rate
+    // snapshot silently missing and (for amountIn:'dest') sourceAmount still 0.
+    let closedCorridor: string | null = null;
 
     try {
       const fiat = srcP.kind === 'fiat' ? srcP.currency : dstP.kind === 'fiat' ? dstP.currency : null;
@@ -213,8 +218,16 @@ router.post('/', requireAuth, async (req, res) => {
           sellRate = buyRate = quoteRate = SANDBOX_NGN_RATE;
         } else {
           const r = await paycrest.getRate('base', 'USDC', 1, fiat);
-          sellRate = Number(r.sell.rate) || 1;
-          buyRate = Number(r.buy.rate) || 1;
+          // Only the leg this direction needs — see rateUnavailable(). Never
+          // fall back to 1 for a missing leg: a ₦2,000 onramp would price as
+          // 2,000 USDC.
+          const sell = Number(r?.sell?.rate);
+          const buy  = Number(r?.buy?.rate);
+          if (srcP.kind === 'fiat' && !buy)  closedCorridor = rateUnavailable(fiat, 'deposits');
+          if (dstP.kind === 'fiat' && !sell) closedCorridor = rateUnavailable(fiat, 'payouts');
+          if (closedCorridor) throw new Error(closedCorridor);
+          sellRate = sell || 1;
+          buyRate = buy || 1;
           quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
         }
       }
@@ -320,8 +333,11 @@ router.post('/', requireAuth, async (req, res) => {
         }
       }
     } catch (err: any) {
-      console.error(`[orders] calculation error:`, err.message);
+      if (!closedCorridor) console.error(`[orders] calculation error:`, err.message);
     }
+
+    // Refuse rather than price the order off rates we never got.
+    if (closedCorridor) return res.status(400).json({ success: false, error: closedCorridor });
 
     // Safety net: a pure-Paystack order (same-currency NGN→NGN, single step) prices
     // its source leg 1:1 with the target and needs no rate. If the rate snapshot above
