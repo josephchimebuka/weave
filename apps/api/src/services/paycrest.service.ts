@@ -279,3 +279,14 @@ export class PaycrestService {
 }
 
 export const paycrest = new PaycrestService();
+
+/**
+ * Paycrest omits a rate leg entirely when it has no provider for that
+ * direction — `GET /rates/base/USDC/1/NGN` came back with `sell` and no `buy`
+ * at all on 2026-10-01, while KES still had both. That is a closed corridor,
+ * not a malformed response, so it gets a message a payer can act on instead of
+ * a TypeError on `.rate`.
+ */
+export function rateUnavailable(currency: string, leg: 'deposits' | 'payouts'): string {
+  return `${currency} ${leg} are temporarily unavailable — our payment partner has no provider for this corridor right now.`;
+}

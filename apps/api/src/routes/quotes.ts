@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { paycrest } from '../services/paycrest.service';
+import { paycrest, rateUnavailable } from '../services/paycrest.service';
 import { chainRails } from '../services/chainrails.service';
 import { nearIntents } from '../services/nearintents.service';
 import { paystack } from '../services/paystack.service';
@@ -59,14 +59,26 @@ router.get('/', requireAuth, async (req, res) => {
     // The fiat rate (Paycrest) and the source asset's USD price (Coinbase/NEAR)
     // are independent lookups — neither reads the other's result — so fetch
     // them concurrently instead of one after the other.
-    async function fetchFiatRate(): Promise<{ sellRate: number; buyRate: number }> {
-      if (!fiatCurrency) return { sellRate: 1, buyRate: 1 };
+    async function fetchFiatRate(): Promise<{ sellRate: number; buyRate: number; sellQuoted: boolean; buyQuoted: boolean }> {
+      if (!fiatCurrency) return { sellRate: 1, buyRate: 1, sellQuoted: false, buyQuoted: false };
       if (req.sandboxMode) {
         // Sandbox quotes use the fixed rate so display matches sandbox execution.
-        return { sellRate: SANDBOX_NGN_RATE, buyRate: SANDBOX_NGN_RATE };
+        return { sellRate: SANDBOX_NGN_RATE, buyRate: SANDBOX_NGN_RATE, sellQuoted: true, buyQuoted: true };
       }
       const rate = await paycrest.getRate('base', 'USDC', 1, fiatCurrency);
-      return { sellRate: Number(rate.sell.rate) || 1, buyRate: Number(rate.buy.rate) || 1 };
+      // Paycrest returns ONLY the legs it currently has a provider for: a
+      // currency it can pay out but not collect comes back with `sell` and no
+      // `buy` at all. Read the leg this direction actually needs — reading both
+      // blindly took every NGN quote down, in both directions, the day the
+      // naira onramp provider went away. Never default a missing leg to 1:
+      // a ₦2,000 onramp would price as 2,000 USDC.
+      const sell = Number(rate?.sell?.rate);
+      const buy  = Number(rate?.buy?.rate);
+      if (src.kind === 'fiat' && !buy)  throw new Error(rateUnavailable(fiatCurrency, 'deposits'));
+      if (dst.kind === 'fiat' && !sell) throw new Error(rateUnavailable(fiatCurrency, 'payouts'));
+      // The unused leg carries a 1 placeholder so the maths below stays total;
+      // `*Quoted` keeps the response honest about which one Paycrest priced.
+      return { sellRate: sell || 1, buyRate: buy || 1, sellQuoted: !!sell, buyQuoted: !!buy };
     }
 
     async function fetchSrcPrice(): Promise<number> {
@@ -94,7 +106,7 @@ router.get('/', requireAuth, async (req, res) => {
       }
     }
 
-    const [{ sellRate, buyRate }, srcPrice] = await Promise.all([fetchFiatRate(), fetchSrcPrice()]);
+    const [{ sellRate, buyRate, sellQuoted, buyQuoted }, srcPrice] = await Promise.all([fetchFiatRate(), fetchSrcPrice()]);
 
     const usdEquivalent = (() => {
       if (src.kind === 'crypto' && dst.kind === 'fiat') {
@@ -205,8 +217,8 @@ router.get('/', requireAuth, async (req, res) => {
           appFeeUsd,
           bridgeFeeUsd,
           netUsd,
-          sellRate: fiatCurrency ? sellRate : null,
-          buyRate:  fiatCurrency ? buyRate  : null,
+          sellRate: sellQuoted ? sellRate : null,
+          buyRate:  buyQuoted  ? buyRate  : null,
         },
       },
     });
