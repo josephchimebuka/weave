@@ -36,6 +36,13 @@ export function isStellarEnabled(): boolean {
   return Boolean(process.env.WEAVE_STELLAR_PUBLIC_KEY);
 }
 
+/** When false, checkout UIs should hide Stellar wallet pay-in (treasury may still exist). */
+export function isStellarCheckoutEnabled(): boolean {
+  const flag = process.env.STELLAR_CHECKOUT_ENABLED;
+  if (flag === 'false' || flag === '0') return false;
+  return isStellarEnabled();
+}
+
 export function getHorizonUrl(): string {
   return process.env.STELLAR_HORIZON_URL ?? HORIZON_URLS[getStellarNetwork()];
 }
@@ -159,6 +166,7 @@ export function publicConfig() {
   const network = getStellarNetwork();
   return {
     enabled: isStellarEnabled(),
+    checkoutEnabled: isStellarCheckoutEnabled(),
     network,
     horizonUrl: getHorizonUrl(),
     networkPassphrase: getNetworkPassphrase(),

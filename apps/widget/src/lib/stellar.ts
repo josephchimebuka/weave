@@ -10,6 +10,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { StellarWalletsKit, Networks as KitNetworks } from '@creit.tech/stellar-wallets-kit';
 import { defaultModules } from '@creit.tech/stellar-wallets-kit/modules/utils';
+import { mapStellarPaymentError } from './stellar-errors';
 
 export type StellarNetwork = 'testnet' | 'mainnet';
 
@@ -59,9 +60,13 @@ function ensureKit(): void {
 
 /** Opens wallet picker modal and returns connected Stellar address. */
 export async function openStellarWalletModal(): Promise<string> {
-  ensureKit();
-  const { address } = await StellarWalletsKit.authModal();
-  return address;
+  try {
+    ensureKit();
+    const { address } = await StellarWalletsKit.authModal();
+    return address;
+  } catch (e) {
+    throw new Error(mapStellarPaymentError(e));
+  }
 }
 
 export async function sendStellarUsdcPayment(params: {
@@ -69,34 +74,38 @@ export async function sendStellarUsdcPayment(params: {
   amount: number;
   memo: string;
 }): Promise<{ txHash: string }> {
-  ensureKit();
-  const { address } = await StellarWalletsKit.getAddress();
-  const server = new Horizon.Server(getHorizonUrl());
-  const sourceAccount = await server.loadAccount(address);
-  const usdc = new Asset('USDC', getUsdcIssuer());
-  const passphrase = getNetworkPassphrase();
+  try {
+    ensureKit();
+    const { address } = await StellarWalletsKit.getAddress();
+    const server = new Horizon.Server(getHorizonUrl());
+    const sourceAccount = await server.loadAccount(address);
+    const usdc = new Asset('USDC', getUsdcIssuer());
+    const passphrase = getNetworkPassphrase();
 
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: '100000',
-    networkPassphrase: passphrase,
-  })
-    .addOperation(
-      Operation.payment({
-        destination: params.destination,
-        asset: usdc,
-        amount: params.amount.toFixed(7),
-      }),
-    )
-    .addMemo(Memo.text(params.memo.slice(0, 28)))
-    .setTimeout(180)
-    .build();
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: '100000',
+      networkPassphrase: passphrase,
+    })
+      .addOperation(
+        Operation.payment({
+          destination: params.destination,
+          asset: usdc,
+          amount: params.amount.toFixed(7),
+        }),
+      )
+      .addMemo(Memo.text(params.memo.slice(0, 28)))
+      .setTimeout(180)
+      .build();
 
-  const { signedTxXdr } = await StellarWalletsKit.signTransaction(tx.toXDR(), {
-    address,
-    networkPassphrase: passphrase,
-  });
+    const { signedTxXdr } = await StellarWalletsKit.signTransaction(tx.toXDR(), {
+      address,
+      networkPassphrase: passphrase,
+    });
 
-  const signed = TransactionBuilder.fromXDR(signedTxXdr, passphrase);
-  const result = await server.submitTransaction(signed);
-  return { txHash: result.hash };
+    const signed = TransactionBuilder.fromXDR(signedTxXdr, passphrase);
+    const result = await server.submitTransaction(signed);
+    return { txHash: result.hash };
+  } catch (e) {
+    throw new Error(mapStellarPaymentError(e));
+  }
 }

@@ -2,12 +2,25 @@ import Link from 'next/link';
 import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { fetchOrder, fetchOrderEvents } from '../../lib/dashboard-api';
 import { EVENT_TONE, fmtDuration, type OrderEvent } from '../../lib/order-events';
+import { stellarTxExplorerUrl } from '@weave/shared';
 import { assetLabel, parseAsset, institutionName } from '../../types';
 import { WalletAddress } from '../../../components/WalletAddress';
 
 function money(value: number | null | undefined, dp = 2) {
   if (value == null) return '—';
   return value.toLocaleString(undefined, { minimumFractionDigits: dp > 2 ? 0 : 2, maximumFractionDigits: dp });
+}
+
+function stellarNetwork(): 'testnet' | 'mainnet' {
+  const n = process.env.STELLAR_NETWORK ?? process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
+  return String(n).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
+}
+
+function stellarStepExplorer(step: { provider: string; externalId?: string | null }): string | null {
+  if (step.provider !== 'stellar' || !step.externalId) return null;
+  const id = step.externalId;
+  if (id.length < 16 || id.includes(':')) return null;
+  return stellarTxExplorerUrl(id, stellarNetwork());
 }
 
 const STATUS_META: Record<string, { tone: string; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }> }> = {
@@ -203,7 +216,18 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
                     </span>
                   </div>
                   <div className="grid grid-cols-3 gap-3 text-[12px] text-ink-muted ml-10 mt-2">
-                    <span>ID: <span className="font-mono text-ink-soft">{step.externalId?.slice(0, 12) || '—'}</span></span>
+                    <span>
+                      ID:{' '}
+                      {(() => {
+                        const href = stellarStepExplorer(step);
+                        const label = step.externalId?.slice(0, 12) || '—';
+                        return href ? (
+                          <a href={href} target="_blank" rel="noopener noreferrer" className="font-mono text-forest-deep hover:underline">{label}…</a>
+                        ) : (
+                          <span className="font-mono text-ink-soft">{label}</span>
+                        );
+                      })()}
+                    </span>
                     <span>Deposit: <span className="font-mono text-ink-soft">{step.depositAddress?.slice(0, 12) || '—'}</span></span>
                     {step.depositMemo && <span>Memo: <span className="font-mono text-ink-soft">{step.depositMemo}</span></span>}
                     {step.paystackDvaAcct && (

@@ -130,6 +130,25 @@ export interface Quote {
   breakdown:     QuoteBreakdown;
 }
 
+export type StellarPublicConfig = {
+  enabled?: boolean;
+  checkoutEnabled?: boolean;
+  network?: string;
+};
+
+/** Public treasury/network flags — no API key required. */
+export async function fetchStellarPublicConfig(): Promise<StellarPublicConfig | null> {
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/stellar/config`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchQuote(
   publishableKey: string,
   args: { from: string; to: string; amount: number; amountIn?: 'source' | 'dest'; flow?: Flow },
