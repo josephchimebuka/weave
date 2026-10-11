@@ -23,9 +23,11 @@ export function rateLimit(options: RateLimitOptions) {
     if (req.headers['x-session-token']) role = 'dashboard';
     if (req.headers['x-secret-key']) role = 'server';
 
-    // Smarter IP detection for proxied environments (Vercel/Heroku/Cloudflare)
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : (req.ip || req.socket.remoteAddress || 'unknown');
+    // Use req.ip — Express derives it from X-Forwarded-For honoring `trust proxy`
+    // (set in index.ts), so it's the real visitor IP and NOT client-spoofable.
+    // The previous left-most `x-forwarded-for` split was attacker-controlled: a
+    // client could rotate the header to dodge the rate-limit bucket entirely.
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
 
     // Bucket identity: widget traffic is proxied through the dashboard server, so
     // every merchant shares one IP. Key widget requests on the API key instead so
@@ -57,11 +59,14 @@ export function rateLimit(options: RateLimitOptions) {
     if (req.path.startsWith('/v1/orders')) {
       if (req.method === 'GET') {
         // Polling limit: 300 per 1 min (very generous for widget)
-        const pollKey = `${keyPrefix}:poll:${identity}`;
-        const count = (await redis.get<number>(pollKey)) || 0;
-        if (count >= 300) return res.status(429).json({ success: false, error: 'Too many polling requests' });
-        await redis.incr(pollKey);
-        if (count === 0) await redis.pexpire(pollKey, 60 * 1000);
+        try {
+          const pollKey = `${keyPrefix}:poll:${ip}`;
+          const count = await redis.incr(pollKey);
+          await redis.pexpire(pollKey, 60 * 1000, 'NX');
+          if (count > 300) return res.status(429).json({ success: false, error: 'Too many polling requests' });
+        } catch (err: any) {
+          console.error('[rate-limit] poll error:', err.message);
+        }
         return next();
       }
       // POST /orders falls through to the main limiter
@@ -74,26 +79,27 @@ export function rateLimit(options: RateLimitOptions) {
 
     try {
       const currentQuota = role === 'dashboard' ? 1000 : max;
-      const count = (await redis.get<number>(key)) || 0;
 
-      if (count >= currentQuota) {
+      // Increment first (atomic; creates the key at 1 on the first hit), then
+      // guarantee the window has a TTL. `pexpire ... NX` sets the expiry only when
+      // the key has none — so it arms the window on the first hit AND self-heals
+      // any key stuck without a TTL, without ever extending a live window.
+      //
+      // The previous "set TTL only when count === 0" guard meant a key that ever
+      // lost its TTL (or was created without one) counted up forever and never
+      // reset → a permanent 429. That had bricked real production IP buckets.
+      const count = await redis.incr(key);
+      await redis.pexpire(key, windowMs, 'NX');
+
+      res.setHeader('X-RateLimit-Limit', currentQuota);
+      res.setHeader('X-RateLimit-Remaining', Math.max(0, currentQuota - count));
+
+      if (count > currentQuota) {
         return res.status(429).json({
           success: false,
           error: message || 'Too many requests, please try again later.',
         });
       }
-
-      // Increment and set expiry in a single pipeline
-      const pipeline = redis.pipeline();
-      pipeline.incr(key);
-      if (count === 0) {
-        pipeline.pexpire(key, windowMs);
-      }
-      await pipeline.exec();
-
-      // Add rate limit headers
-      res.setHeader('X-RateLimit-Limit', max);
-      res.setHeader('X-RateLimit-Remaining', Math.max(0, max - count - 1));
 
       next();
     } catch (err: any) {

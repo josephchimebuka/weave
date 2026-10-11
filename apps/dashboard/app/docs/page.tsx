@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
+import { Select } from '../../components/Select';
 import {
   BookOpen, Info, Layout, Cpu, Bell, Globe, Shield,
   MessageSquare, Zap, Network, GitBranch, Terminal,
   Check, Copy, ChevronDown, KeyRound, Play,
   AlertTriangle, FlaskConical, Lock, ArrowRight,
-  Link2, ExternalLink,
+  Link2, ExternalLink, Banknote,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -15,7 +16,7 @@ const WeaveCheckout = dynamic(
   { ssr: false }
 );
 
-type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'checkout' | 'webhooks' | 'agents' | 'security' | 'support';
+type DocPage = 'introduction' | 'widget' | 'api' | 'playground' | 'checkout' | 'payouts' | 'webhooks' | 'agents' | 'security' | 'support';
 type CodeTab  = 'html' | 'react' | 'nextjs';
 
 export default function DocsPage() {
@@ -49,6 +50,7 @@ export default function DocsPage() {
             <NavItem icon={<Cpu size={14} />}        label="API Reference"    active={activePage === 'api'}        onClick={() => setActivePage('api')} />
             <NavItem icon={<Terminal size={14} />}   label="API Playground"   active={activePage === 'playground'} onClick={() => setActivePage('playground')} />
             <NavItem icon={<Link2 size={14} />}      label="Checkout Sessions" active={activePage === 'checkout'}  onClick={() => setActivePage('checkout')} />
+            <NavItem icon={<Banknote size={14} />}   label="Payouts"          active={activePage === 'payouts'}    onClick={() => setActivePage('payouts')} />
             <NavItem icon={<Bell size={14} />}       label="Webhooks"         active={activePage === 'webhooks'}   onClick={() => setActivePage('webhooks')} />
           </NavGroup>
           <NavGroup label="More">
@@ -76,6 +78,7 @@ export default function DocsPage() {
           {activePage === 'api'          && <ApiReferencePage copy={copy} copied={copied} />}
           {activePage === 'playground'   && <ApiPlayground />}
           {activePage === 'checkout'     && <CheckoutSessionsPage copy={copy} copied={copied} />}
+          {activePage === 'payouts'      && <PayoutsPage copy={copy} copied={copied} />}
           {activePage === 'webhooks'     && <WebhooksPage copy={copy} copied={copied} />}
           {activePage === 'agents'       && <AgentsPage copy={copy} copied={copied} />}
           {activePage === 'security'     && <SecurityPage copy={copy} copied={copied} />}
@@ -179,7 +182,7 @@ export default function CheckoutPage() {
 
       {/* Settlement note */}
       <div className="bg-forest/5 border border-forest/15 rounded-2xl px-5 py-4 text-[13.5px] text-forest-deep leading-relaxed">
-        <strong>Settlement times:</strong> NGN via Paystack — <strong>T+1 business day</strong>.
+        <strong>Settlement times:</strong> NGN to your bank — <strong>30 s – 2 min</strong>.
         Crypto-sourced NGN via Paycrest — <strong>30 s – 2 min</strong>.
         Crypto wallet payouts — <strong>near-instant</strong>.
       </div>
@@ -267,7 +270,7 @@ curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:N
               tag: 'Path C',
               title: 'Checkout Sessions',
               tagline: 'The redirect flow.',
-              best: 'You want the Stripe / Paystack-style "redirect away, come back when done" pattern. Common when payment is its own page and you\'d rather not embed anything (e.g. invoice emails, SMS payment links, server-rendered apps).',
+              best: 'You want the Stripe-style "redirect away, come back when done" pattern. Common when payment is its own page and you\'d rather not embed anything (e.g. invoice emails, SMS payment links, server-rendered apps).',
               build: 'Your server calls POST /checkout/sessions. Weave returns a `checkoutUrl` — redirect the user to it. They pay on a Weave-hosted page, then get redirected to your `redirectUrl` once payment confirms.',
               owns: 'Weave hosts the payment page; your server owns the surrounding flow (creating sessions, handling redirects, reconciling via webhook).',
               cta: 'Checkout sessions',
@@ -389,9 +392,9 @@ curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:N
         <div className="space-y-3">
           {[
             {
-              name: 'Paystack', route: 'fiat:NGN → fiat:NGN', flow: 'external',
-              settle: 'T+1 business day',
-              desc: 'Direct Nigerian bank transfer via Paystack. Customer completes payment through a Paystack-hosted popup.',
+              name: 'Bachs', route: 'fiat:NGN → fiat:NGN', flow: 'external',
+              settle: '30 s – 2 min',
+              desc: 'Direct naira collection — card & bank transfer through a hosted checkout, settled straight to the merchant bank.',
             },
             {
               name: 'NEAR Intents', route: 'any chain → crypto:BASE:USDC', flow: 'external',
@@ -434,7 +437,7 @@ curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:BASE:USDC&to=fiat:N
         </div>
         <div className="space-y-3 text-[13.5px] text-forest-deep/80 leading-relaxed">
           <p><strong className="text-forest-deep">API keys are scoped.</strong> Publishable keys (<IC>pk_</IC>) are browser-safe. Secret keys (<IC>sk_</IC>) must never leave your server.</p>
-          <p><strong className="text-forest-deep">All webhooks are signature-verified.</strong> Incoming provider webhooks (Paystack, Paycrest, ChainRails) are HMAC-verified before any state is mutated. Outgoing merchant webhooks are signed with HMAC-SHA256 over <IC>{`${'`${timestamp}.${rawBody}`'}`}</IC>.</p>
+          <p><strong className="text-forest-deep">All webhooks are signature-verified.</strong> Incoming provider webhooks (Bachs, Paycrest, ChainRails) are HMAC-verified before any state is mutated. Outgoing merchant webhooks are signed with HMAC-SHA256 over <IC>{`${'`${timestamp}.${rawBody}`'}`}</IC>.</p>
           <p><strong className="text-forest-deep">Idempotent processing.</strong> Every incoming webhook event is deduplicated by <IC>{'(source, event, externalId)'}</IC>; outgoing events ship with a stable <IC>data.id</IC> for your handler to dedupe on.</p>
         </div>
         <button
@@ -548,10 +551,10 @@ function WidgetPlayground() {
                 </div>
                 <div>
                   <span className="text-[10px] font-bold text-ink-faint uppercase tracking-widest block mb-1.5">Currency</span>
-                  <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full bg-cream-soft border border-hair-soft rounded-xl px-3 py-2.5 text-[14px] focus:outline-none focus:border-forest/40">
+                  <Select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full bg-cream-soft border border-hair-soft rounded-xl pl-3 py-2.5 text-[14px] focus:outline-none focus:border-forest/40">
                     <option value="NGN">NGN</option>
                     <option value="USD">USD</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
               <div>
@@ -717,7 +720,7 @@ function ApiPlayground() {
   }
 
   async function send() {
-    if (!apiKey.trim()) { setError('Enter an API key (pk_test_… or pk_live_…) to send requests.'); return; }
+    if (!apiKey.trim()) { setError('Enter a key to send requests — pk_test_…/pk_live_… (publishable) or sk_test_…/sk_live_… (secret, for server-to-server endpoints).'); return; }
     setLoading(true);
     setResult(null);
     setError(null);
@@ -780,7 +783,7 @@ function ApiPlayground() {
       <header>
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">API Playground</h1>
         <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
-          Send live requests against the Weave API. Use <code className="bg-cream-deep px-1.5 py-0.5 rounded-md font-mono text-[12px] text-forest-deep">pk_test_…</code> to test without moving real funds.
+          Send live requests against the Weave API. Use <code className="bg-cream-deep px-1.5 py-0.5 rounded-md font-mono text-[12px] text-forest-deep">pk_test_…</code> to test without moving real funds. Server-to-server endpoints also accept a <code className="bg-cream-deep px-1.5 py-0.5 rounded-md font-mono text-[12px] text-forest-deep">sk_…</code> secret key on its own.
         </p>
       </header>
 
@@ -790,7 +793,7 @@ function ApiPlayground() {
           <KeyRound size={15} className="text-ink-muted shrink-0" strokeWidth={1.9} />
           <input
             type="password"
-            placeholder="pk_test_… or pk_live_…"
+            placeholder="pk_test_… / sk_test_… / pk_live_… / sk_live_…"
             value={apiKey}
             onChange={(e) => { setApiKey(e.target.value); setError(null); }}
             className="flex-1 bg-transparent text-[13.5px] text-ink placeholder:text-ink-faint focus:outline-none font-mono"
@@ -798,9 +801,9 @@ function ApiPlayground() {
           />
           {apiKey && (
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
-              apiKey.startsWith('pk_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
+              apiKey.includes('_test_') ? 'bg-amber-100 text-amber-700' : 'bg-forest/10 text-forest-deep'
             }`}>
-              {apiKey.startsWith('pk_test_') ? 'Sandbox' : 'Live'}
+              {apiKey.includes('_test_') ? 'Sandbox' : 'Live'}
             </span>
           )}
         </div>
@@ -939,8 +942,8 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
           </div>
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
             <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Server-to-server</p>
-            <code className="text-[11.5px] font-mono text-ink">x-public-key + x-secret-key</code>
-            <p className="text-[11.5px] text-ink-muted leading-relaxed">Secret keypair. Required for anything that should not be possible from the browser. Never expose either header in client code.</p>
+            <code className="text-[11.5px] font-mono text-ink">x-secret-key: sk_live_…</code>
+            <p className="text-[11.5px] text-ink-muted leading-relaxed">Secret key — authenticates on its own. Required for anything that should not be possible from the browser. Never expose it in client code. (Optionally pair with <IC>x-public-key</IC>.)</p>
           </div>
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
             <p className="text-[10.5px] font-bold uppercase tracking-widest text-forest-deep">Sandbox</p>
@@ -1188,7 +1191,7 @@ function ApiReferencePage({ copy, copied }: { copy: (id: string, text: string) =
           },
           {
             method: 'POST', path: '/checkout/sessions',
-            summary: 'Create a hosted checkout session. Returns a `checkoutUrl` you redirect your user to (Stripe / Paystack-style).',
+            summary: 'Create a hosted checkout session. Returns a `checkoutUrl` you redirect your user to (Stripe-style).',
             params: [
               { name: 'amount',      type: 'number',             req: true,  desc: 'Payment amount, denominated in destAsset when amountIn=dest' },
               { name: 'amountIn',    type: '"source" | "dest"',  req: false, desc: 'Whose amount the figure represents. Default: dest' },
@@ -1583,7 +1586,7 @@ function SecurityPage({ copy, copied }: { copy: (id: string, text: string) => vo
           {[
             { tag: 'pk_live_…',  label: 'Publishable (live)',  hdr: 'x-api-key',                       use: 'Browser widget, public payment pages. Scoped to creating orders + reading your own resources. Never grants account read access.' },
             { tag: 'pk_test_…',  label: 'Publishable (test)',  hdr: 'x-api-key',                       use: 'Sandbox traffic. Orders auto-complete instantly, real providers are not called, and outgoing webhooks are suppressed.' },
-            { tag: 'sk_live_…',  label: 'Secret',              hdr: 'x-public-key + x-secret-key',     use: 'Server-to-server only. Required for any flow that should not be possible from the browser. Sent alongside the matching publishable key as a pair; the server compares a hash, never the plaintext.' },
+            { tag: 'sk_live_…',  label: 'Secret',              hdr: 'x-secret-key',                    use: 'Server-to-server only. Authenticates on its own — the server matches a hash of the key, never the plaintext. Required for any flow that should not be possible from the browser. You may optionally also send x-public-key; if you do, it must match this secret.' },
             { tag: 'whsec_…',    label: 'Webhook secret',      hdr: '— (used to sign deliveries)',     use: 'HMAC key for verifying incoming webhook deliveries. Rotate from Settings → Developer → Webhooks; the new value is shown exactly once.' },
           ].map(({ tag, label, hdr, use }, i, arr) => (
             <div key={tag} className={`px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''} space-y-1.5`}>
@@ -1597,9 +1600,8 @@ function SecurityPage({ copy, copied }: { copy: (id: string, text: string) => vo
           ))}
         </div>
         <CodeBlock id="sec-keypair" copy={copy} copied={copied} lang="bash">
-{`# Server-only — uses the secret keypair (never expose either header in the browser).
+{`# Server-only — the secret key authenticates on its own (never expose it in the browser).
 curl https://api.paywithweave.com/api/v1/orders \\
-  -H "x-public-key: pk_live_..." \\
   -H "x-secret-key: sk_live_..." \\
   -H "Content-Type: application/json"`}
         </CodeBlock>
@@ -1628,14 +1630,14 @@ curl https://api.paywithweave.com/api/v1/orders \\
       <section className="space-y-5">
         <SectionHeading icon={<Lock size={18} />} title="Provider Webhook Hardening" />
         <p className="text-[14px] text-ink-muted leading-relaxed">
-          Inbound provider webhooks (Paystack, Paycrest, ChainRails) are HMAC-verified at the edge before any database write. The corresponding secret is required —
+          Inbound provider webhooks (Bachs, Paycrest, ChainRails) are HMAC-verified at the edge before any database write. The corresponding secret is required —
           if it is missing the route fails closed with a 401 rather than accepting unverified payloads.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
             { name: 'Paycrest',    sig: 'HMAC-SHA256(secret, rawBody)' },
             { name: 'ChainRails',  sig: 'HMAC-SHA256(secret, "${ts}.${rawBody}")' },
-            { name: 'Paystack',    sig: 'HMAC-SHA512(secret, rawBody)' },
+            { name: 'Bachs',       sig: 'HMAC-SHA256(secret, "{timestamp}.{rawBody}")' },
           ].map(({ name, sig }) => (
             <div key={name} className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-1">
               <p className="text-[13px] font-semibold text-ink">{name}</p>
@@ -1681,7 +1683,7 @@ curl https://api.paywithweave.com/api/v1/orders \\
 function SupportPage() {
   const channels = [
     { icon: <MessageSquare size={18} className="text-forest" strokeWidth={1.9} />, title: 'Open a support ticket', desc: 'Integration help, account issues, billing questions. Responses within one business day.', cta: 'Contact form', href: '/support' },
-    { icon: <Bell size={18} className="text-forest" strokeWidth={1.9} />,           title: 'Status & incidents',    desc: 'Subscribe to provider incidents that affect Paystack, Paycrest, ChainRails, and NEAR Intents corridors.', cta: 'status@paywithweave.com', href: 'mailto:status@paywithweave.com' },
+    { icon: <Bell size={18} className="text-forest" strokeWidth={1.9} />,           title: 'Status & incidents',    desc: 'Subscribe to provider incidents that affect Bachs, Paycrest, ChainRails, and NEAR Intents corridors.', cta: 'status@paywithweave.com', href: 'mailto:status@paywithweave.com' },
     { icon: <Shield size={18} className="text-forest" strokeWidth={1.9} />,         title: 'Security disclosures',  desc: 'Private channel for vulnerability reports. Do not file these as regular tickets.', cta: 'security@paywithweave.com', href: 'mailto:security@paywithweave.com' },
     { icon: <KeyRound size={18} className="text-forest" strokeWidth={1.9} />,       title: 'Custom corridor',       desc: 'Need a chain, token, or fiat rail Weave does not currently route? Tell us about your volume and we will scope it.', cta: 'partners@paywithweave.com', href: 'mailto:partners@paywithweave.com' },
   ];
@@ -1763,6 +1765,183 @@ function SupportPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Payouts
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PayoutsPage({ copy, copied }: { copy: (id: string, text: string) => void; copied: string | null }) {
+  return (
+    <div className="space-y-12 pb-16 fade-up">
+      <header>
+        <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Payouts</h1>
+        <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
+          Help your users cash out crypto to a naira bank account. You create an offramp order and supply <b>the recipient&apos;s
+          own bank account</b> as the destination — instead of your default payout. The user funds it with their own crypto by
+          sending to the returned deposit address; Weave settles the naira straight to that account.
+        </p>
+      </header>
+
+      <section className="space-y-4">
+        <div className="bg-forest/6 border border-forest/12 rounded-[16px] p-4">
+          <p className="text-[13px] text-forest-deep leading-relaxed">
+            <b>How the money moves.</b> Crypto → Paycrest (the licensed offramp) → the recipient&apos;s bank. Weave never holds
+            the funds and never takes custody — it orchestrates the route. The recipient&apos;s crypto goes to the recipient&apos;s
+            own account, so this stays a facilitated offramp, not money transmission on your behalf.
+          </p>
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      {/* Consumer-facing: hosted cash-out links (no code) */}
+      <section className="space-y-5">
+        <SectionHeading icon={<Link2 size={18} />} title="Cash-out links — no code" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Don&apos;t want to build anything? Create a <b>cash-out link</b> — a shareable, branded, self-serve page where
+          your users offramp crypto to their <b>own</b> Nigerian bank. No API, no widget, no code. It&apos;s the hosted
+          version of the same offramp documented below.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-5 space-y-2">
+            <p className="text-[13px] font-semibold text-ink">You create it</p>
+            <p className="text-[13px] text-ink-muted leading-relaxed">
+              In the dashboard: <b>Cash-out Links → New link</b>. Choose the accepted crypto (<b>any chain / token</b>, or
+              lock it to one), plus an optional description and a fixed amount. You get a shareable URL to drop anywhere —
+              bio, email, chat.
+            </p>
+          </div>
+          <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-5 space-y-2">
+            <p className="text-[13px] font-semibold text-ink">Your user cashes out</p>
+            <p className="text-[13px] text-ink-muted leading-relaxed">
+              They open the link, pick an amount and their token &amp; chain, and enter <b>their own</b> Nigerian bank.
+              They get a deposit address (plus a memo for XRP / TON / XLM / NEAR), send crypto from any wallet, and the
+              naira lands in their bank in <b>30 s – 2 min</b>. They never sign up for anything.
+            </p>
+          </div>
+        </div>
+        <div className="bg-forest/6 border border-forest/12 rounded-[16px] p-4">
+          <p className="text-[13px] text-forest-deep leading-relaxed">
+            <b>It&apos;s fully yours.</b> Each link renders in <b>your</b> brand — logo, accent colour, background, name,
+            headline and font, set once in <b>Settings → Branding</b>. Any link turns your product into a self-serve
+            offramp, and it&apos;s chain-agnostic: your users bring crypto from any chain. Same compliance shape as the
+            API — the crypto is theirs, the naira lands in their account, Weave never takes custody.
+          </p>
+        </div>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Network size={18} />} title="Build it yourself · 1 · List naira banks" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Get the supported institutions for the payout currency. Use the returned <IC>code</IC> as the
+          recipient&apos;s <IC>bankInstitution</IC> below.
+        </p>
+        <CodeBlock id="po-institutions" copy={copy} copied={copied} lang="bash">
+{`curl "https://api.paywithweave.com/api/v1/institutions?currency=NGN"`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Check size={18} />} title="2 · Verify the recipient account" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Resolve the account name before you pay out, so a mistyped account number never sends funds to the wrong place.
+          Show the returned name back to the user to confirm.
+        </p>
+        <CodeBlock id="po-verify" copy={copy} copied={copied} lang="bash">
+{`curl -X POST https://api.paywithweave.com/api/v1/institutions/verify \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "institution": "GTBINGLA",
+    "accountIdentifier": "0123456789",
+    "currency": "NGN"
+  }'
+# → { "success": true, "data": "JANE ADEYEMI" }`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Banknote size={18} />} title="3 · Create the payout order" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Create an order with a crypto <IC>source</IC> and the recipient&apos;s bank as an inline <IC>dest</IC>. The router plans
+          a crypto→naira offramp and returns a deposit address. Use <IC>amountIn: &quot;source&quot;</IC> when the user tells you how
+          much crypto they&apos;re sending, or <IC>&quot;dest&quot;</IC> when you specify the naira they should receive.
+        </p>
+        <CodeBlock id="po-create" copy={copy} copied={copied} lang="bash">
+{`curl -X POST https://api.paywithweave.com/api/v1/orders \\
+  -H "x-secret-key: sk_live_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "source": { "inline": { "kind": "crypto_wallet", "assetKey": "crypto:BASE:USDC" } },
+    "dest":   { "inline": {
+      "kind": "bank_account",
+      "assetKey": "fiat:NGN",
+      "bankInstitution": "GTBINGLA",
+      "bankAccountIdentifier": "0123456789",
+      "bankAccountName": "JANE ADEYEMI",
+      "label": "cashout: jane"
+    }},
+    "amount": 25,
+    "amountIn": "source",
+    "customer": { "email": "jane@example.com", "name": "Jane Adeyemi" }
+  }'`}
+        </CodeBlock>
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          The response&apos;s <IC>nextAction</IC> carries the deposit target — a crypto address (and <IC>depositMemo</IC> for chains
+          that need one) plus the exact amount to send. Hand that to the user; when their crypto lands, Paycrest offramps it to the
+          bank account you supplied.
+        </p>
+        <CodeBlock id="po-create-res" copy={copy} copied={copied} lang="json" light>
+{`{
+  "success": true,
+  "data": {
+    "order": { "id": "ord_...", "status": "awaiting_deposit", "sourceAssetKey": "crypto:BASE:USDC", "destAssetKey": "fiat:NGN" },
+    "nextAction": {
+      "screen": "collect_crypto",
+      "depositAddress": "0x9f...c21",
+      "amount": 25,
+      "token": "USDC",
+      "chain": "BASE"
+    }
+  }
+}`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<ArrowRight size={18} />} title="4 · Track it to settlement" />
+        <p className="text-[14px] text-ink-muted leading-relaxed">
+          Poll <IC>GET /orders/:id</IC> (or listen for the <IC>order.completed</IC> webhook) until <IC>status</IC> is
+          <IC>completed</IC> — that&apos;s when the naira has reached the recipient&apos;s bank. See <b>Webhooks</b> for the signed
+          event payload.
+        </p>
+        <CodeBlock id="po-poll" copy={copy} copied={copied} lang="bash">
+{`curl https://api.paywithweave.com/api/v1/orders/ord_... \\
+  -H "x-secret-key: sk_live_..."
+# status: awaiting_deposit → processing → completed`}
+        </CodeBlock>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-3">
+        <SectionHeading icon={<AlertTriangle size={18} />} title="Notes" />
+        <ul className="space-y-2 text-[14px] text-ink-muted leading-relaxed list-disc pl-5">
+          <li>The recipient bank is created as a one-off instrument on the order. Set <IC>label</IC> to something you can reconcile against (e.g. the user id).</li>
+          <li>This flow rides the same crypto→naira offramp used elsewhere — it does <b>not</b> depend on naira collection being enabled.</li>
+          <li>Paying out to third-party accounts is subject to the offramp provider&apos;s KYC/AML rules. Confirm third-party recipient payouts are enabled on your account before going to volume.</li>
+        </ul>
+      </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Checkout Sessions
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1773,7 +1952,7 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
         <h1 className="font-display text-[36px] font-semibold text-ink tracking-tight leading-tight">Checkout Sessions</h1>
         <p className="text-ink-muted mt-2 text-[15px] leading-relaxed">
           Programmatically create a hosted payment page, redirect your user to it, and get them back when payment is confirmed —
-          the Stripe Checkout / Paystack initialize pattern, brought to crypto ↔ fiat. No frontend code on your side; just one server call and a redirect.
+          the Stripe Checkout initialize pattern, brought to crypto ↔ fiat. No frontend code on your side; just one server call and a redirect.
         </p>
       </header>
 
@@ -1793,7 +1972,7 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
             <ul className="text-[12.5px] text-ink-muted leading-relaxed space-y-1 list-disc list-inside marker:text-forest">
               <li>The payment lives on its own page — invoice emails, SMS payment links, server-rendered checkouts.</li>
               <li>You'd rather not embed any frontend SDK.</li>
-              <li>You already model payments as "create intent → redirect → confirm via webhook" (Stripe, Paystack).</li>
+              <li>You already model payments as "create intent → redirect → confirm via webhook" (Stripe-style).</li>
               <li>You need to issue a payment URL from a backend that has no UI at all (a Slack bot, a cron job, an admin tool).</li>
             </ul>
           </div>
@@ -1824,9 +2003,80 @@ function CheckoutSessionsPage({ copy, copied }: { copy: (id: string, text: strin
       <div className="rule-dotted" />
 
       <section className="space-y-5">
+        <SectionHeading icon={<ArrowRight size={17} />} title="What comes back to your redirect URL" />
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">
+          Weave appends query params to your <IC>redirectUrl</IC> — or bounces to <IC>cancelUrl</IC> — depending on how the payer left the hosted page. These params are a UX signal only; see <strong className="text-ink">Verifying the redirect</strong> below before you trust them.
+        </p>
+        <div className="bg-cream-soft rounded-[20px] border border-hair-soft overflow-hidden">
+          {[
+            { when: 'Payment confirmed',                 dest: 'redirectUrl', params: '?session_id=…&order_id=…', desc: 'The order reached completed. Both the session id and the order id are present.' },
+            { when: 'Returning to a completed session',  dest: 'redirectUrl', params: '?session_id=…&order_id=…', desc: 'Payer reopens the checkout URL (or hits back) after already paying. Same param set as a fresh success.' },
+            { when: 'Reloads mid-payment',               dest: '— no redirect', params: '',                       desc: 'Session still open / processing. The hosted page reloads in place and the payer resumes exactly where they left off; no redirect fires.' },
+            { when: 'Closes or abandons',                dest: 'cancelUrl',   params: ' (no params)',              desc: 'Payer dismisses the widget. Bounced to cancelUrl unchanged — nothing appended.' },
+            { when: 'Session expired',                   dest: 'cancelUrl',   params: ' (no params)',              desc: 'Past expiresAt. The expired screen links back to cancelUrl, unchanged.' },
+          ].map((row, i, arr) => (
+            <div key={row.when} className={`px-5 py-4 ${i < arr.length - 1 ? 'border-b border-hair-soft' : ''}`}>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <span className="text-[13px] font-semibold text-ink">{row.when}</span>
+                <code className="text-[12px] font-mono text-forest-deep">{row.dest}<span className="text-ink-muted">{row.params}</span></code>
+              </div>
+              <p className="text-[12.5px] text-ink-muted mt-1 leading-relaxed">{row.desc}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-[12.5px] text-ink-muted leading-relaxed">
+          <IC>cancelUrl</IC> is optional. Without it, a closed or expired session has no onward destination — the payer just stays on the Weave page (the expired notice, or the widget as they left it).
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
+        <SectionHeading icon={<Shield size={17} />} title="Verifying the redirect" />
+        <div className="bg-amber-50 border border-amber-200/80 rounded-2xl px-5 py-4 flex gap-3 text-[13.5px] text-amber-900 leading-relaxed">
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" strokeWidth={2} />
+          <span>
+            <strong>The query params are unsigned.</strong> Anyone can open <IC>{`redirectUrl?session_id=…&order_id=…`}</IC> directly, without paying. Never treat their presence as proof of payment — always confirm server-side before you fulfil.
+          </span>
+        </div>
+        <p className="text-[13.5px] text-ink-muted leading-relaxed">Two ways to confirm — use either, or both:</p>
+        <ul className="text-[13.5px] text-ink-muted leading-relaxed space-y-1.5 list-disc list-inside marker:text-forest">
+          <li><strong className="text-ink">Webhook (recommended, async).</strong> The <IC>order.completed</IC> webhook is the source of truth — fulfil there and you never depend on the redirect landing at all. See the Webhooks page.</li>
+          <li><strong className="text-ink">Synchronous check (on landing).</strong> When the payer hits your <IC>redirectUrl</IC>, call <IC>GET /checkout/sessions/:id</IC> with the <IC>session_id</IC> from the query and confirm <IC>orderStatus === 'completed'</IC> before showing success.</li>
+        </ul>
+        <CodeBlock id="cs-verify-redirect" copy={copy} copied={copied} lang="ts">
+{`// Your redirectUrl handler — trust the API, not the query string.
+app.get('/payment/success', async (req, res) => {
+  const { session_id } = req.query;
+
+  const r = await fetch(
+    \`https://api.paywithweave.com/api/v1/checkout/sessions/\${session_id}\`,
+    { headers: { 'x-secret-key': process.env.WEAVE_SECRET_KEY } },
+  );
+  const { data } = await r.json();
+
+  if (data?.orderStatus === 'completed') {
+    // Paid. Fulfil idempotently — the order.completed webhook may
+    // have already fulfilled this same order.
+    await fulfilOrder(data.orderId);
+    return res.render('success');
+  }
+
+  // Not paid (yet). Do NOT fulfil — show a pending / return state.
+  return res.render('pending');
+});`}
+        </CodeBlock>
+        <p className="text-[12.5px] text-ink-muted leading-relaxed">
+          Fulfil <strong className="text-ink">idempotently</strong>: the synchronous check and the webhook can both fire for the same order, so key fulfilment on <IC>orderId</IC> (or your own <IC>reference</IC>) and no-op if you've already delivered.
+        </p>
+      </section>
+
+      <div className="rule-dotted" />
+
+      <section className="space-y-5">
         <SectionHeading icon={<Terminal size={17} />} title="Create a session" />
         <p className="text-[13.5px] text-ink-muted leading-relaxed">
-          <IC>POST /checkout/sessions</IC>. Required: <IC>amount</IC>, <IC>destAsset</IC>, <IC>redirectUrl</IC>. Auth via <IC>x-api-key</IC> or keypair.
+          <IC>POST /checkout/sessions</IC>. Required: <IC>amount</IC>, <IC>destAsset</IC>, <IC>redirectUrl</IC>. Auth via <IC>x-api-key</IC> (publishable) or <IC>x-secret-key</IC> (server-to-server).
         </p>
         <CodeBlock id="cs-create-req" copy={copy} copied={copied} lang="bash">
 {`curl https://api.paywithweave.com/api/v1/checkout/sessions \\
@@ -1986,13 +2236,13 @@ function AgentsPage({ copy, copied }: { copy: (id: string, text: string) => void
       <section className="space-y-5">
         <SectionHeading icon={<KeyRound size={18} />} title="Authentication" />
         <p className="text-[14px] text-ink-muted leading-relaxed">
-          Agents calling from a trusted backend should use the keypair pattern — both headers must be present and belong to the same merchant account.
+          Agents calling from a trusted backend should authenticate with the secret key — send it as <IC>x-secret-key</IC>; it authenticates on its own.
           The publishable key alone is enough for read-only calls and for creating orders when the flow starts in a user's browser.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-2">
-            <p className="text-[12px] font-bold uppercase tracking-widest text-forest-deep">Server-side (agent) — keypair</p>
-            <p className="text-[12.5px] text-ink-muted leading-relaxed">Pass both <IC>x-public-key</IC> and <IC>x-secret-key</IC>. Never expose the secret key to a browser or end-user.</p>
+            <p className="text-[12px] font-bold uppercase tracking-widest text-forest-deep">Server-side (agent) — secret key</p>
+            <p className="text-[12.5px] text-ink-muted leading-relaxed">Pass <IC>x-secret-key</IC> on its own. Never expose the secret key to a browser or end-user.</p>
           </div>
           <div className="bg-cream-soft border border-hair-soft rounded-[16px] p-4 space-y-2">
             <p className="text-[12px] font-bold uppercase tracking-widest text-ink-faint">Browser / widget — publishable key</p>
@@ -2000,9 +2250,8 @@ function AgentsPage({ copy, copied }: { copy: (id: string, text: string) => void
           </div>
         </div>
         <CodeBlock id="ag-auth" copy={copy} copied={copied} lang="bash">
-{`# Keypair auth (server-side agent)
+{`# Secret-key auth (server-side agent)
 curl https://api.paywithweave.com/api/v1/quotes \\
-  -H "x-public-key: pk_live_..." \\
   -H "x-secret-key: sk_live_..." \\
   -G -d "from=fiat:NGN&to=crypto:BASE:USDC&amount=5000&amountIn=source"`}
         </CodeBlock>
@@ -2166,7 +2415,6 @@ async function waitForOrder(orderId: string, apiKey: string, timeoutMs = 300_000
         <CodeBlock id="ag-customer" copy={copy} copied={copied} lang="bash">
 {`curl https://api.paywithweave.com/api/v1/orders \\
   -X POST \\
-  -H "x-public-key: pk_live_..." \\
   -H "x-secret-key: sk_live_..." \\
   -H "Content-Type: application/json" \\
   -d '{

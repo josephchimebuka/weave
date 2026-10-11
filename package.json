@@ -19,6 +19,13 @@
     "overrides": {
       "@types/react": "^19",
       "@types/react-dom": "^19"
+    },
+    "packageExtensions": {
+      "@coinbase/cdp-sdk": {
+        "dependencies": {
+          "bs58": "^6.0.0"
+        }
+      }
     }
   }
 }

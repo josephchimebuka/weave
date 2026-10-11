@@ -16,6 +16,15 @@ body {
   background-attachment: fixed;
 }
 
+/* Composed amount field on the cash-out page. Its inner <input> is borderless and
+   transparent (the wrapper IS the visual field), so the global input focus ring is
+   suppressed on it inline and focus is shown on the wrapper instead — tinted to the
+   merchant's brand accent (--field-accent, set inline per merchant). */
+.cashout-field:focus-within {
+  border-color: var(--field-accent, rgba(15, 93, 76, 0.6));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--field-accent, #0f5d4c) 22%, transparent);
+}
+
 /* Branded sonner toasts — keyed off classNames in <Toaster> */
 .weave-toast {
   background: var(--color-cream-soft) !important;

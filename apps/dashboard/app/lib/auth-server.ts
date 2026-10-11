@@ -14,6 +14,9 @@ export type SessionUser = {
   emailVerifiedAt: string | null;
   createdAt:       string;
   updatedAt:       string;
+  // True for the env-designated platform-admin account (Dewdrop Labs) — unlocks
+  // the platform-wide audit log view.
+  isPlatformAdmin?: boolean;
 };
 
 export type ServerSession = {

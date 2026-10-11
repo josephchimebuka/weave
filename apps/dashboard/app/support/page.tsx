@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '../lib/api-fetch';
+import { Select } from '../../components/Select';
 import { toast } from '../components/Toaster';
 
 type FAQCategory = {
@@ -29,7 +30,7 @@ const FAQ: FAQCategory[] = [
     items: [
       {
         q: 'How long do payouts take?',
-        a: 'Settlement times depend on your payout type. For NGN bank accounts, customers paying in Naira via bank transfer (Paystack) are settled on a T+1 business day schedule — funds arrive the next business day. For crypto-sourced NGN payments (e.g. a customer paying in ETH or USDC), settlement is near-instant via Paycrest, typically within 30 seconds to 2 minutes. Crypto-native settlements (USDC/USDT to a wallet) are virtually instant.',
+        a: 'Settlement times depend on your payout type. For crypto-sourced NGN payments (e.g. a customer paying in ETH or USDC), settlement is near-instant via Paycrest, typically within 30 seconds to 2 minutes. Naira card & bank payments settle straight to your connected account through our banking partner. Crypto-native settlements (USDC/USDT to a wallet) are virtually instant.',
       },
       {
         q: 'Where are my funds settled?',
@@ -309,20 +310,18 @@ function SupportForm() {
         <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-[0.1em]">
           Topic
         </label>
-        <div className="relative mt-2">
-          <select
-            value={formData.topic}
-            onChange={e => setFormData(p => ({ ...p, topic: e.target.value }))}
-            className="w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors appearance-none cursor-pointer pr-10"
-          >
-            <option value="payments">Payments &amp; Payouts</option>
-            <option value="account">Account Settings</option>
-            <option value="compliance">Compliance &amp; KYB</option>
-            <option value="api">API &amp; Integration</option>
-            <option value="other">Other</option>
-          </select>
-          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-muted text-[11px]">▾</span>
-        </div>
+        <Select
+          value={formData.topic}
+          onChange={e => setFormData(p => ({ ...p, topic: e.target.value }))}
+          wrapperClassName="mt-2"
+          className="w-full bg-cream-deep/40 border border-hair-soft rounded-xl pl-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors cursor-pointer"
+        >
+          <option value="payments">Payments &amp; Payouts</option>
+          <option value="account">Account Settings</option>
+          <option value="compliance">Compliance &amp; KYB</option>
+          <option value="api">API &amp; Integration</option>
+          <option value="other">Other</option>
+        </Select>
       </div>
 
       <div>

@@ -5,6 +5,45 @@
 import { prisma } from './prisma';
 import { cryptoKey, fiatKey } from './assets';
 import { paystack } from '../services/paystack.service';
+import { qstash } from './qstash';
+import { reportError } from './report';
+
+// Backoff schedule (seconds) for background re-sync of a merchant's Paystack
+// subaccount after the initial setup-time sync fails. attempt is 1-indexed; when
+// it runs past the end of this list we stop retrying. ~1h15m of total coverage.
+const PAYSTACK_SYNC_RETRY_DELAYS_S = [30, 120, 300, 900, 1800, 3600];
+
+/**
+ * Enqueue a delayed QStash job to re-attempt a merchant's Paystack subaccount
+ * sync. Self-terminates once the merchant is SYNCED (checked in the job handler)
+ * or after the backoff schedule is exhausted. Safe to call fire-and-forget.
+ */
+export async function schedulePaystackSyncRetry(params: { merchantId: string; attempt: number }): Promise<void> {
+  const delay = PAYSTACK_SYNC_RETRY_DELAYS_S[params.attempt - 1];
+  if (delay === undefined) {
+    // Terminal: this merchant's payout subaccount never synced, so they can't
+    // receive Paystack settlements. Page on it — it needs manual intervention.
+    reportError(new Error('Paystack subaccount sync exhausted all retries'), {
+      area: 'paystack.sync-exhausted',
+      extra: { merchantId: params.merchantId, attempts: PAYSTACK_SYNC_RETRY_DELAYS_S.length },
+    });
+    return;
+  }
+  const apiBase = process.env.API_BASE;
+  if (!apiBase) {
+    console.warn('[paystack-sync] API_BASE not set — cannot schedule background retry');
+    return;
+  }
+  try {
+    await qstash.publishJSON({
+      url:   `${apiBase}/jobs/retry-paystack-sync`,
+      body:  params,
+      delay,
+    });
+  } catch (err: any) {
+    console.warn('[paystack-sync] failed to enqueue background retry:', err.message);
+  }
+}
 
 /**
  * Ensures that a merchant's bank payout details are mirrored to Paystack

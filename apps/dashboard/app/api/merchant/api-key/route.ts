@@ -1,4 +1,5 @@
 import { readSessionCookie } from '../../../lib/auth-server';
+import { proxyHeaders } from '../../../lib/proxy-headers';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
@@ -10,7 +11,7 @@ export async function GET() {
     if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const res = await fetch(`${API_BASE}/merchant/keys`, {
-      headers: { 'x-session-token': token },
+      headers: await proxyHeaders(token),
     });
     if (!res.ok) return Response.json({ error: 'Failed to fetch keys' }, { status: res.status });
 
@@ -21,16 +22,21 @@ export async function GET() {
   }
 }
 
-// POST /api/merchant/api-key — rotates keys.
+// POST /api/merchant/api-key — rotates keys for the given mode ('live' | 'sandbox').
 // The secretKey in the response is shown exactly once.
-export async function POST() {
+export async function POST(req: Request) {
   try {
     const token = await readSessionCookie();
     if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+    // Forward the mode (default 'live') so sandbox keypairs can be rotated too.
+    const body = await req.json().catch(() => ({}));
+    const mode = body?.mode === 'sandbox' ? 'sandbox' : 'live';
+
     const res = await fetch(`${API_BASE}/merchant/keys/regenerate`, {
       method: 'POST',
-      headers: { 'x-session-token': token },
+      headers: await proxyHeaders(token, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ mode }),
     });
     if (!res.ok) return Response.json({ error: 'Failed to regenerate keys' }, { status: res.status });
 

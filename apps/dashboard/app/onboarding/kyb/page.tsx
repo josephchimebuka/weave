@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Check, Info, ArrowRight, Upload, Building2, User, FileText, Search, Bell } from 'lucide-react';
+import { Select } from '../../../components/Select';
 import { useRouter } from 'next/navigation';
 
 type StepStatus = 'done' | 'active' | 'pending';
@@ -16,6 +17,13 @@ const STEPS: Step[] = [
 
 const INPUT =
   'w-full bg-cream-deep/40 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:bg-cream-soft transition-colors';
+
+const PRODUCT_CATEGORIES = [
+  'Retail & E-commerce', 'Food & Beverage', 'Fashion & Apparel',
+  'Digital Products & Software', 'Professional Services', 'Health & Beauty',
+  'Education & Training', 'Travel & Hospitality', 'Financial Services',
+  'Arts & Entertainment', 'Logistics & Delivery', 'Nonprofit', 'Other',
+];
 
 function Field({
   label,
@@ -55,8 +63,11 @@ export interface VerificationFormData {
   city: string;
   state: string;
   postalCode: string;
-  website: string;
-  taxId: string;
+  websiteUrl: string;
+  productDescription: string;
+  supportEmail: string;
+  productCategory: string;
+  socialMedia: string;
   documentUrls?: Array<{ type: string; url: string }>;
 }
 
@@ -67,6 +78,8 @@ export default function KybPage() {
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [profileMissing, setProfileMissing] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [verificationStatus, setVerificationStatus] = useState<string>('none');
   
   // File state (kept in memory until final submission)
@@ -86,8 +99,11 @@ export default function KybPage() {
     city: '',
     state: '',
     postalCode: '',
-    website: '',
-    taxId: '',
+    websiteUrl: '',
+    productDescription: '',
+    supportEmail: '',
+    productCategory: '',
+    socialMedia: '',
   });
 
   useEffect(() => {
@@ -99,6 +115,11 @@ export default function KybPage() {
         if (json.success && json.data) {
           setFormData(prev => ({ ...prev, ...json.data }));
           setVerificationStatus(json.data.status || 'none');
+          // Existing merchants who submitted KYB before the business-profile fields
+          // existed are missing them — flag it (computed once, at load) so they get a
+          // focused prompt to fill just the gap rather than nothing.
+          const bp = ['websiteUrl', 'productDescription', 'supportEmail', 'productCategory'] as const;
+          setProfileMissing(bp.some(k => !json.data[k]));
         }
       } catch (err) {
         console.error('Failed to fetch verification progress', err);
@@ -109,21 +130,35 @@ export default function KybPage() {
     fetchProgress();
   }, []);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const saveProgress = async () => {
+  const saveProgress = async (): Promise<boolean> => {
     try {
-      await fetch('/api/verification', {
+      const res = await fetch('/api/verification', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
+      return res.ok;
     } catch (err) {
       console.error('Failed to save progress', err);
+      return false;
     }
+  };
+
+  // Save just the business-profile gap for an already-submitted merchant (no status
+  // change — a partial PATCH). Clears the prompt so they fall through to their status.
+  const saveBusinessProfile = async () => {
+    setSavingProfile(true);
+    const ok = await saveProgress();
+    setSavingProfile(false);
+    // Only dismiss the prompt if the save actually persisted — otherwise the merchant
+    // would think they finished while their details were silently dropped.
+    if (ok) setProfileMissing(false);
+    else alert('Could not save your details. Please check your connection and try again.');
   };
 
   const handleNext = async () => {
@@ -249,6 +284,52 @@ export default function KybPage() {
             Return to Dashboard
             <ArrowRight size={16} />
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Already-submitted merchants missing the newer business-profile fields — prompt
+  // for just those, without redoing (or invalidating) their existing verification.
+  if (!loading && profileMissing && (verificationStatus === 'verified' || verificationStatus === 'pending')) {
+    return (
+      <div className="max-w-2xl mx-auto py-16 fade-up">
+        <div className="text-center space-y-3 mb-8">
+          <h2 className="font-display text-[32px] sm:text-[40px] font-semibold text-ink tracking-tight">A few new details</h2>
+          <p className="text-ink-muted text-[15px] max-w-lg mx-auto leading-relaxed">
+            We&apos;ve added a short business profile to keep your compliance current. Your verification stays intact — just fill these in.
+          </p>
+        </div>
+        <div className="bg-cream-soft border border-hair-soft rounded-[24px] shadow-leaf p-7 space-y-5">
+          <Field label="Business Website">
+            <input name="websiteUrl" type="url" value={formData.websiteUrl} onChange={handleInputChange} className={INPUT} placeholder="https://yourbusiness.com" />
+          </Field>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <Field label="Support Email">
+              <input name="supportEmail" type="email" value={formData.supportEmail} onChange={handleInputChange} className={INPUT} placeholder="support@yourbusiness.com" />
+            </Field>
+            <Field label="Product Category">
+              <Select name="productCategory" value={formData.productCategory} onChange={handleInputChange} className={`${INPUT.replace('px-4', 'pl-4')} cursor-pointer`}>
+                <option value="" disabled>Select a category…</option>
+                {PRODUCT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </Select>
+            </Field>
+          </div>
+          <Field label="Product / Service Description">
+            <textarea name="productDescription" value={formData.productDescription} onChange={handleInputChange} rows={3} className={`${INPUT} resize-none`} placeholder="What does your business sell or offer?" />
+          </Field>
+          <Field label="Social Media" optional>
+            <input name="socialMedia" value={formData.socialMedia} onChange={handleInputChange} className={INPUT} placeholder="Instagram / X / LinkedIn handle or URL" />
+          </Field>
+          <div className="pt-2 flex justify-end">
+            <button
+              onClick={saveBusinessProfile}
+              disabled={savingProfile || !formData.websiteUrl || !formData.supportEmail || !formData.productCategory || !formData.productDescription}
+              className="inline-flex items-center gap-2 px-7 py-3 rounded-full bg-forest text-cream-soft text-[14px] font-semibold hover:bg-forest-deep transition-all shadow-leaf disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {savingProfile ? 'Saving…' : 'Save & finish'}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -405,16 +486,13 @@ export default function KybPage() {
               </Field>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <Field label="Entity Type">
-                  <div className="relative">
-                    <select name="entityType" value={formData.entityType} onChange={handleInputChange} className={`${INPUT} appearance-none pr-10 cursor-pointer`}>
-                      <option value="" disabled>Select type...</option>
-                      <option value="Sole Proprietorship">Sole Proprietorship</option>
-                      <option value="LLC">LLC</option>
-                      <option value="Cooperative">Cooperative</option>
-                      <option value="Corporation">Corporation</option>
-                    </select>
-                    <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-muted text-[11px]">▾</span>
-                  </div>
+                  <Select name="entityType" value={formData.entityType} onChange={handleInputChange} className={`${INPUT.replace('px-4', 'pl-4')} cursor-pointer`}>
+                    <option value="" disabled>Select type...</option>
+                    <option value="Sole Proprietorship">Sole Proprietorship</option>
+                    <option value="LLC">LLC</option>
+                    <option value="Cooperative">Cooperative</option>
+                    <option value="Corporation">Corporation</option>
+                  </Select>
                 </Field>
                 <Field label="Registration / EIN Number">
                   <input name="regNumber" value={formData.regNumber} onChange={handleInputChange} className={INPUT} placeholder="XX-XXXXXXX" />
@@ -431,6 +509,31 @@ export default function KybPage() {
                     <Field label="State / Province"><input name="state" value={formData.state} onChange={handleInputChange} className={INPUT} /></Field>
                     <Field label="Postal Code"><input name="postalCode" value={formData.postalCode} onChange={handleInputChange} className={INPUT} /></Field>
                   </div>
+                </div>
+              </div>
+              <div className="pt-4">
+                <h3 className="font-display text-[22px] font-semibold text-ink mb-4">Business Profile</h3>
+                <div className="space-y-5">
+                  <Field label="Business Website">
+                    <input name="websiteUrl" type="url" value={formData.websiteUrl} onChange={handleInputChange} className={INPUT} placeholder="https://yourbusiness.com" />
+                  </Field>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <Field label="Support Email">
+                      <input name="supportEmail" type="email" value={formData.supportEmail} onChange={handleInputChange} className={INPUT} placeholder="support@yourbusiness.com" />
+                    </Field>
+                    <Field label="Product Category">
+                      <Select name="productCategory" value={formData.productCategory} onChange={handleInputChange} className={`${INPUT.replace('px-4', 'pl-4')} cursor-pointer`}>
+                        <option value="" disabled>Select a category…</option>
+                        {PRODUCT_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </Select>
+                    </Field>
+                  </div>
+                  <Field label="Product / Service Description">
+                    <textarea name="productDescription" value={formData.productDescription} onChange={handleInputChange} rows={3} className={`${INPUT} resize-none`} placeholder="What does your business sell or offer?" />
+                  </Field>
+                  <Field label="Social Media" optional>
+                    <input name="socialMedia" value={formData.socialMedia} onChange={handleInputChange} className={INPUT} placeholder="Instagram / X / LinkedIn handle or URL" />
+                  </Field>
                 </div>
               </div>
             </div>

@@ -1,20 +1,22 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
   KeyRound, Copy, Eye, EyeOff, Webhook, Plus, Palette,
   FileText, ShoppingBag, Pencil, Check, User, Mail, Building2, Save,
   Wallet, Landmark, AlertTriangle, X, Trash2,
-  Shield
+  Shield, Banknote, ExternalLink
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
+import WebhookDeliveries from '../components/WebhookDeliveries';
+import { Select } from '../../components/Select';
 
 type ThemePreset = 'organic' | 'minimal';
 type AccentKey   = 'forest' | 'tan' | 'ink';
 type CodeTab     = 'html' | 'react';
-type SettingsTab = 'developer' | 'profile' | 'payouts';
+type SettingsTab = 'developer' | 'profile' | 'payouts' | 'webhooks' | 'branding';
+type BachsRemainingField = { fieldKey: string; label: string; group: string; error: string | null };
 
 import dynamic from 'next/dynamic';
 // Load client-only: the widget imports @creit.tech/stellar-wallets-kit, which
@@ -24,6 +26,7 @@ const WeaveCheckout = dynamic(
   { ssr: false },
 );
 import { apiFetch } from '../lib/api-fetch';
+import { BRAND_FONTS, BRAND_FONT_KEYS, fontStack, ensureFontLoaded } from '../lib/brand-fonts';
 import { toast } from '../components/Toaster';
 
 const ACCENT_OPTIONS: { key: AccentKey; hex: string; swatchClass: string }[] = [
@@ -62,7 +65,7 @@ function SettingsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const initialTabUrl = searchParams.get('tab');
-  const initialTab: SettingsTab = ['profile', 'payouts'].includes(initialTabUrl ?? '') ? (initialTabUrl as SettingsTab) : 'developer';
+  const initialTab: SettingsTab = ['profile', 'payouts', 'webhooks', 'branding'].includes(initialTabUrl ?? '') ? (initialTabUrl as SettingsTab) : 'developer';
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
 
@@ -77,6 +80,11 @@ function SettingsContent() {
   const [secretKey, setSecretKey]         = useState<string | null>(null);
   const [keysLoading, setKeysLoading]     = useState(true);
   const [regenerating, setRegenerating]   = useState(false);
+
+  // Sandbox secret is only returned once, right after (re)generation.
+  const [sandboxSecretKey, setSandboxSecretKey]       = useState<string | null>(null);
+  const [sandboxSecretVisible, setSandboxSecretVisible] = useState(false);
+  const [regeneratingSandbox, setRegeneratingSandbox] = useState(false);
 
   // Profile tab state
   const [profile, setProfile]       = useState<{ id: string; name: string; email: string; publishableKey: string | null; sandboxPublishableKey: string | null; kycLevel: string; createdAt: string } | null>(null);
@@ -101,6 +109,16 @@ function SettingsContent() {
   const [activePayout, setActivePayout] = useState<any>(null);
   const [savingPayout, setSavingPayout] = useState(false);
   const [payoutSaved, setPayoutSaved] = useState(false);
+  // Bachs Connect (naira collection) onboarding
+  const [bachsStatus, setBachsStatus] = useState<any>(null);
+  const [bachsConnecting, setBachsConnecting] = useState(false);
+  const [bachsRemaining, setBachsRemaining] = useState<BachsRemainingField[]>([]);
+  const [bachsFieldValues, setBachsFieldValues] = useState<Record<string, string>>({});
+  const [bachsSubmitting, setBachsSubmitting] = useState(false);
+  // Branding (themes the hosted cash-out page)
+  const [brand, setBrand] = useState<Record<string, string>>({});
+  const [brandSaving, setBrandSaving] = useState(false);
+  const [brandSaved, setBrandSaved] = useState(false);
   const [banks, setBanks] = useState<{name: string; code: string}[]>([]);
   const [resolvingName, setResolvingName] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
@@ -130,6 +148,7 @@ function SettingsContent() {
     const tab = searchParams.get('tab');
     if (tab === 'profile') setActiveTab('profile');
     else if (tab === 'payouts') setActiveTab('payouts');
+    else if (tab === 'webhooks') setActiveTab('webhooks');
     else if (tab === 'developer' || !tab) setActiveTab('developer');
   }, [searchParams]);
 
@@ -173,6 +192,74 @@ function SettingsContent() {
       .finally(() => setPayoutsLoading(false));
   }, []);
 
+  // Fetch Bachs Connect status. Re-runs when returning from hosted onboarding
+  // (?bachs=done) so a freshly-activated capability shows without a manual reload.
+  const refreshBachs = useCallback(() => {
+    fetch('/api/merchant/bachs/status')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setBachsStatus(d); })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshBachs();
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('bachs') === 'done') {
+      // Give the capability review / webhook a beat to land, then refresh again.
+      const t = setTimeout(refreshBachs, 2500);
+      return () => clearTimeout(t);
+    }
+  }, [refreshBachs]);
+
+  // Load brand once.
+  useEffect(() => {
+    fetch('/api/merchant/brand').then(r => r.ok ? r.json() : null).then(d => { if (d && typeof d === 'object') setBrand(d); }).catch(() => {});
+  }, []);
+
+  // Load the selected web font so the live preview renders it accurately.
+  useEffect(() => { ensureFontLoaded(brand.font); }, [brand.font]);
+
+  function setBrandField(k: string, v: string) {
+    setBrand(b => { const n = { ...b }; if (v) n[k] = v; else delete n[k]; return n; });
+  }
+
+  async function saveBrand() {
+    setBrandSaving(true);
+    const res = await apiFetch('/api/merchant/brand', { method: 'PATCH', body: JSON.stringify(brand) });
+    setBrandSaving(false);
+    if (!res.ok) { toast.error(res.error || 'Could not save branding.'); return; }
+    setBrand((res.data as Record<string, string>) ?? brand);
+    setBrandSaved(true);
+    setTimeout(() => setBrandSaved(false), 2000);
+    toast.success('Branding saved.');
+  }
+
+  type BachsResult = { connectedAccountId?: string; setupStatus?: string; transfersStatus?: string; payoutsStatus?: string; remaining?: BachsRemainingField[] };
+
+  function applyBachsResult(d: BachsResult) {
+    setBachsStatus((prev: any) => ({ ...prev, connectedAccountId: d.connectedAccountId ?? prev?.connectedAccountId, transfersStatus: d.transfersStatus, payoutsStatus: d.payoutsStatus, canCollectNaira: d.transfersStatus === 'active' }));
+    setBachsRemaining(d.remaining ?? []);
+    setBachsFieldValues({});
+    if (d.transfersStatus === 'active') toast.success('Naira payouts connected.');
+    else if ((d.remaining ?? []).length) toast('A few more details are needed to finish.');
+    else toast('Details submitted — your account is under review.');
+  }
+
+  // Checklist-driven: relays your existing KYB to Bachs, then surfaces any delta.
+  async function connectBachs() {
+    setBachsConnecting(true);
+    const res = await apiFetch<BachsResult>('/api/merchant/bachs/connect', { method: 'POST' });
+    setBachsConnecting(false);
+    if (!res.ok) { toast.error(res.error || 'Could not set up payouts.'); return; }
+    applyBachsResult(res.data);
+  }
+
+  async function submitBachsDetails() {
+    setBachsSubmitting(true);
+    const res = await apiFetch<BachsResult>('/api/merchant/bachs/onboarding/submit', { method: 'POST', body: JSON.stringify({ data: bachsFieldValues }) });
+    setBachsSubmitting(false);
+    if (!res.ok) { toast.error(res.error || 'Could not submit details.'); return; }
+    applyBachsResult(res.data);
+  }
+
   // Fetch banks
   useEffect(() => {
     fetch('/api/institutions?currency=NGN')
@@ -186,16 +273,20 @@ function SettingsContent() {
     fetch('/api/merchant/webhook')
       .then(r => r.ok ? r.json() : null)
       .then(resp => {
-        if (resp?.success && resp.data) {
-          setWebhookUrl(resp.data.url || '');
+        // The proxy unwraps the envelope and returns { url, hasSecret } directly;
+        // tolerate either shape so a stored URL always pre-fills the field.
+        const data = resp?.data ?? resp;
+        if (data && typeof data.url !== 'undefined') {
+          setWebhookUrl(data.url || '');
         }
       })
       .catch(() => {})
       .finally(() => setWebhookUrlLoading(false));
   }, []);
 
-  // Auto-resolve account name via Paystack — only when the user manually edits the fields,
-  // not on initial load (which already has the name from the server).
+  // Auto-resolve account name via Paycrest /verify-account — only when the user manually edits
+  // the fields, not on initial load (which already has the name from the server). Degrades
+  // gracefully to manual entry if resolution fails.
   useEffect(() => {
     if (!userEditedBankFields.current) return;
     if (bankAccountIdentifier.length !== 10 || !bankInstitution) return;
@@ -222,7 +313,10 @@ function SettingsContent() {
 
   async function regenerateKeys() {
     setRegenerating(true);
-    const result = await apiFetch<{ publishableKey?: string; publicKey?: string; secretKey?: string }>('/api/merchant/api-key', { method: 'POST' });
+    const result = await apiFetch<{ publishableKey?: string; publicKey?: string; secretKey?: string }>('/api/merchant/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'live' }),
+    });
     setRegenerating(false);
     if (!result.ok) {
       toast.error(result.error);
@@ -232,6 +326,25 @@ function SettingsContent() {
     setSecretKey(result.data.secretKey ?? null);
     setCopied(null);
     toast.success('New API keys generated. Copy your secret key now — it won’t be shown again.');
+  }
+
+  async function regenerateSandboxKeys() {
+    setRegeneratingSandbox(true);
+    const result = await apiFetch<{ publishableKey?: string; secretKey?: string }>('/api/merchant/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'sandbox' }),
+    });
+    setRegeneratingSandbox(false);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    // Regeneration rotates the sandbox publishable key too — keep the UI in sync.
+    setProfile((p) => p ? { ...p, sandboxPublishableKey: result.data.publishableKey ?? p.sandboxPublishableKey } : p);
+    setSandboxSecretKey(result.data.secretKey ?? null);
+    setSandboxSecretVisible(true);
+    setCopied(null);
+    toast.success('New sandbox keys generated. Copy your secret key now — it won’t be shown again.');
   }
 
   async function saveName() {
@@ -411,13 +524,15 @@ export default function CheckoutPage() {
             Manage your profile, API keys, webhooks, and checkout customisation.
           </p>
         </div>
-        <Link
-          href="/docs"
+        <a
+          href="https://docs.paywithweave.com"
+          target="_blank"
+          rel="noopener noreferrer"
           className="inline-flex items-center gap-2 self-start bg-cream-soft border border-hair hover:border-forest/30 text-forest-deep px-5 py-3 rounded-full text-[14px] font-medium transition-all shadow-leaf shrink-0"
         >
           <FileText size={15} strokeWidth={1.9} />
           API Docs
-        </Link>
+        </a>
       </div>
 
       {/* Tab bar */}
@@ -425,6 +540,8 @@ export default function CheckoutPage() {
         {([
           { id: 'profile',   label: 'Profile',    icon: User },
           { id: 'payouts',   label: 'Payouts',    icon: Landmark },
+          { id: 'branding',  label: 'Branding',   icon: Palette },
+          { id: 'webhooks',  label: 'Webhooks',   icon: Webhook },
           { id: 'developer', label: 'Developer',  icon: KeyRound },
         ] as const).map(({ id, label, icon: Icon }) => (
           <button
@@ -571,11 +688,11 @@ export default function CheckoutPage() {
           <Card delay={80}>
             <div className="flex items-center gap-3 mb-6 text-forest-deep">
               <Landmark size={18} strokeWidth={1.9} />
-              <h2 className="font-display text-[22px] font-semibold text-ink">Payout Destination</h2>
+              <h2 className="font-display text-[22px] font-semibold text-ink">Crypto Settlement</h2>
             </div>
-            
+
             <p className="text-[14px] text-ink-muted mb-6 leading-relaxed">
-              Choose how you want to receive funds. Your default destination will be used for all successful orders unless you override it in a specific checkout session.
+              How <span className="text-ink-soft font-medium">crypto</span> payments reach you. Any chain your customer pays from is bridged and settled here — to an NGN bank via Paycrest, or straight to a wallet. Naira card &amp; bank payments settle separately through <span className="text-ink-soft font-medium">Naira Payments</span>.
             </p>
 
             {payoutsLoading ? (
@@ -615,24 +732,19 @@ export default function CheckoutPage() {
                      <p className="text-[12px] text-ink-muted mb-2">Funds cross our bridging infrastructure and hit this NGN bank account directly via Paycrest.</p>
                      <div>
                        <label className="block text-[12px] font-medium text-ink-soft mb-1.5">Bank Institution</label>
-                       <div className="relative">
-                         <select 
-                           value={bankInstitution}
-                           onChange={(e) => { userEditedBankFields.current = true; setBankInstitution(e.target.value); }}
-                           className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl pl-4 pr-10 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 appearance-none"
-                         >
-                           <option value="" disabled>Select a bank</option>
-                           {banks.map((b) => (
-                             <option key={b.code} value={b.code}>{b.name}</option>
-                           ))}
-                           {bankInstitution && !banks.some(b => b.code === bankInstitution) && (
-                             <option value={bankInstitution}>{bankInstitution}</option>
-                           )}
-                         </select>
-                         <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-ink-muted">
-                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-                         </div>
-                       </div>
+                       <Select
+                         value={bankInstitution}
+                         onChange={(e) => { userEditedBankFields.current = true; setBankInstitution(e.target.value); }}
+                         className="w-full bg-cream-deep/50 border border-hair-soft rounded-xl pl-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40"
+                       >
+                         <option value="" disabled>Select a bank</option>
+                         {banks.map((b) => (
+                           <option key={b.code} value={b.code}>{b.name}</option>
+                         ))}
+                         {bankInstitution && !banks.some(b => b.code === bankInstitution) && (
+                           <option value={bankInstitution}>{bankInstitution}</option>
+                         )}
+                       </Select>
                      </div>
                      <div>
                        <label className="block text-[12px] font-medium text-ink-soft mb-1.5">Account Number</label>
@@ -704,22 +816,10 @@ export default function CheckoutPage() {
                    </div>
                 )}
 
-                {/* Paystack subaccount sync status — only shown for NGN bank accounts */}
-                {payoutKind === 'bank_account' && activePayout?.paystackSubaccountStatus && (
-                  <div className={`flex items-center gap-2 text-[12px] px-3 py-2 rounded-xl border ${
-                    activePayout.paystackSubaccountStatus === 'SYNCED'
-                      ? 'bg-forest/5 border-forest/20 text-forest-deep'
-                      : activePayout.paystackSubaccountStatus === 'FAILED'
-                      ? 'bg-red-50 border-red-200 text-red-700'
-                      : 'bg-amber-50 border-amber-200 text-amber-700'
-                  }`}>
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                      activePayout.paystackSubaccountStatus === 'SYNCED' ? 'bg-forest' :
-                      activePayout.paystackSubaccountStatus === 'FAILED' ? 'bg-red-500' : 'bg-amber-500'
-                    }`} />
-                    {activePayout.paystackSubaccountStatus === 'SYNCED' && 'Paystack settlement active — NGN payments route directly to your bank (T+1 business day)'}
-                    {activePayout.paystackSubaccountStatus === 'PENDING' && 'Paystack sync pending — save your payout details to activate NGN settlements'}
-                    {activePayout.paystackSubaccountStatus === 'FAILED' && 'Paystack sync failed — re-save your payout details to retry'}
+                {payoutKind === 'bank_account' && (
+                  <div className="flex items-start gap-2 text-[12px] px-3 py-2 rounded-xl border bg-cream-deep/40 border-hair-soft text-ink-muted">
+                    <Banknote size={14} className="flex-shrink-0 mt-0.5 text-ink-soft" />
+                    <span>Crypto payments land here as NGN via Paycrest (30s–2min). Collecting <span className="text-ink-soft font-medium">naira</span> directly? That settles through Naira Payments →</span>
                   </div>
                 )}
 
@@ -742,6 +842,230 @@ export default function CheckoutPage() {
               </div>
             )}
           </Card>
+
+          {/* Naira collection — Bachs Connect onboarding */}
+          {bachsStatus?.enabled && (
+            <Card delay={140}>
+              <div className="flex items-center gap-3 mb-6 text-forest-deep">
+                <Banknote size={18} strokeWidth={1.9} />
+                <h2 className="font-display text-[22px] font-semibold text-ink">Naira Payments</h2>
+              </div>
+
+              <p className="text-[14px] text-ink-muted mb-6 leading-relaxed">
+                Accept naira card &amp; bank payments settled straight to your own account — Weave never holds your funds. We reuse your existing business verification, so there&apos;s nothing to re-enter unless our processor needs something extra.
+              </p>
+
+              {(() => {
+                const active = bachsStatus?.canCollectNaira;
+                const started = !!bachsStatus?.connectedAccountId;
+
+                if (active) {
+                  return (
+                    <div className="rounded-xl border border-forest-light bg-forest-mist px-4 py-3.5 flex items-start gap-3">
+                      <Check size={18} className="text-forest mt-0.5 shrink-0" />
+                      <div className="text-[13px] text-forest-deep leading-relaxed">
+                        <span className="font-semibold">Connected.</span> Your account is active and ready to accept naira payments.
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Extra details our KYB didn't cover — surfaced from Bachs's checklist.
+                if (bachsRemaining.length > 0) {
+                  return (
+                    <div className="space-y-4">
+                      <p className="text-[13px] text-ink-soft">Just a few more details to finish setting up payouts:</p>
+                      {bachsRemaining.map(f => (
+                        <label key={f.fieldKey} className="block">
+                          <span className="text-[12px] font-semibold text-ink-soft">{f.label}</span>
+                          <input
+                            value={bachsFieldValues[f.fieldKey] ?? ''}
+                            onChange={e => setBachsFieldValues(v => ({ ...v, [f.fieldKey]: e.target.value }))}
+                            className="mt-1.5 w-full px-3.5 py-2.5 rounded-xl border border-hair-soft bg-white text-[14px] outline-none focus:border-forest"
+                          />
+                          {f.error && <span className="text-[12px] text-terracotta">{f.error}</span>}
+                        </label>
+                      ))}
+                      <button onClick={submitBachsDetails} disabled={bachsSubmitting}
+                        className="px-6 py-2.5 rounded-full bg-forest text-cream-soft hover:bg-forest-deep transition-all text-[14px] font-medium disabled:opacity-50">
+                        {bachsSubmitting ? 'Submitting…' : 'Submit details'}
+                      </button>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-4">
+                    {started && (
+                      <div className="rounded-xl border border-hair-strong bg-tan-mist px-4 py-3.5 flex items-start gap-3">
+                        <AlertTriangle size={17} className="text-tan-deep mt-0.5 shrink-0" />
+                        <div className="text-[13px] text-tan-deep leading-relaxed">Your details are under review. This usually clears shortly — check back soon.</div>
+                      </div>
+                    )}
+                    <button onClick={connectBachs} disabled={bachsConnecting}
+                      className="px-6 py-2.5 rounded-full bg-forest text-cream-soft hover:bg-forest-deep transition-all text-[14px] font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                      {bachsConnecting ? 'Connecting…' : (started ? 'Refresh status' : 'Connect naira payouts')}
+                    </button>
+                  </div>
+                );
+              })()}
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* ── Branding tab ─────────────────────────────────────────────────── */}
+      {activeTab === 'branding' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 fade-up">
+          <Card delay={80}>
+            <div className="flex items-center gap-3 mb-2 text-forest-deep">
+              <Palette size={18} strokeWidth={1.9} />
+              <h2 className="font-display text-[22px] font-semibold text-ink">Branding</h2>
+            </div>
+            <p className="text-[14px] text-ink-muted mb-6 leading-relaxed">
+              Theme your hosted <b>cash-out pages</b> so they read as your own offramp. These apply to every payout link you share.
+            </p>
+
+            <div className="space-y-4">
+              <BrandImageUpload label="Logo" value={brand.logoUrl || ''} onChange={v => setBrandField('logoUrl', v)} />
+              <BrandField label="Display name" value={brand.displayName || ''} onChange={v => setBrandField('displayName', v)} placeholder="Your brand name" />
+              <BrandField label="Headline" value={brand.headline || ''} onChange={v => setBrandField('headline', v)} placeholder="Withdraw your crypto" />
+              <BrandField label="Subheadline" value={brand.subheadline || ''} onChange={v => setBrandField('subheadline', v)} placeholder="Cash out to your bank in minutes" />
+              <BrandImageUpload label="Background image (optional)" value={brand.bgImageUrl || ''} onChange={v => setBrandField('bgImageUrl', v)} />
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">Accent color</label>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input type="color" value={brand.accentColor || '#3D6B50'} onChange={e => setBrandField('accentColor', e.target.value)} className="w-10 h-10 rounded-lg border border-hair cursor-pointer bg-white" />
+                    <input value={brand.accentColor || ''} onChange={e => setBrandField('accentColor', e.target.value)} placeholder="#3D6B50" className="flex-1 px-3 py-2 rounded-xl border border-hair-soft bg-white text-[13px] outline-none focus:border-forest" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">Background color</label>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input type="color" value={brand.bgColor || '#F5EFE0'} onChange={e => setBrandField('bgColor', e.target.value)} className="w-10 h-10 rounded-lg border border-hair cursor-pointer bg-white" />
+                    <input value={brand.bgColor || ''} onChange={e => setBrandField('bgColor', e.target.value)} placeholder="#F5EFE0" className="flex-1 px-3 py-2 rounded-xl border border-hair-soft bg-white text-[13px] outline-none focus:border-forest" />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">Font</label>
+                <Select value={brand.font || 'system'} onChange={e => setBrandField('font', e.target.value)} className="w-full pl-3.5 py-2.5 rounded-xl border border-hair-soft bg-white text-[14px] outline-none focus:border-forest" wrapperClassName="mt-2">
+                  {BRAND_FONT_KEYS.map(k => <option key={k} value={k}>{BRAND_FONTS[k].label}</option>)}
+                </Select>
+              </div>
+
+              <div className="pt-4 border-t border-hair-soft">
+                <button onClick={saveBrand} disabled={brandSaving}
+                  className="px-6 py-2.5 rounded-full bg-forest text-cream-soft hover:bg-forest-deep transition-all text-[14px] font-medium disabled:opacity-50 flex items-center gap-2">
+                  {brandSaved ? <><Check size={16}/> Saved</> : (brandSaving ? 'Saving…' : 'Save branding')}
+                </button>
+              </div>
+            </div>
+          </Card>
+
+          {/* Live preview */}
+          <Card delay={140}>
+            <h2 className="font-display text-[16px] font-semibold text-ink mb-4">Preview</h2>
+            <div className="rounded-2xl overflow-hidden border border-hair-soft" style={{ fontFamily: fontStack(brand.font) }}>
+              <div style={{ background: brand.bgImageUrl ? `center/cover url(${brand.bgImageUrl})` : (brand.bgColor || '#F5EFE0'), padding: '28px 22px' }}>
+                <div className="flex items-center gap-2 mb-6">
+                  {brand.logoUrl
+                    ? <img src={brand.logoUrl} alt="" style={{ height: 26, maxWidth: 130, objectFit: 'contain' }} />
+                    : <div style={{ width: 28, height: 28, borderRadius: '50%', background: brand.accentColor || '#3D6B50', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13 }}>{(brand.displayName || 'W').charAt(0).toUpperCase()}</div>}
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#1C1B17' }}>{brand.displayName || 'Your brand'}</span>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#1C1B17' }}>{brand.headline || 'Withdraw your crypto'}</div>
+                  <div style={{ fontSize: 12.5, color: '#7C7568', marginTop: 4 }}>{brand.subheadline || 'Cash out to your bank'}</div>
+                  <div style={{ marginTop: 16, background: '#fff', border: '1px solid #E2D9C0', borderRadius: 14, padding: 14 }}>
+                    <div style={{ height: 8, background: '#EFE7D3', borderRadius: 4, marginBottom: 10 }} />
+                    <div style={{ height: 8, background: '#EFE7D3', borderRadius: 4, width: '70%', marginBottom: 14 }} />
+                    <div style={{ background: brand.accentColor || '#3D6B50', color: '#fff', borderRadius: 10, padding: '9px 0', fontSize: 12.5, fontWeight: 600 }}>Continue</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p className="text-[12px] text-ink-muted mt-3">This is roughly how <code className="text-[11px]">/cashout/…</code> will look to your users.</p>
+          </Card>
+        </div>
+      )}
+
+      {/* ── Webhooks tab ─────────────────────────────────────────────────── */}
+      {activeTab === 'webhooks' && (
+        <div className="space-y-6">
+          {/* Endpoint configuration */}
+          <Card delay={60}>
+            <div className="flex items-center gap-2.5 mb-2 text-forest-deep">
+              <Webhook size={18} strokeWidth={1.9} />
+              <h2 className="font-display text-[22px] font-semibold text-ink">Webhooks</h2>
+            </div>
+            <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
+              Weave sends a POST request with an HMAC-SHA256 signature to this URL whenever an order status
+              changes. Add a URL to start receiving events, or clear it to turn webhooks off. Failed deliveries
+              are retried automatically.
+            </p>
+
+            <div className="space-y-6">
+              <div>
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Endpoint URL
+                </label>
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  <input
+                    type="url"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://your-api.com/webhooks/weave"
+                    disabled={webhookUrlLoading}
+                    className="flex-1 min-w-0 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
+                  />
+                  <button
+                    onClick={saveWebhook}
+                    disabled={savingWebhook || webhookUrlLoading}
+                    className="h-11 px-5 rounded-xl bg-forest text-cream-soft hover:bg-forest-deep flex items-center justify-center transition-all disabled:opacity-40 text-[13px] font-medium"
+                  >
+                    {webhookSaved ? <Check size={16} strokeWidth={2.3} /> : (savingWebhook ? 'Saving...' : 'Save')}
+                  </button>
+                  <button
+                    onClick={sendTestEvent}
+                    disabled={sendingTest || !webhookUrl || webhookUrlLoading}
+                    className="h-11 px-5 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-medium transition-all disabled:opacity-40 flex items-center gap-2"
+                  >
+                    {sendingTest ? 'Sending...' : 'Send Test'}
+                  </button>
+                  {testResult !== null && (
+                    <span className={`text-[12px] font-medium px-3 py-1.5 rounded-lg ${testResult.ok ? 'bg-forest-surface text-forest-deep' : 'bg-terracotta-soft text-terracotta'}`}>
+                      {testResult.ok ? `Delivered · ${testResult.status}` : `Failed · ${testResult.status || 'no response'}`}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-5 border-t border-hair-soft">
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Signing Secret
+                </label>
+                <div className="mt-2 flex flex-col sm:flex-row items-center gap-3">
+                  <div className="flex-1 w-full bg-cream-deep/30 border border-hair-soft border-dashed rounded-xl px-4 py-3 text-[13px] text-ink-muted flex items-center gap-2">
+                    <Shield size={14} />
+                    <span>HMAC-SHA256 signature active</span>
+                  </div>
+                  <button
+                    onClick={rotateSecret}
+                    disabled={rotatingSecret}
+                    className="w-full sm:w-auto px-5 py-3 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-semibold transition-all"
+                  >
+                    {rotatingSecret ? 'Rotating...' : 'Rotate Secret'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <WebhookDeliveries />
         </div>
       )}
 
@@ -828,7 +1152,7 @@ export default function CheckoutPage() {
             </div>
 
             <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
-              Use the sandbox key during development. Orders created with this key never trigger real payments — they auto-complete instantly with mock amounts.
+              Use the sandbox keys during development — no real funds move. The <span className="font-mono text-ink-soft">pk_test_</span> key powers the widget; pair it with the <span className="font-mono text-ink-soft">sk_test_</span> secret to drive checkout sessions and orders server-side from your backend.
             </p>
 
             <div className="space-y-4">
@@ -839,11 +1163,53 @@ export default function CheckoutPage() {
                 onCopy={() => profile?.sandboxPublishableKey && copy('sandbox-pub', profile.sandboxPublishableKey)}
                 copied={copied === 'sandbox-pub'}
               />
+
+              <div>
+                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
+                  Sandbox Secret Key
+                </label>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="flex-1 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 font-mono text-[13px] text-ink-soft truncate">
+                    {sandboxSecretKey
+                      ? (sandboxSecretVisible ? sandboxSecretKey : '••••••••••••••••••••')
+                      : 'Not available — regenerate to receive a new key'}
+                  </div>
+                  <button
+                    onClick={() => setSandboxSecretVisible((v) => !v)}
+                    className="w-11 h-11 rounded-xl bg-cream-deep/50 border border-hair-soft hover:border-forest/30 flex items-center justify-center text-ink-soft hover:text-forest-deep transition-all disabled:opacity-40"
+                    aria-label="Toggle visibility"
+                    disabled={!sandboxSecretKey}
+                  >
+                    {sandboxSecretVisible ? <EyeOff size={15} strokeWidth={1.9} /> : <Eye size={15} strokeWidth={1.9} />}
+                  </button>
+                  <button
+                    onClick={() => sandboxSecretKey && copy('sandbox-secret', sandboxSecretKey)}
+                    className="w-11 h-11 rounded-xl bg-cream-deep/50 border border-hair-soft hover:border-forest/30 flex items-center justify-center text-ink-soft hover:text-forest-deep transition-all disabled:opacity-40"
+                    aria-label="Copy"
+                    disabled={!sandboxSecretKey}
+                  >
+                    {copied === 'sandbox-secret' ? <Check size={15} strokeWidth={2.2} className="text-forest" /> : <Copy size={15} strokeWidth={1.9} />}
+                  </button>
+                </div>
+                {!sandboxSecretKey && (
+                  <p className="mt-2 text-[12px] text-ink-muted leading-snug">
+                    The sandbox secret is only shown once at signup or after regeneration. Regenerate to get a new one.
+                  </p>
+                )}
+              </div>
+
+              <button
+                onClick={regenerateSandboxKeys}
+                disabled={regeneratingSandbox}
+                className="w-full mt-1 py-3 rounded-full border border-amber-400/50 text-amber-700 font-semibold text-[14px] hover:bg-amber-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {regeneratingSandbox ? 'Regenerating…' : 'Regenerate Sandbox Keys'}
+              </button>
             </div>
 
             <div className="mt-5 p-4 bg-amber-50/70 border border-amber-200/60 rounded-2xl">
               <p className="text-[12px] text-amber-800 leading-relaxed">
-                <strong>Sandbox orders</strong> are isolated — they appear in your dashboard with a sandbox badge and are excluded from revenue metrics.
+                <strong>Sandbox orders</strong> are isolated — they appear in your dashboard with a sandbox badge and are excluded from revenue metrics. Regenerating rotates <em>both</em> sandbox keys and invalidates the old pair.
               </p>
             </div>
           </Card>
@@ -924,76 +1290,6 @@ export default function CheckoutPage() {
                     onError={() => {}}
                     onClose={() => {}}
                   />
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Webhooks */}
-          <Card delay={160}>
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2.5 text-forest-deep">
-                <Webhook size={18} strokeWidth={1.9} />
-                <h2 className="font-display text-[22px] font-semibold text-ink">Webhooks</h2>
-              </div>
-            </div>
-
-            <p className="text-[13px] text-ink-muted mb-5 leading-relaxed">
-              Weave will send a POST request with HMAC-SHA256 signature to this URL whenever an order status changes.
-            </p>
-
-            <div className="space-y-6">
-              <div>
-                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
-                  Endpoint URL
-                </label>
-                <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  <input
-                    type="url"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    placeholder="https://your-api.com/webhooks/weave"
-                    disabled={webhookUrlLoading}
-                    className="flex-1 min-w-0 bg-cream-deep/50 border border-hair-soft rounded-xl px-4 py-3 text-[14px] text-ink focus:outline-none focus:border-forest/40 transition-colors"
-                  />
-                  <button
-                    onClick={saveWebhook}
-                    disabled={savingWebhook || webhookUrlLoading}
-                    className="h-11 px-5 rounded-xl bg-forest text-cream-soft hover:bg-forest-deep flex items-center justify-center transition-all disabled:opacity-40 text-[13px] font-medium"
-                  >
-                    {webhookSaved ? <Check size={16} strokeWidth={2.3} /> : (savingWebhook ? 'Saving...' : 'Save')}
-                  </button>
-                  <button
-                    onClick={sendTestEvent}
-                    disabled={sendingTest || !webhookUrl || webhookUrlLoading}
-                    className="h-11 px-5 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-medium transition-all disabled:opacity-40 flex items-center gap-2"
-                  >
-                    {sendingTest ? 'Sending...' : 'Send Test'}
-                  </button>
-                  {testResult !== null && (
-                    <span className={`text-[12px] font-medium px-3 py-1.5 rounded-lg ${testResult.ok ? 'bg-forest-surface text-forest-deep' : 'bg-terracotta-soft text-terracotta'}`}>
-                      {testResult.ok ? `Delivered · ${testResult.status}` : `Failed · ${testResult.status || 'no response'}`}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="pt-5 border-t border-hair-soft">
-                <label className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">
-                  Signing Secret
-                </label>
-                <div className="mt-2 flex flex-col sm:flex-row items-center gap-3">
-                  <div className="flex-1 w-full bg-cream-deep/30 border border-hair-soft border-dashed rounded-xl px-4 py-3 text-[13px] text-ink-muted flex items-center gap-2">
-                    <Shield size={14} />
-                    <span>HMAC-SHA256 signature active</span>
-                  </div>
-                  <button
-                    onClick={rotateSecret}
-                    disabled={rotatingSecret}
-                    className="w-full sm:w-auto px-5 py-3 rounded-xl border border-hair hover:border-forest/30 text-forest-deep text-[13px] font-semibold transition-all"
-                  >
-                    {rotatingSecret ? 'Rotating...' : 'Rotate Secret'}
-                  </button>
                 </div>
               </div>
             </div>
@@ -1193,6 +1489,68 @@ export default function CheckoutPage() {
   );
 }
 // ── Sub-components ────────────────────────────────────────────────────────────
+
+// Signed PUBLIC upload of a brand asset to Cloudinary → returns the secure_url.
+async function uploadBrandImage(file: File): Promise<string> {
+  const signRes = await fetch('/api/cloudinary-sign-brand', { method: 'POST' });
+  if (!signRes.ok) throw new Error('Could not start upload');
+  const { timestamp, signature, apiKey, cloudName, folder } = await signRes.json();
+  const data = new FormData();
+  data.append('file', file);
+  data.append('timestamp', String(timestamp));
+  data.append('signature', signature);
+  data.append('api_key', apiKey);
+  data.append('folder', folder);
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, { method: 'POST', body: data });
+  if (!res.ok) throw new Error('Upload failed');
+  const json = await res.json();
+  return json.secure_url as string;
+}
+
+function BrandImageUpload({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const [uploading, setUploading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { toast.error('Please choose an image under 3MB.'); return; }
+    setUploading(true);
+    try { onChange(await uploadBrandImage(file)); toast.success(`${label} uploaded.`); }
+    catch (err: any) { toast.error(err.message || 'Upload failed.'); }
+    finally { setUploading(false); }
+  }
+
+  return (
+    <div>
+      <span className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">{label}</span>
+      <input ref={inputRef} type="file" accept="image/*" hidden onChange={onFile} />
+      {value ? (
+        <div className="mt-1.5 flex items-center gap-3">
+          <img src={value} alt={label} className="w-14 h-14 rounded-xl object-contain bg-cream-deep/40 border border-hair-soft" />
+          <button onClick={() => inputRef.current?.click()} disabled={uploading} className="text-[13px] font-medium text-forest-deep hover:underline disabled:opacity-50">{uploading ? 'Uploading…' : 'Replace'}</button>
+          <button onClick={() => onChange('')} disabled={uploading} className="text-[13px] text-ink-muted hover:text-terracotta">Remove</button>
+        </div>
+      ) : (
+        <button onClick={() => inputRef.current?.click()} disabled={uploading}
+          className="mt-1.5 w-full py-4 rounded-xl border border-dashed border-hair-strong bg-cream-deep/30 text-[13px] text-ink-muted hover:border-forest hover:text-forest-deep transition-colors disabled:opacity-50">
+          {uploading ? 'Uploading…' : `↑ Upload ${label.toLowerCase()}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function BrandField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <label className="block">
+      <span className="text-[12px] font-semibold text-ink-soft uppercase tracking-widest">{label}</span>
+      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        className="mt-1.5 w-full px-3.5 py-2.5 rounded-xl border border-hair-soft bg-white text-[14px] outline-none focus:border-forest" />
+    </label>
+  );
+}
 
 function Card({ children, className = '', delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
   return (

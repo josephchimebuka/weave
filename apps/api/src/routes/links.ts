@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { requireAuth } from '../middleware/auth';
 import { linkCreationLimiter, apiLimiter } from '../middleware/rate-limit';
+import { recordMerchantAudit } from '../services/audit.service';
 
 const router = Router();
 
@@ -51,6 +52,12 @@ router.post('/', requireAuth, linkCreationLimiter, async (req, res) => {
         asset,
         isActive: true,
       },
+    });
+
+    recordMerchantAudit(req, 'link.created', {
+      targetType: 'payment_link',
+      targetId: link.id,
+      metadata: { title, asset, amount: parseFloat(String(amount)) },
     });
 
     return res.json({ success: true, data: link });
@@ -131,6 +138,20 @@ router.patch('/:id', requireAuth, async (req, res) => {
       },
     });
 
+    // Record which fields changed. Toggling active/inactive is called out
+    // explicitly since it's the most consequential edit.
+    const changed: string[] = [];
+    if (title !== undefined) changed.push('title');
+    if (description !== undefined) changed.push('description');
+    if (amount !== undefined) changed.push('amount');
+    if (asset !== undefined) changed.push('asset');
+    if (isActive !== undefined) changed.push(isActive ? 'activated' : 'deactivated');
+    recordMerchantAudit(req, 'link.updated', {
+      targetType: 'payment_link',
+      targetId: link.id,
+      metadata: { title: link.title, changed },
+    });
+
     return res.json({ success: true, data: link });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
@@ -147,6 +168,11 @@ router.delete('/:id', requireAuth, async (req, res) => {
     if (!existing) return res.status(404).json({ success: false, error: 'Link not found' });
 
     await prisma.paymentLink.delete({ where: { id: req.params.id } });
+    recordMerchantAudit(req, 'link.deleted', {
+      targetType: 'payment_link',
+      targetId: req.params.id,
+      metadata: { title: existing.title },
+    });
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });

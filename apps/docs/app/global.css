@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/* Tailwind v4 needs to see fumadocs-ui's classes to generate them. */
+@source '../node_modules/fumadocs-ui/dist/**/*.js';
+
+/* Weave brand accent on the Fumadocs primary token (links, active states).
+   NOTE: do NOT override --color-fd-accent — Fumadocs uses it as the hover/active
+   *background* (e.g. Card's `hover:bg-fd-accent`), paired with
+   --color-fd-accent-foreground. A fixed value there flashes wrong in dark mode
+   and breaks hover text contrast. Leave it to the theme. */
+:root {
+  --color-fd-primary: #0f5d4c;
+}
+
+.dark {
+  --color-fd-primary: #4fb090;
+}
+
+/* Fumadocs 16's top mobile-nav header relies on container-query variants
+   (`md:hidden`) that don't get a container context in this setup, so it renders
+   as a clipped 1px sliver (with a stray border/title) at the top of the content
+   on desktop. The sidebar already carries the "Weave" title + full nav, so the
+   top header is redundant — remove it entirely. */
+[class*='grid-area:header'] {
+  display: none !important;
+}

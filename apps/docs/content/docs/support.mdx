@@ -1,0 +1,45 @@
+---
+title: Support
+description: How to reach Weave support, find answers in the FAQ, and prepare before filing a ticket.
+---
+
+The fastest path to an answer depends on the question. Pick the right channel below — and check the FAQ first; most integration issues are covered there.
+
+## Channels
+
+**Email support** — Integration help, account issues, billing questions. Responses within one business day. [hello@dewdroplabs.com](mailto:hello@dewdroplabs.com)
+
+**Status & incidents** — Subscribe to provider incidents that affect Bachs, Paycrest, ChainRails, and NEAR Intents corridors. [hello@dewdroplabs.com](mailto:hello@dewdroplabs.com)
+
+**Security disclosures** — Private channel for vulnerability reports. Do not file these as regular tickets. [admin@dewdroplabs.com](mailto:admin@dewdroplabs.com)
+
+**Custom corridor** — Need a chain, token, or fiat rail Weave does not currently route? Tell us about your volume and we will scope it. [steven@dewdroplabs.com](mailto:steven@dewdroplabs.com)
+
+## FAQ
+
+### My webhook signature does not match — what changed?
+
+Most often: middleware re-serialised the JSON body before you hashed it. Hash the raw bytes. Also confirm you are concatenating `{timestamp}.{rawBody}` (with a literal dot) and stripping the `sha256=` prefix from the header.
+
+### Order is stuck in awaiting_deposit
+
+`GET /orders/:id` forces a live sync against the active provider — call it once before raising a ticket. If the order is still stuck after 10 minutes past the corridor SLA, file a support ticket with the order ID.
+
+### I rotated my secret key — old integrations stopped working
+
+That is expected. Rotation invalidates the previous secret immediately. Update every server that signs requests, then re-deploy. The publishable key is unaffected.
+
+### Can I change a settled order?
+
+No. Once an order reaches completed the route is finalised and the funds have left Weave. Refunds must be issued out-of-band by you to the customer.
+
+### Why is my sandbox order missing from /orders?
+
+List endpoints filter on the auth context. Sandbox orders only show when the same `/orders` call is authenticated with `pk_test_` — switch keys (or pass the sandbox key) to see them.
+
+## Before you file a ticket
+
+- Include the **order ID** (and reference if you set one).
+- Note whether you are on `pk_live_` or `pk_test_`.
+- Try `GET /orders/:id` once — it forces a live sync and may resolve the issue.
+- For webhook problems, attach the request headers and raw body received by your endpoint.

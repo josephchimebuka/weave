@@ -1,9 +1,12 @@
 import { Router, Request, Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { qstashReceiver } from '../lib/qstash';
 import { prisma } from '../lib/prisma';
-import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll } from '../services/executor.service';
+import { markStepDone, markStepFailed, syncAllOpenOrders, syncOrder, scheduleNearPoll, runBachsSplit, scheduleBachsSettle, runBachsWithdrawal, scheduleBachsPayout } from '../services/executor.service';
 import { webhookService } from '../services/webhook.service';
+import { sendMerchantPaymentNotification, sendCustomerReceiptEmail, sendAdminKYBNotification } from '../services/email.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
+import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
 import { findMatchingPayment, scheduleStellarPoll, STELLAR_POLL_MAX_ATTEMPTS } from '../services/stellar.service';
 
 const router = Router();
@@ -83,7 +86,7 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
 
     if (!step) return res.status(200).json({ skipped: true, reason: 'no step found' });
 
-    await markStepDone({ provider: 'paystack', externalId: step.externalId! });
+    await markStepDone({ provider: 'paystack', externalId: step.externalId!, paymentChannel: data?.channel ?? null });
 
     await prisma.webhookLog.upsert({
       where: logKey,
@@ -92,6 +95,104 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
     });
 
     return res.json({ success: true });
+  }
+
+  // ── Bachs Connect (NGN collect → split) ────────────────────────────────────
+  if (source === 'bachs') {
+    // `data` is the full webhook envelope { id, type, account?, data }.
+    const evt = data?.data ?? {};
+
+    if (event === 'collection.succeeded') {
+      const checkoutId = String(evt?.checkout_id ?? '');
+      const chargeId   = String(evt?.charge_id ?? '');
+      if (!checkoutId) return res.status(200).json({ skipped: true, reason: 'missing checkout_id' });
+
+      const logKey = { source_event_externalId: { source, event, externalId: checkoutId } };
+      const existing = await prisma.webhookLog.findUnique({ where: logKey });
+      if (existing?.processed) return res.status(200).json({ skipped: true, reason: 'already processed' });
+
+      const step = await prisma.routeStep.findFirst({
+        where: { provider: 'bachs', externalId: checkoutId, sequence: 0 },
+        select: { id: true, orderId: true, order: { select: { sandboxMode: true } } },
+      });
+      if (!step) return res.status(200).json({ skipped: true, reason: 'no collection step found' });
+
+      // Tag the collection step with the charge id (= transfer_group for the
+      // split + reconciliation).
+      if (chargeId) {
+        await prisma.routeStep.update({ where: { id: step.id }, data: { transferGroup: chargeId } });
+      }
+
+      // Collection done → single-step order COMPLETES. Sandbox orders MOCK the split +
+      // payout (no live money) exactly like syncOrder does; only LIVE orders schedule
+      // the real deferred split. This keeps a sandbox webhook from ever driving a live
+      // transfer even if it reaches this handler.
+      await markStepDone({ provider: 'bachs', externalId: checkoutId });
+      if (step.order.sandboxMode) {
+        await prisma.order.update({
+          where: { id: step.orderId },
+          data:  { bachsSplitStatus: 'settled', bachsSplitAt: new Date(), bachsPayoutStatus: 'paid', bachsPayoutAt: new Date() },
+        });
+      } else {
+        await prisma.order.update({ where: { id: step.orderId }, data: { bachsSplitStatus: 'pending' } });
+        await scheduleBachsSettle({ orderId: step.orderId, attempt: 1 });
+      }
+
+      await prisma.webhookLog.upsert({
+        where: logKey,
+        create: { orderId: step.orderId, source, event, externalId: checkoutId, payload: data, processed: true },
+        update: { processed: true },
+      });
+      return res.json({ success: true });
+    }
+
+    if (event === 'collection.failed') {
+      const checkoutId = String(evt?.checkout_id ?? '');
+      if (!checkoutId) return res.status(200).json({ skipped: true, reason: 'missing checkout_id' });
+      await markStepFailed({ provider: 'bachs', externalId: checkoutId });
+      return res.json({ success: true });
+    }
+
+    if (event === 'transfer.created') {
+      // Split-settled backup: runBachsSplit persists this synchronously, but if it
+      // created the transfer at Bachs then crashed before persisting, this webhook
+      // records it. Match the order by transfer_group (= the charge id we tagged
+      // on the collection step). Idempotent.
+      const transferId    = String(evt?.id ?? '');
+      const transferGroup = String(evt?.transfer_group ?? '');
+      if (!transferId || !transferGroup) return res.status(200).json({ skipped: true, reason: 'missing transfer fields' });
+
+      const step = await prisma.routeStep.findFirst({
+        where: { provider: 'bachs', transferGroup, sequence: 0 },
+        select: { orderId: true },
+      });
+      if (step) {
+        await prisma.order.updateMany({
+          where: { id: step.orderId, bachsSplitStatus: { not: 'settled' } },
+          data:  { bachsSplitStatus: 'settled', bachsSplitTransferId: transferId, bachsSplitAt: new Date() },
+        });
+      }
+      return res.json({ success: true });
+    }
+
+    if (event === 'capability.updated') {
+      // Connect event: the origin is the connected account (top-level `account`).
+      const accountId  = String(data?.account ?? evt?.account ?? '');
+      const capability = String(evt?.capability ?? '');
+      const status     = String(evt?.status ?? '');
+      const field = capability === 'transfers' ? 'bachsTransfersStatus'
+                  : capability === 'payouts'   ? 'bachsPayoutsStatus'
+                  : null;
+      if (accountId && field) {
+        await prisma.merchant.updateMany({
+          where: { bachsConnectedAccountId: accountId },
+          data:  { [field]: status },
+        });
+      }
+      return res.json({ success: true });
+    }
+
+    return res.status(200).json({ skipped: true, reason: 'unhandled bachs event' });
   }
 
   // ── Paycrest + ChainRails ──────────────────────────────────────────────────
@@ -163,15 +264,99 @@ router.post('/process-webhook', verifyQStash, async (req, res) => {
 // ── Outgoing Webhook Job ────────────────────────────────────────────────────
 
 router.post('/dispatch-outgoing', verifyQStash, async (req, res) => {
-  const { merchantId, event } = req.body;
+  const { deliveryId, merchantId, event } = req.body;
 
   try {
-    await webhookService.dispatch(merchantId, event);
+    if (deliveryId) {
+      await webhookService.dispatch(deliveryId);
+    } else if (merchantId && event) {
+      // Back-compat: messages enqueued before delivery tracking carried the raw
+      // { merchantId, event }. Materialize a delivery row, then dispatch it.
+      const merchant = await prisma.merchant.findUnique({
+        where: { id: merchantId },
+        select: { webhookUrl: true, webhookSecret: true },
+      });
+      if (merchant?.webhookUrl && merchant.webhookSecret) {
+        const d = await prisma.webhookDelivery.create({
+          data: {
+            merchantId,
+            orderId: event?.data?.id ?? null,
+            event:   event.event,
+            url:     merchant.webhookUrl,
+            payload: event,
+            status:  'retrying',
+            attempts: 0,
+          },
+        });
+        await webhookService.dispatch(d.id);
+      }
+    }
     res.json({ success: true });
   } catch (error: any) {
     // Return 500 so QStash automatically retries based on your QStash configuration
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// ── Order-completed notifications (merchant email + customer receipt + webhook) ──
+// Fired once by executor.service.ts right after an order transitions to
+// 'completed'. Runs through QStash (rather than in-process fire-and-forget) so a
+// transient DB blip during any of the three steps gets a real retry instead of
+// silently dropping the notification forever.
+router.post('/notify-order-completed', verifyQStash, async (req, res) => {
+  const { orderId } = req.body as { orderId: string };
+  if (!orderId) return res.status(400).json({ error: 'missing orderId' });
+
+  const [merchantEmailOk, customerEmailOk] = await Promise.all([
+    sendMerchantPaymentNotification(orderId),
+    sendCustomerReceiptEmail(orderId),
+  ]);
+
+  let webhookOk = true;
+  try {
+    await webhookService.triggerPaymentSucceeded(orderId);
+  } catch (err: any) {
+    webhookOk = false;
+    console.error(`[jobs] notify-order-completed: webhook trigger failed for order ${orderId}:`, err.message);
+  }
+
+  if (!merchantEmailOk || !customerEmailOk || !webhookOk) {
+    // This handler returns 500 itself (for QStash retry) rather than throwing,
+    // so it never reaches Sentry's Express handler — capture explicitly. This
+    // is exactly the class of silent failure that dropped notifications before.
+    Sentry.captureMessage('notify-order-completed: a notification step failed', {
+      level: 'error',
+      tags: { job: 'notify-order-completed' },
+      extra: { orderId, merchantEmailOk, customerEmailOk, webhookOk },
+    });
+    // Return 500 so QStash retries the whole job. Steps that already succeeded
+    // are cheap/harmless to re-run (at worst, a duplicate transactional email) —
+    // far preferable to the previous silent, permanent drop.
+    return res.status(500).json({ success: false, merchantEmailOk, customerEmailOk, webhookOk });
+  }
+  res.json({ success: true });
+});
+
+// ── Admin KYB notification (reliable delivery) ──────────────────────────────
+// Enqueued by POST /verification/submit. The admin alert MUST land (it carries
+// the review magic link), so it runs here behind QStash retries rather than as
+// an in-process fire-and-forget that dies on the first transient Resend blip.
+router.post('/notify-admin-kyb', verifyQStash, async (req, res) => {
+  const { verificationId } = req.body as { verificationId: string };
+  if (!verificationId) return res.status(400).json({ error: 'missing verificationId' });
+
+  const ok = await sendAdminKYBNotification(verificationId);
+  if (!ok) {
+    Sentry.captureMessage('notify-admin-kyb: admin KYB email failed to send', {
+      level: 'error',
+      tags: { job: 'notify-admin-kyb' },
+      extra: { verificationId },
+    });
+    // 500 → QStash retries. Re-sending is harmless (at worst a duplicate admin
+    // email) and far better than permanently dropping the review link.
+    return res.status(500).json({ success: false });
+  }
+  res.json({ success: true });
 });
 
 // ── NEAR per-step poll (event-driven) ───────────────────────────────────────
@@ -217,6 +402,14 @@ router.post('/poll-near-step', verifyQStash, async (req, res) => {
     if (outcome === 'failed' || outcome === 'refunded') {
       await markStepFailed({ provider: 'nearintents', externalId: depositAddress, depositMemo: depositMemo ?? null, isRefund: outcome === 'refunded' });
       return res.json({ success: true, outcome });
+    }
+
+    // Deposit seen but swap not yet complete → mark in-flight so the timeline
+    // gets a "deposit detected" moment (markStepProgress emits it once, guarded).
+    // NEAR is poll-only with no webhook, so this is the only place to catch it.
+    if (['KNOWN_DEPOSIT_TX', 'PROCESSING', 'INCOMPLETE_DEPOSIT'].includes(status.status)) {
+      const { markStepProgress } = await import('../services/executor.service');
+      await markStepProgress({ provider: 'nearintents', externalId: depositAddress, depositMemo: depositMemo ?? null });
     }
 
     // Still pending — re-schedule the next check.
@@ -275,7 +468,7 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
   res.json({ success: true, count: openSteps.length });
 });
 
-// ── Stellar per-step poll (Horizon payment detection) ─────────────────────────
+// ── Stellar per-step poll (Horizon payment detection) ───────────────────────
 
 router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
   const { orderId, memo, expectedAmount, attempt } = req.body as {
@@ -335,6 +528,153 @@ router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
     }
     return res.json({ success: true, rescheduled: true, error: err.message });
   }
+});
+
+// ── Paystack subaccount re-sync (background retry) ──────────────────────────
+// Scheduled by schedulePaystackSyncRetry when a setup-time sync fails, so a
+// transient Paystack blip self-heals before any customer reaches checkout.
+// Re-enqueues itself on the backoff schedule until SYNCED or the schedule runs out.
+
+router.post('/retry-paystack-sync', verifyQStash, async (req, res) => {
+  const { merchantId, attempt } = req.body as { merchantId: string; attempt: number };
+  if (!merchantId) {
+    return res.status(400).json({ error: 'missing merchantId' });
+  }
+
+  const merchant = await prisma.merchant.findUnique({
+    where:  { id: merchantId },
+    select: { paystackSubaccountStatus: true },
+  });
+  if (!merchant) {
+    return res.json({ success: true, stopped: true, reason: 'merchant not found' });
+  }
+  if (merchant.paystackSubaccountStatus === 'SYNCED') {
+    return res.json({ success: true, stopped: true, reason: 'already synced' });
+  }
+
+  try {
+    await syncPaystackSubaccount(merchantId);
+    return res.json({ success: true, synced: true, attempt });
+  } catch (err: any) {
+    // syncPaystackSubaccount already persisted FAILED + logged; back off and retry.
+    await schedulePaystackSyncRetry({ merchantId, attempt: (attempt ?? 1) + 1 });
+    return res.json({ success: true, rescheduled: true, nextAttempt: (attempt ?? 1) + 1, error: err.message });
+  }
+});
+
+// ── Bachs deferred split settlement ─────────────────────────────────────────
+// Scheduled by the collection.succeeded webhook. Transfers the vendor its share
+// once the collection has settled into our available balance, self-rescheduling
+// on the settlement cadence until the funds are available (or attempts run out).
+
+router.post('/bachs-settle', verifyQStash, async (req, res) => {
+  const { orderId, attempt } = req.body as { orderId: string; attempt: number };
+  if (!orderId) return res.status(400).json({ error: 'missing orderId' });
+
+  try {
+    const result = await runBachsSplit(orderId);
+    if (result.status === 'waiting') {
+      // Funds not yet settled — check again next cycle.
+      await scheduleBachsSettle({ orderId, attempt: (attempt ?? 1) + 1 });
+      return res.json({ success: true, rescheduled: true, nextAttempt: (attempt ?? 1) + 1, reason: result.reason });
+    }
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    // Transient failure (e.g. Bachs API blip) — reschedule rather than drop the
+    // split, so a vendor's money is never silently stranded in our balance.
+    await scheduleBachsSettle({ orderId, attempt: (attempt ?? 1) + 1 });
+    return res.json({ success: true, rescheduled: true, error: err.message });
+  }
+});
+
+// ── Bachs split recovery sweep ──────────────────────────────────────────────
+// Backstop for the self-scheduling settle chain: a Bachs order COMPLETES at
+// collection (customer paid), so its pending split is not a "processing" order
+// the sync-all sweep would touch. If the settle chain's QStash message is ever
+// lost, the vendor's share would sit stranded in our balance. This sweep re-drives
+// any completed Bachs order whose split is still pending. Wire to an infrequent
+// QStash cron (e.g. hourly). Live orders only — sandbox splits are mocked settled.
+
+router.post('/bachs-settle-sweep', verifyQStash, async (req, res) => {
+  const stuck = await prisma.order.findMany({
+    where: {
+      sandboxMode:      false,
+      bachsSplitStatus: 'pending',
+      status:           'completed',
+    },
+    select: { id: true },
+    take: 25,
+    orderBy: { createdAt: 'asc' },
+  });
+
+  let settled = 0, waiting = 0;
+  for (const o of stuck) {
+    try {
+      const result = await runBachsSplit(o.id);
+      if (result.status === 'settled') settled++;
+      else if (result.status === 'waiting') { waiting++; await scheduleBachsSettle({ orderId: o.id, attempt: 1 }); }
+    } catch (err: any) {
+      console.warn(`[jobs] bachs-settle-sweep failed for ${o.id}:`, err.message);
+    }
+  }
+
+  res.json({ success: true, swept: stuck.length, settled, waiting });
+});
+
+// ── Bachs payout (withdrawal to vendor bank) ────────────────────────────────
+// Fired after the split settles (behind the BACHS_PAYOUT_HOLD_S hold window).
+// Withdraws the vendor's share from their connected-account balance to their bank.
+router.post('/bachs-payout', verifyQStash, async (req, res) => {
+  const { orderId, attempt } = req.body as { orderId: string; attempt: number };
+  if (!orderId) return res.status(400).json({ error: 'missing orderId' });
+
+  try {
+    const result = await runBachsWithdrawal(orderId);
+    if (result.status === 'waiting' || result.status === 'blocked') {
+      // Balance not yet available, or destination not yet resolvable — retry.
+      // 'blocked' also self-heals once the merchant fixes their payout bank.
+      await scheduleBachsPayout({ orderId, attempt: (attempt ?? 1) + 1 });
+      return res.json({ success: true, rescheduled: true, nextAttempt: (attempt ?? 1) + 1, status: result.status, reason: result.reason });
+    }
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    // Transient failure (e.g. Bachs API blip) — reschedule so the vendor's money
+    // is never stranded in their connected-account balance.
+    await scheduleBachsPayout({ orderId, attempt: (attempt ?? 1) + 1 });
+    return res.json({ success: true, rescheduled: true, error: err.message });
+  }
+});
+
+// ── Bachs payout recovery sweep ─────────────────────────────────────────────
+// Backstop for the self-scheduling payout chain: re-drives any order whose split
+// has settled but whose payout is still pending/blocked (a lost QStash message,
+// or a previously-blocked destination the merchant has since fixed). Wire to an
+// infrequent QStash cron. Live orders only — sandbox payouts are mocked paid.
+router.post('/bachs-payout-sweep', verifyQStash, async (req, res) => {
+  const stuck = await prisma.order.findMany({
+    where: {
+      sandboxMode:      false,
+      bachsSplitStatus: 'settled',
+      bachsPayoutStatus: { in: ['pending', 'blocked'] },
+    },
+    select: { id: true },
+    take: 25,
+    orderBy: { createdAt: 'asc' },
+  });
+
+  let paid = 0, waiting = 0, blocked = 0;
+  for (const o of stuck) {
+    try {
+      const result = await runBachsWithdrawal(o.id);
+      if (result.status === 'paid') paid++;
+      else if (result.status === 'waiting') { waiting++; await scheduleBachsPayout({ orderId: o.id, attempt: 1 }); }
+      else if (result.status === 'blocked') blocked++;
+    } catch (err: any) {
+      console.warn(`[jobs] bachs-payout-sweep failed for ${o.id}:`, err.message);
+    }
+  }
+
+  res.json({ success: true, swept: stuck.length, paid, waiting, blocked });
 });
 
 // ── Expire Checkout Sessions ────────────────────────────────────────────────

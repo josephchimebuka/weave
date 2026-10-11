@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { proxyHeaders } from '../../lib/proxy-headers';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
 
     const res = await fetch(`${API_BASE}/kyc/email/${action}`, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'x-session-token': token },
+      headers: await proxyHeaders(token, { 'Content-Type': 'application/json' }),
       body:    JSON.stringify(body),
     });
 

@@ -32,11 +32,17 @@ input[type="radio"], input[type="checkbox"] {
 /* a11y: restore a visible keyboard focus ring. Many controls set inline
    `outline: none`; !important lets this beat that for :focus-visible only, so
    mouse users keep clean focus but keyboard users get a ring. Scoped to the
-   widget so we never restyle the host page. */
+   widget so we never restyle the host page.
+
+   The ring is a box-shadow (not an outline) so it follows each control's OWN
+   border-radius — an outline plus `border-radius: 4px` used to square off our
+   rounded inputs/pills on focus. Two box-shadow declarations: the solid one is a
+   fallback for browsers without color-mix (keeps a visible ring for a11y); the
+   softer color-mix one wins where supported. */
 .weave-checkout :focus-visible {
-  outline: 2px solid var(--weave-accent, #0F5D4C) !important;
-  outline-offset: 2px;
-  border-radius: 4px;
+  outline: none !important;
+  box-shadow: 0 0 0 3px var(--weave-accent, #0F5D4C) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--weave-accent, #0F5D4C) 40%, transparent) !important;
 }
 
 /* a11y: honour reduced-motion. Scoped to the widget so we don't disable the

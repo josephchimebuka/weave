@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type AssetKey,
   parseAsset,
@@ -51,6 +51,7 @@ const QueryClientProviderC = QueryClientProvider as unknown as (props: { client:
 import {
   createOrder,
   fetchOrder,
+  fetchSession,
   fetchQuote,
   cryptoKey,
   fiatKey,
@@ -58,9 +59,38 @@ import {
   type InlineWalletInstrument,
   type NextAction,
   fetchAssets,
-  configureApiBase
+  configureApiBase,
+  postOrderEvents,
+  type ClientOrderEvent,
 } from '../api/client';
 import { openStellarWalletModal, sendStellarUsdcPayment } from '../lib/stellar';
+
+// ── Session-timeline emitter ───────────────────────────────────────────────
+// Best-effort client telemetry (method chosen, popup open/close, retries) for
+// the merchant's "Payment activity" view. Module-scoped like loadPaystackSdk:
+// events queue immediately (even before the order exists) and flush once the
+// orderId is known — batched, debounced, and completely non-blocking.
+const _txnEventQueue: ClientOrderEvent[] = [];
+const _txnCtx: { apiKey: string; orderId: string | null } = { apiKey: '', orderId: null };
+let _txnFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function emitTxnEvent(type: string, metadata?: Record<string, unknown>) {
+  _txnEventQueue.push({ type, metadata, occurredAt: new Date().toISOString() });
+  if (_txnFlushTimer) return;
+  _txnFlushTimer = setTimeout(flushTxnEvents, 1200);
+}
+function flushTxnEvents() {
+  _txnFlushTimer = null;
+  if (!_txnCtx.orderId || !_txnCtx.apiKey || _txnEventQueue.length === 0) return; // hold until order exists
+  const batch = _txnEventQueue.splice(0, _txnEventQueue.length);
+  void postOrderEvents(_txnCtx.apiKey, _txnCtx.orderId, batch);
+}
+/** Point the emitter at the current order; flushes anything queued before it existed. */
+function configureTxnEmitter(apiKey: string, orderId: string | null) {
+  _txnCtx.apiKey = apiKey;
+  _txnCtx.orderId = orderId;
+  if (orderId) flushTxnEvents();
+}
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 
@@ -106,6 +136,12 @@ interface Currency {
 interface PaystackPopupDetails {
   accessCode: string;
   publicKey: string;
+  amount: number;
+  reference: string;
+}
+
+interface BachsCheckoutDetails {
+  checkoutUrl: string;
   amount: number;
   reference: string;
 }
@@ -215,6 +251,24 @@ const newOrderRef = () =>
   'weave_' + (typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36));
+
+// Stable, non-reversible fingerprint of a payer email, used to scope the resume
+// cache key to a specific payer. Two payers on a shared device land on different
+// keys, so one can never resume the other's pending order. FNV-1a is enough — we
+// only need collision-resistance for cache partitioning, not cryptographic
+// secrecy, and hashing (vs. the raw email) keeps PII out of localStorage keys.
+// Returns null when there's no email → the caller treats "no identity" as
+// "no auto-resume" rather than falling back to a shared per-merchant key.
+function payerFingerprint(email?: string | null): string | null {
+  const normalized = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (!normalized) return null;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < normalized.length; i++) {
+    h ^= normalized.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
 
 // EVM chains where we can verify an address shape with certainty. Non-EVM chains
 // (XRP, TON, Stellar, Solana, BTC, …) pass through — we have no reliable
@@ -610,6 +664,12 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
   const pick = (method: PathPick) => {
     if (submitting || picked) return;
     setPicked(method);
+    emitTxnEvent('method.selected', { method });
+    // Fire-and-forget: warm the Paystack inline SDK now, while the order-creation
+    // round trip is in flight, so it's already loaded by the time (if) the route
+    // resolves to a Paystack popup — instead of fetching+parsing it right when
+    // the customer is staring at the popup screen waiting for it to appear.
+    if (method === 'fiat') loadPaystackSdk().catch(() => {});
     onPick(method);
   };
 
@@ -1027,10 +1087,11 @@ function ScreenPaystackPopup({
       }
       launched.current = true;
       setLoading(false);
+      emitTxnEvent('auth_window.opened');
       const popup = new Pop();
       popup.resumeTransaction(accessCode, {
-        onSuccess: () => { if (mounted.current) onNext('processing'); },
-        onCancel: () => { launched.current = false; },
+        onSuccess: () => { emitTxnEvent('auth_window.closed', { result: 'success' }); if (mounted.current) onNext('processing'); },
+        onCancel: () => { emitTxnEvent('auth_window.closed', { result: 'cancel' }); launched.current = false; },
       });
     }).catch(() => {
       if (!mounted.current) return;
@@ -1077,6 +1138,168 @@ function ScreenPaystackPopup({
         style={{ ...primaryBtn, background: WEAVE.page, color: WEAVE.ink }}
       >
         Re-open popup
+      </button>
+    </Stack>
+  );
+}
+
+// Loads the Bachs overlay SDK (bachs.js) exactly once per page. Same cached-promise
+// + existing-tag guard as loadPaystackSdk so remounts never inject a duplicate.
+let _bachsPromise: Promise<void> | null = null;
+function loadBachsSdk(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).Bachs) return Promise.resolve();
+  if (_bachsPromise) return _bachsPromise;
+  _bachsPromise = new Promise<void>((resolve, reject) => {
+    const SRC = 'https://checkout.bachs.io/bachs.js';
+    const fail = () => { _bachsPromise = null; reject(new Error('bachs-load-failed')); };
+    const existing = document.querySelector(`script[src="${SRC}"]`) as HTMLScriptElement | null;
+    if (existing) {
+      if ((window as any).Bachs) return resolve();
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', fail);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = SRC;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = fail;
+    document.head.appendChild(script);
+  });
+  return _bachsPromise;
+}
+
+// Bachs Connect overlay. Opens the hosted checkout in a modal via bachs.js. Same
+// shape as ScreenPaystackPopup: the browser `checkout.completed` event only drives
+// UI (→ 'processing'); the collection.succeeded webhook is the real source of truth.
+function ScreenBachsCheckout({
+  onNext,
+  details,
+  orderId,
+  apiKey,
+}: {
+  onNext: (s: string) => void;
+  details: BachsCheckoutDetails | null;
+  orderId: string | null;
+  apiKey: string;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const launched = useRef(false);
+  const mounted = useRef(true);
+  // Set true in the effect SETUP (not just the initial ref value) so a StrictMode
+  // remount — which runs cleanup then setup again — restores mounted=true instead
+  // of leaving it false and silently short-circuiting the async launch below.
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  // Poll the order status while the overlay is open. The Bachs SDK does NOT
+  // reliably emit `checkout.completed` (observed: it fires only opened/loaded/
+  // ready), so the browser event is not a dependable completion signal. Bachs'
+  // own guidance is to treat SERVER state as the source of truth — so we poll
+  // GET /orders/:id (which reflects the collection webhook in live, and the
+  // getCheckout poll in sandbox) and advance when the order settles. This is
+  // robust regardless of which client events do or don't fire.
+  useEffect(() => {
+    if (!orderId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const closeOverlay = () => { try { (window as any).Bachs?.Checkout?.close?.(); } catch { /* noop */ } };
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const order = await fetchOrder(apiKey, orderId);
+        const status = String(order.status ?? '').toLowerCase();
+        if (TERMINAL_OK.has(status)) { stopped = true; closeOverlay(); if (mounted.current) onNext('success'); return; }
+        if (TERMINAL_BAD.has(status)) { stopped = true; closeOverlay(); if (mounted.current) onNext('error'); return; }
+      } catch { /* transient — keep polling */ }
+      timer = setTimeout(tick, 3000);
+    };
+    timer = setTimeout(tick, 3000);
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [orderId, apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const launch = () => {
+    if (!details?.checkoutUrl) { setError('Payment details unavailable. Please retry.'); setLoading(false); return; }
+    setError(null);
+    setLoading(true);
+    loadBachsSdk().then(() => {
+      if (!mounted.current || launched.current) return;
+      const Bachs = (window as any).Bachs;
+      if (!Bachs) {
+        setError('Checkout failed to load. Please check your connection and retry.');
+        setLoading(false);
+        return;
+      }
+      launched.current = true;
+      setLoading(false);
+      emitTxnEvent('auth_window.opened');
+      // The SDK validates checkoutUrl against its configured checkout origin
+      // (default = live checkout.bachs.io) and rejects any other host. Sandbox
+      // sessions live on sandbox-checkout.bachs.io, so derive baseUrl from the
+      // checkout URL's own origin — works for both live and sandbox.
+      let baseUrl: string | undefined;
+      try { baseUrl = new URL(details.checkoutUrl).origin; } catch { baseUrl = undefined; }
+      // Initialize once; the handler drives our UI only. Fulfilment is webhook-driven.
+      Bachs.Initialize({
+        ...(baseUrl ? { baseUrl } : {}),
+        onEvent: (event: { type: string; data?: any }) => {
+          if (event.type === 'checkout.completed') {
+            emitTxnEvent('auth_window.closed', { result: 'success' });
+            if (mounted.current) onNext('processing');
+          } else if (event.type === 'checkout.failed') {
+            emitTxnEvent('auth_window.closed', { result: 'fail' });
+          } else if (event.type === 'checkout.closed') {
+            // Payer dismissed the overlay without paying — let them re-open.
+            launched.current = false;
+          }
+        },
+      });
+      Bachs.Checkout.open({ checkoutUrl: details.checkoutUrl });
+    }).catch(() => {
+      if (!mounted.current) return;
+      setLoading(false);
+      setError('Could not load checkout. Check your network and try again.');
+    });
+  };
+
+  useEffect(() => { launch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loading) {
+    return (
+      <Stack gap={24} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            border: `3px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent,
+            animation: 'wspin 0.8s linear infinite', margin: '0 auto',
+          }} />
+          <div style={{ marginTop: 14, fontSize: 14, color: WEAVE.mute }}>Opening secure checkout…</div>
+        </div>
+      </Stack>
+    );
+  }
+
+  if (error) {
+    return (
+      <Stack gap={16} style={{ padding: '28px 20px' }}>
+        <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.err, padding: '8px 0' }}>{error}</div>
+        <button onClick={() => { launched.current = false; setError(null); setLoading(true); launch(); }} style={primaryBtn}>
+          Retry
+        </button>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack gap={16} style={{ padding: '28px 20px' }}>
+      <div style={{ textAlign: 'center', fontSize: 14, color: WEAVE.mute, padding: '12px 0' }}>
+        A secure checkout has opened. Complete payment there to continue.
+      </div>
+      <button
+        onClick={() => { launched.current = false; launch(); }}
+        style={{ ...primaryBtn, background: WEAVE.page, color: WEAVE.ink }}
+      >
+        Re-open checkout
       </button>
     </Stack>
   );
@@ -2617,6 +2840,17 @@ const DEFAULT_MERCHANT: Merchant = {
   currency: 'NGN',
 };
 
+// Kill switch: pure-NGN (naira→naira) collection. While this message is non-null
+// the "Pay with <fiat>" method is greyed out with this note, but ONLY for the
+// pure-NGN path — i.e. a merchant settling to a naira bank (destAssetKey
+// 'fiat:NGN'). Crypto-settling merchants route "pay with naira" through Paycrest
+// onramp, which is unaffected, so their naira button stays live regardless.
+// The API enforces the matching block server-side via BACHS_ENABLED/PAYSTACK_ENABLED
+// (see lib/flags.ts). Naira collection is RESTORED via Bachs, so this is null.
+// Set to a message string to re-suspend. NOTE: changing this requires publishing
+// a new @weave-sdk/widget version.
+const FIAT_METHOD_DISABLED_NOTICE: string | null = null;
+
 const CHAIN_TO_API: Record<string, string> = {
   Base: 'BASE',
   Optimism: 'OPTIMISM',
@@ -2658,6 +2892,24 @@ function WeaveCheckoutInner({
     ((import.meta as any).env?.VITE_WEAVE_DEMO_USER_ADDRESS as string | undefined) ??
     '0x0000000000000000000000000000000000000000';
 
+  // Resume identity + cache key. Resume is gated on a payer identity so two
+  // payers on a shared device can never inherit each other's pending order:
+  //   • checkout session → the session id (server-authoritative resume).
+  //   • payment link / embed → the payer's email fingerprint.
+  //   • neither → no identity, so no auto-resume at all (safe-fail: the payer
+  //     starts fresh rather than risk resuming someone else's order).
+  // The cache key is only ever written/read under an identity; with no identity
+  // it still resolves to a per-merchant key for WRITES, but that key is never
+  // read for resume, so it can't leak across payers.
+  const payerFp = payerFingerprint(customer?.email);
+  const resumeIdentity = sessionId ?? (payerFp ? `e:${payerFp}` : null);
+  const storageKey = resumeIdentity
+    ? `weave-order-${apiKey}-${resumeIdentity}`
+    : `weave-order-${apiKey}`;
+  // Ensures the email-scoped cache resume fires at most once, even as the payer's
+  // typed email (and thus the identity/key) changes across keystrokes.
+  const resumedRef = useRef(false);
+
   // Wagmi wallet hooks
   const { address: wagmiAddress, chainId: wagmiChainId, isConnected: wagmiConnected } = useAccount();
   const { disconnect: wagmiDisconnect } = useDisconnect();
@@ -2665,7 +2917,7 @@ function WeaveCheckoutInner({
     wagmiDisconnect();
     // Only clear the widget's own resume record — NEVER localStorage.clear(),
     // which would wipe the merchant host page's entire origin storage.
-    try { localStorage.removeItem(`weave-order-${apiKey}`); } catch { /* storage unavailable */ }
+    try { localStorage.removeItem(storageKey); } catch { /* storage unavailable */ }
   };
   const { writeContractAsync } = useWriteContract();
   const { sendTransactionAsync } = useSendTransaction();
@@ -2681,8 +2933,12 @@ function WeaveCheckoutInner({
     accountName: '',
   });
   const [orderId, setOrderId] = useState<string | null>(null);
+  // Point the session-timeline emitter at the current order; flushes any events
+  // queued before the order existed (e.g. the initial method selection).
+  useEffect(() => { configureTxnEmitter(apiKey, orderId); }, [apiKey, orderId]);
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null);
   const [paystackPopupDetails, setPaystackPopupDetails] = useState<PaystackPopupDetails | null>(null);
+  const [bachsCheckoutDetails, setBachsCheckoutDetails] = useState<BachsCheckoutDetails | null>(null);
   const [depositAddress, setDepositAddress] = useState<string | null>(null);
   const [depositMemo, setDepositMemo] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState<number | null>(null);
@@ -2719,81 +2975,96 @@ function WeaveCheckoutInner({
 
   // ── Persistence & Resumption ──────────────────────────────────────────────
 
-  // 1. Resumption logic on mount
-  useEffect(() => {
-    const saved = localStorage.getItem(`weave-order-${apiKey}`);
-    if (saved) {
-      try {
-        const { orderId: savedId, createdAt } = JSON.parse(saved);
-        // Don't resume orders older than 1h
-        if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
-          fetchOrder(apiKey, savedId).then(data => {
-            const order = data;
-            const dir = directionOf(order.sourceAssetKey, order.destAssetKey);
-            setDirection(dir === 'onramp' ? 'onramp' : 'offramp');
+  // Rehydrate the widget screens from a fetched order. Returns true when it drove
+  // a resume (order is live or already completed), false otherwise so the caller
+  // can clear stale cache. Shared by both resume paths (session + email cache).
+  const resumeFromOrder = useCallback((order: any): boolean => {
+    const dir = directionOf(order.sourceAssetKey, order.destAssetKey);
+    setDirection(dir === 'onramp' ? 'onramp' : 'offramp');
 
-            if (['awaiting_deposit', 'processing'].includes(order.status)) {
-              setOrderId(order.id);
+    if (['awaiting_deposit', 'processing'].includes(order.status)) {
+      setOrderId(order.id);
 
-              // Find the active step (usually the first one that isn't DONE)
-              const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
+      // Find the active step (usually the first one that isn't DONE)
+      const activeStep = order.steps.find((s: any) => s.status !== 'done') || order.steps[0];
 
-              if (dir === 'onramp') {
-                if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
-                  if (order.sourceInstrument?.kind === 'bank_account') {
-                    setBankDetails({
-                      accountName: order.sourceInstrument.bankAccountName || '',
-                      accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
-                      institution: order.sourceInstrument.bankInstitution || '',
-                      currency: order.destAssetKey.split(':').pop() || 'NGN',
-                      amountToTransfer: order.sourceAmount.toString()
-                    });
-                  }
-                  setScreen('vaccount');
-                } else {
-                  setScreen('processing');
-                }
-              } else {
-                // Offramp
-                if (activeStep?.provider === 'nearintents' && order.status === 'awaiting_deposit') {
-                  setDepositAddress(activeStep.depositAddress);
-                  setDepositMemo(activeStep.depositMemo);
-                  setDepositAmount(Number(activeStep.amountIn));
-
-                  const parts = activeStep.fromAsset.split(':');
-                  setDepositToken(parts[2] || parts[1]);
-                  setDepositChain(parts[1]);
-                  setScreen('deposit');
-                } else if (activeStep?.provider === 'stellar' && order.status === 'awaiting_deposit') {
-                  setDepositAddress(activeStep.depositAddress);
-                  setDepositMemo(activeStep.depositMemo);
-                  setDepositAmount(Number(activeStep.amountIn));
-                  setDepositToken('USDC');
-                  setDepositChain('STELLAR');
-                  setScreen('stellarPay');
-                } else {
-                  setScreen('processing');
-                }
-              }
-            } else {
-              // Any terminal state (completed, failed, refunded, expired): the
-              // order is done. Consume the saved pointer for THIS order id so a
-              // refresh starts a fresh checkout instead of resurfacing the success
-              // (or other terminal) screen. Because resume always re-fetches live
-              // status before acting, a finished order is consumed exactly once —
-              // making resume idempotent per order id.
-              localStorage.removeItem(`weave-order-${apiKey}`);
-            }
-          }).catch(() => {
-            localStorage.removeItem(`weave-order-${apiKey}`);
+      if (dir === 'onramp') {
+        if (activeStep?.provider === 'paycrest' && (activeStep.depositAddress || activeStep.amountOut)) {
+          if (order.sourceInstrument?.kind === 'bank_account') {
+            setBankDetails({
+              accountName: order.sourceInstrument.bankAccountName || '',
+              accountIdentifier: order.sourceInstrument.bankAccountIdentifier || '',
+              institution: order.sourceInstrument.bankInstitution || '',
+              currency: order.destAssetKey.split(':').pop() || 'NGN',
+              amountToTransfer: order.sourceAmount.toString()
+            });
+          }
+          setScreen('vaccount');
+        } else if (activeStep?.provider === 'paystack' && activeStep.paystackAccessCode) {
+          setPaystackPopupDetails({
+            accessCode: activeStep.paystackAccessCode,
+            publicKey: '',
+            amount: Number(activeStep.amountIn ?? order.sourceAmount),
+            reference: activeStep.externalId ?? '',
           });
+          setScreen('paystack_popup');
+        } else {
+          setScreen('processing');
         }
-      } catch (e) {
-        localStorage.removeItem(`weave-order-${apiKey}`);
-      }
-    }
+      } else {
+        if (activeStep?.provider === 'nearintents' && order.status === 'awaiting_deposit') {
+          setDepositAddress(activeStep.depositAddress);
+          setDepositMemo(activeStep.depositMemo);
+          setDepositAmount(Number(activeStep.amountIn));
 
-    // Existing: Sync assets from API
+          const parts = activeStep.fromAsset.split(':');
+          setDepositToken(parts[2] || parts[1]);
+          setDepositChain(parts[1]);
+          setScreen('deposit');
+        } else if (activeStep?.provider === 'stellar' && order.status === 'awaiting_deposit') {
+          setDepositAddress(activeStep.depositAddress);
+          setDepositMemo(activeStep.depositMemo);
+          setDepositAmount(Number(activeStep.amountIn));
+          setDepositToken('USDC');
+          setDepositChain('STELLAR');
+          setScreen('stellarPay');
+        } else {
+          setScreen('processing');
+        }
+      }
+      return true;
+    } else if (order.status === 'completed') {
+      setOrderId(order.id);
+      setScreen('success');
+      return true;
+    }
+    return false;
+  }, []);
+
+  // 1a. Session resume (server-authoritative) + one-time bootstrap (asset sync,
+  //     pre-selection). For a hosted checkout the session — not this browser —
+  //     owns the order, so we resume whatever order the session points at (and
+  //     nothing if it points at none). A different payer is on a different
+  //     session id, so browser cache is never consulted for the session flow.
+  useEffect(() => {
+    const resumeViaSession = async () => {
+      try {
+        const s = await fetchSession(apiKey, sessionId!);
+        if (s?.orderId && ['awaiting_deposit', 'processing', 'completed'].includes(s.orderStatus ?? '')) {
+          const order = await fetchOrder(apiKey, s.orderId);
+          if (!resumeFromOrder(order)) localStorage.removeItem(storageKey);
+        } else {
+          // Session owns no live order → nothing to resume; drop any stale cache.
+          localStorage.removeItem(storageKey);
+        }
+      } catch {
+        /* transient — leave state untouched, the payer can proceed fresh */
+      }
+    };
+
+    if (sessionId) void resumeViaSession();
+
+    // Sync assets from API
     fetchAssets(apiKey).then(data => {
       if (data) setSupportedAssets(data);
     }).catch(() => { });
@@ -2810,7 +3081,50 @@ function WeaveCheckoutInner({
         setScreen('deposit');
       }
     }
-  }, [apiKey]); // Run once on mount
+    // storageKey intentionally omitted: in the session flow it's stable (session-
+    // scoped, email-independent), and depending on it would re-run this bootstrap
+    // on every keystroke in the email-scoped (payment-link) flow.
+  }, [apiKey, sessionId, resumeFromOrder]); // Run once per (merchant, session)
+
+  // 1b. Cache resume — email-scoped (payment links / direct embeds, no session).
+  //     The payer's email is the identity, and it's typed AFTER mount, so this
+  //     re-evaluates as the identity (storageKey) changes and resumes the order
+  //     under the CURRENT payer's key only. With no email there is no identity,
+  //     so nothing is ever resumed — a second payer on a shared device can never
+  //     inherit the first payer's order. Fires at most once (resumedRef).
+  useEffect(() => {
+    if (sessionId) return;              // session flow resumes server-side (1a)
+    if (!resumeIdentity) return;        // no payer identity → no auto-resume
+    if (resumedRef.current || orderId) return; // already resumed or flow started
+
+    const saved = localStorage.getItem(storageKey);
+    if (!saved) return;
+    try {
+      const { orderId: savedId, createdAt } = JSON.parse(saved);
+      // Don't resume orders older than 1h
+      if (Date.now() - createdAt < 1 * 60 * 60 * 1000) {
+        fetchOrder(apiKey, savedId)
+          .then(order => {
+            if (resumeFromOrder(order)) resumedRef.current = true;
+            else localStorage.removeItem(storageKey);
+          })
+          .catch(() => localStorage.removeItem(storageKey));
+      }
+    } catch {
+      localStorage.removeItem(storageKey);
+    }
+  }, [apiKey, sessionId, resumeIdentity, storageKey, orderId, resumeFromOrder]);
+
+  // supportedAssets.fiat starts as the SUPPORTED_FIAT constant, then gets
+  // replaced by a NEW array reference once fetchAssets resolves — even when
+  // the actual rate is unchanged. Depending on the array itself made the
+  // effect below re-fire (and double-fetch the ETH quote) a moment after
+  // mount for no reason; depending on the resolved primitive rate instead
+  // only re-runs it when the rate value genuinely changes.
+  const ngnRate = useMemo(() => {
+    const fiatAsset = supportedAssets.fiat.find(f => f.key === fiatKey(merchant.currency));
+    return fiatAsset?.rate || 1515;
+  }, [supportedAssets.fiat, merchant.currency]);
 
   useEffect(() => {
     if (!apiKey) return;
@@ -2823,10 +3137,7 @@ function WeaveCheckoutInner({
       amountIn: 'source'
     }).then(q => {
       if (cancelled) return;
-      // Find the fiat rate to convert back to USD
-      const fiatAsset = supportedAssets.fiat.find(f => f.key === fiatKey(merchant.currency));
-      const rate = fiatAsset?.rate || 1515;
-      const price = q.estimatedDest / rate;
+      const price = q.estimatedDest / ngnRate;
       if (!isNaN(price) && price > 0) {
         setEthUsdPrice(price);
       }
@@ -2837,21 +3148,21 @@ function WeaveCheckoutInner({
       setLoadingEthPrice(false);
     });
     return () => { cancelled = true; };
-  }, [apiKey, merchant.currency, supportedAssets.fiat]);
+  }, [apiKey, merchant.currency, ngnRate]);
 
   // 2. Persistence logic: Save state whenever orderId or screen changes
   useEffect(() => {
     if (orderId && !['success', 'error'].includes(screen)) {
-      localStorage.setItem(`weave-order-${apiKey}`, JSON.stringify({
+      localStorage.setItem(storageKey, JSON.stringify({
         orderId,
         screen,
         createdAt: Date.now()
       }));
     } else if (screen === 'success') {
       // Clear storage after success so next checkout is fresh
-      localStorage.removeItem(`weave-order-${apiKey}`);
+      localStorage.removeItem(storageKey);
     }
-  }, [orderId, screen, apiKey]);
+  }, [orderId, screen, storageKey]);
 
   // Derived Helpers
   const currencies: Record<string, Currency> = supportedAssets.fiat.reduce((acc, f) => {
@@ -3004,6 +3315,7 @@ function WeaveCheckoutInner({
 
   const onDepositChainChange = async (apiChain: string, token: string, refundAddr: string) => {
     const myReq = ++depositReq.current;
+    emitTxnEvent('chain.selected', { chain: apiChain, token });
     setDepositLoading(true);
     setDepositError(null);
     setDepositAddress(null);
@@ -3246,8 +3558,10 @@ function WeaveCheckoutInner({
       setOrderId(res.order.id);
       setBankDetails(res.nextAction.bankDetails ?? null);
       setPaystackPopupDetails(res.nextAction.paystackPopupDetails ?? null);
+      setBachsCheckoutDetails(res.nextAction.bachsCheckout ?? null);
       const nextScreen =
         res.nextAction.screen === 'paystack_popup' ? 'paystack_popup' :
+        res.nextAction.screen === 'bachs_checkout' ? 'bachs_checkout' :
           'vaccount';
       setScreen(nextScreen);
     } catch (e: any) {
@@ -3402,11 +3716,13 @@ function WeaveCheckoutInner({
   const isOnramp = direction === 'onramp';
 
   const retry = (target: string) => {
+    emitTxnEvent('retry');
     pendingOrderRef.current = null;
     setOrderId(null);
     setApiError(null);
     setBankDetails(null);
     setPaystackPopupDetails(null);
+    setBachsCheckoutDetails(null);
     setDepositAddress(null);
     setDepositMemo(null);
     setDepositError(null);
@@ -3417,12 +3733,24 @@ function WeaveCheckoutInner({
     setScreen(target);
   };
 
+  // Merge the naira kill switch into whatever the host passed, but ONLY for the
+  // pure-NGN Paystack path (naira-settling merchant). Crypto-settling merchants
+  // fund "pay with naira" via Paycrest onramp, which is unaffected — leave their
+  // button live. Mirrors the `isPureNgn` check in handleMethodPick and the
+  // Paystack-only block in the API router. An explicit caller-supplied fiat note
+  // still wins so a merchant can override the copy.
+  const isPaystackFiat = merchant.currency === 'NGN' && merchant.destAssetKey === 'fiat:NGN';
+  const effectiveDisabledMethods = (FIAT_METHOD_DISABLED_NOTICE && isPaystackFiat)
+    ? { fiat: FIAT_METHOD_DISABLED_NOTICE, ...disabledMethods }
+    : disabledMethods;
+
   const body = (() => {
-    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} disabledMethods={disabledMethods} error={apiError || stellarError} />;
+    if (screen === 'connect') return <ScreenConnect onPick={handleMethodPick} merchant={merchant} currencies={currencies} fmtCur={fmtCur} submitting={submitting} disabledMethods={effectiveDisabledMethods} error={apiError || stellarError} />;
     if (isOnramp) {
       if (screen === 'refundAccount') return <ScreenRefundAccount merchant={merchant} value={refundAccount} onChange={setRefundAccount} onSubmit={submitRefundAccount} submitting={submitting} error={apiError} />;
       if (screen === 'vaccount') return <ScreenVirtualAccount onNext={advance} merchant={merchant} bankDetails={bankDetails} apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'paystack_popup') return <ScreenPaystackPopup onNext={advance} details={paystackPopupDetails} />;
+      if (screen === 'bachs_checkout') return <ScreenBachsCheckout onNext={advance} details={bachsCheckoutDetails} orderId={orderId} apiKey={apiKey} />;
       if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="fiat" apiKey={apiKey} orderId={orderId} bankDetails={bankDetails} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} message={apiError} />;

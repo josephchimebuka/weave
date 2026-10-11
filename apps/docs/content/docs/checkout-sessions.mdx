@@ -1,0 +1,188 @@
+---
+title: Checkout Sessions
+description: Programmatically create a hosted Weave payment page, redirect your user to it, and confirm payment server-side.
+---
+
+One server call returns a hosted payment page; you redirect your user there and get them back once payment is confirmed — the Stripe Checkout initialize pattern, brought to crypto ↔ fiat. No frontend code on your side.
+
+## What this is, exactly
+
+A **checkout session** is a one-shot, server-created payment intent that carries everything Weave needs to know about a single payment: the amount, the asset the merchant wants to receive, an optional source-asset lock, where to send the user when they're done, and an optional metadata bag that gets echoed back in the webhook.
+
+When you create one, you get back a `checkoutUrl`. Send the user there. They'll see a Weave-hosted page running our widget, complete payment, and land back on your `redirectUrl` with `session_id` and `order_id` in the query string. Behind the scenes, Weave routes the payment through the same providers, fires the same webhook, and writes the same order rows as every other path — the session is just the entry point.
+
+**Pick checkout sessions when**
+
+- The payment lives on its own page — invoice emails, SMS payment links, server-rendered checkouts.
+- You'd rather not embed any frontend SDK.
+- You already model payments as "create intent → redirect → confirm via webhook" (Stripe-style).
+- You need to issue a payment URL from a backend that has no UI at all (a Slack bot, a cron job, an admin tool).
+
+**Pick something else when**
+
+- You'd rather the payment happen in-place without a redirect → **widget**.
+- You want a fully custom checkout UI in your own design system → **direct API**.
+- You need to reuse the same payment link forever (recurring donation, sticker link) → use the **Payment Links** feature instead. Sessions are single-use and expire.
+
+## The redirect flow
+
+1. Your server calls `POST /checkout/sessions` with the payment params and a `redirectUrl`.
+2. Redirect the user's browser to the returned `checkoutUrl`.
+3. The user pays on the Weave-hosted page.
+4. Once payment is fully confirmed (`order.status === 'completed'`), Weave redirects the user back to `redirectUrl?session_id=…&order_id=…`.
+5. Your server confirms the payment via the `order.completed` webhook. **Do not rely on the redirect alone** — the user could close the tab.
+
+## What comes back to your redirect URL
+
+Weave appends query params to your `redirectUrl` — or bounces to `cancelUrl` — depending on how the payer left the hosted page. These params are a UX signal only; see **Verifying the redirect** below before you trust them.
+
+| When | Destination | Params | Details |
+| --- | --- | --- | --- |
+| Payment confirmed | `redirectUrl` | `?session_id=…&order_id=…` | The order reached completed. Both the session id and the order id are present. |
+| Returning to a completed session | `redirectUrl` | `?session_id=…&order_id=…` | Payer reopens the checkout URL (or hits back) after already paying. Same param set as a fresh success. |
+| Reloads mid-payment | — no redirect | | Session still open / processing. The hosted page reloads in place and the payer resumes exactly where they left off; no redirect fires. |
+| Closes or abandons | `cancelUrl` | (no params) | Payer dismisses the widget. Bounced to cancelUrl unchanged — nothing appended. |
+| Session expired | `cancelUrl` | (no params) | Past expiresAt. The expired screen links back to cancelUrl, unchanged. |
+
+`cancelUrl` is optional. Without it, a closed or expired session has no onward destination — the payer just stays on the Weave page (the expired notice, or the widget as they left it).
+
+## Verifying the redirect
+
+<Callout type="warn">
+**The query params are unsigned.** Anyone can open `redirectUrl?session_id=…&order_id=…` directly, without paying. Never treat their presence as proof of payment — always confirm server-side before you fulfil.
+</Callout>
+
+Two ways to confirm — use either, or both:
+
+- **Webhook (recommended, async).** The `order.completed` webhook is the source of truth — fulfil there and you never depend on the redirect landing at all. See the Webhooks page.
+- **Synchronous check (on landing).** When the payer hits your `redirectUrl`, call `GET /checkout/sessions/:id` with the `session_id` from the query and confirm `orderStatus === 'completed'` before showing success.
+
+```ts
+// Your redirectUrl handler — trust the API, not the query string.
+app.get('/payment/success', async (req, res) => {
+  const { session_id } = req.query;
+
+  const r = await fetch(
+    `https://api.paywithweave.com/api/v1/checkout/sessions/${session_id}`,
+    { headers: { 'x-secret-key': process.env.WEAVE_SECRET_KEY } },
+  );
+  const { data } = await r.json();
+
+  if (data?.orderStatus === 'completed') {
+    // Paid. Fulfil idempotently — the order.completed webhook may
+    // have already fulfilled this same order.
+    await fulfilOrder(data.orderId);
+    return res.render('success');
+  }
+
+  // Not paid (yet). Do NOT fulfil — show a pending / return state.
+  return res.render('pending');
+});
+```
+
+Fulfil **idempotently**: the synchronous check and the webhook can both fire for the same order, so key fulfilment on `orderId` (or your own `reference`) and no-op if you've already delivered.
+
+## Create a session
+
+`POST /checkout/sessions`. Required: `amount`, `destAsset`, `redirectUrl`. Auth via `x-api-key` (publishable) or `x-secret-key` (server-to-server).
+
+```bash
+curl https://api.paywithweave.com/api/v1/checkout/sessions \
+  -X POST -H "x-api-key: pk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "amount":      5000,
+    "amountIn":    "dest",
+    "destAsset":   "fiat:NGN",
+    "sourceAsset": "crypto:BASE:USDC",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" },
+    "redirectUrl": "https://yourstore.com/payment/success",
+    "cancelUrl":   "https://yourstore.com/cart",
+    "expiresIn":   7200
+  }'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "checkoutUrl": "https://app.paywithweave.com/checkout/clx9abc...",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "status":      "open"
+  }
+}
+```
+
+## Retrieve a session
+
+`GET /checkout/sessions/:id`. Returns the session plus the linked order's status (once a payment has started).
+
+```json
+{
+  "success": true,
+  "data": {
+    "id":          "clx9abc...",
+    "status":      "complete",
+    "amount":      5000,
+    "destAsset":   "fiat:NGN",
+    "reference":   "order_abc123",
+    "metadata":    { "userId": "usr_999" },
+    "orderId":     "ord_xyz",
+    "orderStatus": "completed",
+    "expiresAt":   "2026-05-28T14:00:00Z",
+    "createdAt":   "2026-05-28T12:00:00Z"
+  }
+}
+```
+
+## Session Lifecycle
+
+| Status | Description |
+| --- | --- |
+| `open` | Session created — awaiting payer. |
+| `processing` | User has started paying. An order is linked via orderId. |
+| `complete` | Payment confirmed; user has been redirected back to redirectUrl. |
+| `expired` | No payment was completed before expiresAt. |
+
+## Important callouts
+
+<Callout type="info">
+**Redirect fires on confirmed payment, not on deposit shown.** The hosted success screen drives the redirect — your `redirectUrl` only sees users whose order reached `completed`.
+</Callout>
+
+<Callout type="info">
+**Sessions expire after 2 hours by default.** Override with `expiresIn` (seconds). Bounds: 5 minutes to 24 hours.
+</Callout>
+
+<Callout type="warn">
+**Always confirm via webhook.** The redirect is a UX hint — the user can close the tab before being redirected. The `order.completed` webhook is the source of truth.
+</Callout>
+
+The webhook payload echoes `sessionId` and `metadata` back to you — reconcile by your own internal IDs without a separate lookup.
+
+## Locking the source asset
+
+Omit `sourceAsset` and the hosted page lets the payer choose how to pay. Pass it to lock them to a specific chain / token (e.g. `crypto:BASE:USDC`). For the canonical list of valid keys, call `GET /assets`.
+
+## Attaching a customer (optional)
+
+Weave does not collect or verify payer identity — your payers don't sign in to Weave, don't enter contact details, and aren't associated with a Weave account. The hosted page only asks for what the transaction actually requires (e.g. a refund account for fiat onramps).
+
+If you already know who the payer is (they're logged into your product), pass it on session creation:
+
+```json
+{
+  "amount": 5000,
+  "destAsset": "fiat:NGN",
+  "redirectUrl": "https://yourstore.com/payment/success",
+  "customer": {
+    "email":      "jane@example.com",
+    "name":       "Jane Doe",
+    "externalId": "usr_999"
+  }
+}
+```
+
+All three fields are optional. They're echoed onto the order, into the `order.completed` webhook (`data.customer`), and onto your receipt email — so you can reconcile by your own customer record without a second lookup. When you omit `customer`, receipts fall back to your `reference` field; they never claim the payer was "verified."

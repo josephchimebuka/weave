@@ -1,0 +1,16 @@
+# deps
+/node_modules
+
+# next
+/.next
+/out
+
+# fumadocs-mdx generated source
+/.source
+
+# env
+.env*.local
+
+# misc
+*.tsbuildinfo
+next-env.d.ts

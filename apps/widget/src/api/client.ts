@@ -2,7 +2,7 @@
 //
 // Auth pattern:
 //   • Browser widget  → x-api-key: pk_live_... (publishable key, safe in JS)
-//   • Merchant server → x-public-key + x-secret-key headers (server-side only)
+//   • Merchant server → x-secret-key: sk_live_... header (server-side only)
 //
 // The secretKey NEVER belongs in browser code. WeaveCheckout accepts only
 // the publishable key (apiKey prop).
@@ -165,7 +165,7 @@ export type InlineInstrument = InlineBankInstrument | InlineWalletInstrument;
 export type InstrumentRef    = { instrumentId: string } | { inline: InlineInstrument };
 
 export interface NextAction {
-  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup';
+  screen:          'collect_crypto' | 'collect_fiat' | 'paystack_popup' | 'bachs_checkout' | 'sign_stellar_tx';
   depositAddress?: string;
   depositMemo?:    string;
   amount?:         number;
@@ -189,6 +189,29 @@ export interface NextAction {
     publicKey:  string;
     amount:     number;
     reference:  string;
+  };
+  bachsCheckout?: {
+    checkoutUrl: string;
+    amount:      number;
+    reference:   string;
+  };
+  // LI.FI Stellar leg (USDC on Stellar → Base via Circle CCTP). The payer's
+  // Stellar wallet signs `approveXdr`, fetches the bridge XDR from
+  // `bridgeTxPath`, signs it, and reports the hash to `submittedPath`.
+  // The embeddable widget does not sign Stellar transactions itself; the
+  // hosted /ramp pages and the corridor app do.
+  stellarSigning?: {
+    fromAddress:     string;
+    amount:          number;
+    token:           string;
+    chain:           string;
+    approveXdr:      string | null;
+    approvalAddress: string;
+    approveTxPath:   string;
+    bridgeTxPath:    string;
+    submittedPath:   string;
+    estimatedSecs:   number;
+    tool:            string;
   };
   expiresAt?: string;
 }
@@ -225,6 +248,23 @@ export async function fetchOrder(publishableKey: string, orderId: string) {
   return apiFetch(`/orders/${orderId}`, publishableKey);
 }
 
+// ── Checkout sessions ──────────────────────────────────────────────────────
+// Public (unauthenticated-by-key) session read used to resume a hosted checkout
+// server-authoritatively. Returns the session's linked `orderId`/`orderStatus`
+// so the widget resumes the order the SESSION owns rather than whatever order id
+// happens to sit in this browser's cache — the fix for a shared device carrying
+// a previous payer's pending order.
+export interface PublicSession {
+  id: string;
+  status: 'open' | 'processing' | 'complete' | 'expired';
+  orderId: string | null;
+  orderStatus: string | null;
+}
+
+export async function fetchSession(publishableKey: string, sessionId: string): Promise<PublicSession> {
+  return apiFetch(`/checkout/sessions/public/${sessionId}`, publishableKey);
+}
+
 // ── Reference data ─────────────────────────────────────────────────────────
 
 export async function fetchCountries(publishableKey: string) {
@@ -233,4 +273,29 @@ export async function fetchCountries(publishableKey: string) {
 
 export async function fetchAssets(publishableKey: string) {
   return apiFetch('/assets', publishableKey);
+}
+
+// ── Session timeline events ────────────────────────────────────────────────
+// Best-effort client telemetry for the transaction "Payment activity" view.
+// Never disrupts checkout: swallow all errors. Server whitelists/relabels these.
+export interface ClientOrderEvent {
+  type: string;
+  metadata?: Record<string, unknown>;
+  occurredAt?: string;
+}
+
+export async function postOrderEvents(
+  publishableKey: string,
+  orderId: string,
+  events: ClientOrderEvent[],
+): Promise<void> {
+  if (!orderId || events.length === 0) return;
+  try {
+    await apiFetch(`/orders/${orderId}/events`, publishableKey, {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    }, 5000);
+  } catch {
+    /* telemetry is best-effort — never surface to the payer */
+  }
 }

@@ -1,11 +1,14 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { requireAuth } from '../middleware/auth';
+import { requireAuth, requireApiKey } from '../middleware/auth';
 import { parseAsset } from '../lib/assets';
 import { planRoute, type Flow } from '../services/router.service';
-import { executeOrder, syncOrder, toDepositInstruction } from '../services/executor.service';
+import { executeOrder, syncOrder, toDepositInstruction, buildLifiApproveTx, buildLifiBridgeTx, recordLifiSubmission } from '../services/executor.service';
+import { recordServerEvent, recordOrderEvent } from '../services/order-event.service';
+import { deviceTypeFromUA } from '../lib/user-agent';
+import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
-import { paycrest } from '../services/paycrest.service';
+import { paycrest, rateUnavailable } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { Decimal } from 'decimal.js';
 
@@ -74,6 +77,13 @@ function sanitizeCustomer(raw: unknown): { email?: string; name?: string; extern
   return Object.keys(out).length ? out : null;
 }
 
+// Normalize an email for identity comparison: trimmed + lowercased, or null
+// when absent/blank. Used to gate session-scoped order resume so a different
+// payer on a shared device never inherits the previous payer's pending order.
+function normalizeEmail(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim().toLowerCase() : null;
+}
+
 // POST /api/v1/orders — direction-agnostic order creation.
 router.post('/', requireAuth, async (req, res) => {
   const body = req.body as CreateOrderBody;
@@ -113,7 +123,9 @@ router.post('/', requireAuth, async (req, res) => {
       // the route requires a Paycrest refund account.
     }
 
-    const merchant = await prisma.merchant.findUnique({ where: { id: req.merchantId } });
+    // Auth already loaded the merchant for API-key/session requests — only
+    // secret-key (server-to-server) auth needs this extra round trip.
+    const merchant = req.merchant ?? await prisma.merchant.findUnique({ where: { id: req.merchantId } });
     if (!merchant) return res.status(401).json({ success: false, error: 'Unknown merchant' });
 
     // Unverified merchants (no email verification) cannot place orders.
@@ -142,27 +154,37 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    const sourceInstrument = await resolveInstrument(body.source, merchant.id);
-
-    let destInstrument;
-    if (body.dest) {
-      destInstrument = await resolveInstrument(body.dest, merchant.id);
-    } else {
-      if (!merchant.defaultPayoutInstrumentId) {
-        return res.status(400).json({ success: false, error: 'No dest instrument and merchant has no default payout configured' });
-      }
-      destInstrument = await prisma.instrument.findUnique({ where: { id: merchant.defaultPayoutInstrumentId } });
-      if (!destInstrument) return res.status(500).json({ success: false, error: 'Default payout instrument missing' });
+    if (!body.dest && !merchant.defaultPayoutInstrumentId) {
+      return res.status(400).json({ success: false, error: 'No dest instrument and merchant has no default payout configured' });
     }
+
+    // Independent reads (none depends on another's result) — run concurrently
+    // instead of as three separate sequential round trips. checkoutSession is
+    // pulled forward from where it's used further below for the same reason.
+    const [sourceInstrument, destInstrument, checkoutSession] = await Promise.all([
+      resolveInstrument(body.source, merchant.id),
+      body.dest
+        ? resolveInstrument(body.dest, merchant.id)
+        : prisma.instrument.findUnique({ where: { id: merchant.defaultPayoutInstrumentId! } }),
+      body.sessionId
+        ? prisma.checkoutSession.findUnique({ where: { id: body.sessionId, merchantId: merchant.id } })
+        : Promise.resolve(null),
+    ]);
+    if (!destInstrument) return res.status(500).json({ success: false, error: 'Default payout instrument missing' });
 
     // 2. Plan route across provider edges. Flow defaults to 'external' so
     //    NEAR Intents handles the cross-chain leg via deposit address; pass
     //    'self' to bias toward ChainRails (wired-in-wallet flow) once ready.
+    //    sourceWallet tells the planner whether a signature can be collected
+    //    from the payer: it is set when the caller names the paying wallet
+    //    (corridor, the SEP-24 ramp) and empty in anonymous deposit flows
+    //    (payment links, cash-out links), where signing rails are unusable.
     const plan = planRoute({
       sourceAsset: sourceInstrument.assetKey,
       destAsset: destInstrument.assetKey,
       amount: body.amount,
       flow: body.flow ?? 'external',
+      sourceWallet: sourceInstrument.walletAddress || undefined,
     });
 
     // 3. Snapshot a Paycrest rate when the route touches fiat (for the quote
@@ -181,15 +203,33 @@ router.post('/', requireAuth, async (req, res) => {
     let sourceAmount = body.amountIn === 'dest' ? 0 : body.amount;
     let destAmountFiat: number | undefined = undefined;
     let appFeeBps: number | undefined = undefined;
+    // A corridor Paycrest has no provider for is a real, reportable condition —
+    // not a calculation slip — so it is tracked outside the try below, whose
+    // catch only logs. Without this the order would be created with the rate
+    // snapshot silently missing and (for amountIn:'dest') sourceAmount still 0.
+    let closedCorridor: string | null = null;
 
     try {
       const fiat = srcP.kind === 'fiat' ? srcP.currency : dstP.kind === 'fiat' ? dstP.currency : null;
       let sellRate = 1; let buyRate = 1;
       if (fiat) {
-        const r = await paycrest.getRate('base', 'USDC', 1, fiat);
-        sellRate = Number(r.sell.rate) || 1;
-        buyRate = Number(r.buy.rate) || 1;
-        quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
+        if (req.sandboxMode) {
+          // Sandbox is self-contained — use the fixed rate, never touch live Paycrest.
+          sellRate = buyRate = quoteRate = SANDBOX_NGN_RATE;
+        } else {
+          const r = await paycrest.getRate('base', 'USDC', 1, fiat);
+          // Only the leg this direction needs — see rateUnavailable(). Never
+          // fall back to 1 for a missing leg: a ₦2,000 onramp would price as
+          // 2,000 USDC.
+          const sell = Number(r?.sell?.rate);
+          const buy  = Number(r?.buy?.rate);
+          if (srcP.kind === 'fiat' && !buy)  closedCorridor = rateUnavailable(fiat, 'deposits');
+          if (dstP.kind === 'fiat' && !sell) closedCorridor = rateUnavailable(fiat, 'payouts');
+          if (closedCorridor) throw new Error(closedCorridor);
+          sellRate = sell || 1;
+          buyRate = buy || 1;
+          quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
+        }
       }
 
       if (body.amountIn === 'dest') {
@@ -226,6 +266,7 @@ router.post('/', requireAuth, async (req, res) => {
           const targetFiat = new Decimal(body.amount);
           
           const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
+          const isPureBachs    = plan.steps.length === 1 && plan.steps[0].provider === 'bachs';
 
           if (isPurePaystack) {
             // Paystack handles its own gross-up in the executor.
@@ -233,6 +274,17 @@ router.post('/', requireAuth, async (req, res) => {
             sourceAmount = targetFiat.toNumber();
             usdEquivalent = targetFiat.div(sellRate).toNumber(); // for reporting
             appFeeBps = 0; // handled by paystack.grossUp
+            destAmountFiat = body.amount;
+          } else if (isPureBachs) {
+            // Bachs split: the payer pays a grossed-up amount so the vendor nets
+            // exactly the target after Weave's fee (the fee comes out of the split,
+            // not added on top in the executor). vendorShare = collected × (1−fee)
+            // = target ⇒ collected = target / (1−fee). No rate needed for the
+            // source leg (pure NGN); sellRate only feeds usdEquivalent reporting.
+            const feePct = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS).div(10000);
+            sourceAmount = targetFiat.div(new Decimal(1).minus(feePct)).toNumber();
+            usdEquivalent = new Decimal(sourceAmount).div(sellRate).toNumber();
+            appFeeBps = 0; // realized in the split
             destAmountFiat = body.amount;
           } else {
             const sr = new Decimal(sellRate);
@@ -281,20 +333,48 @@ router.post('/', requireAuth, async (req, res) => {
         }
       }
     } catch (err: any) {
-      console.error(`[orders] calculation error:`, err.message);
+      if (!closedCorridor) console.error(`[orders] calculation error:`, err.message);
+    }
+
+    // Refuse rather than price the order off rates we never got.
+    if (closedCorridor) return res.status(400).json({ success: false, error: closedCorridor });
+
+    // Safety net: a pure-Paystack order (same-currency NGN→NGN, single step) prices
+    // its source leg 1:1 with the target and needs no rate. If the rate snapshot above
+    // threw (common in sandbox, where live Paycrest may be unreachable), sourceAmount is
+    // still its 0 default — and Paystack rejects a 0 charge with "Invalid Amount Sent".
+    // Pin it to the requested amount so the charge is always well-formed.
+    const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
+    const isPureBachs    = plan.steps.length === 1 && plan.steps[0].provider === 'bachs';
+    if ((isPurePaystack || isPureBachs) && (!sourceAmount || sourceAmount <= 0)) {
+      // Rate fetch failed (common in sandbox) → pin the source leg so the charge
+      // is well-formed. Paystack charges 1:1 (grosses up in the executor); Bachs
+      // grosses up here so the vendor still nets the target after the split fee.
+      if (isPureBachs) {
+        const feePct = (SENDER_FEE_BPS + APP_FEE_BPS) / 10000;
+        sourceAmount = body.amount / (1 - feePct);
+      } else {
+        sourceAmount = body.amount;
+      }
+      if (destAmountFiat === undefined) destAmountFiat = body.amount;
+    }
+
+    // Minimum for crypto-funded payments. Sub-dollar crypto legs get swallowed by
+    // provider dust floors and swap/bridge fees (NEAR Intents especially), so a
+    // $0.20 payment would "succeed" but deliver nothing. Reject up-front with a
+    // clear, payer-actionable message rather than letting it fail mid-route.
+    const MIN_CRYPTO_PAYMENT_USD = Number(process.env.MIN_CRYPTO_PAYMENT_USD ?? 0.5);
+    if (srcP.kind === 'crypto' && usdEquivalent < MIN_CRYPTO_PAYMENT_USD) {
+      return res.status(400).json({
+        success: false,
+        error: `This amount is below the $${MIN_CRYPTO_PAYMENT_USD.toFixed(2)} minimum for crypto payments.`,
+      });
     }
 
     // 4. Create or Reuse the Order row (Idempotency)
     // If the merchant provided a reference, check for an existing order first.
+    // (sourceInstrument, destInstrument, checkoutSession already resolved above.)
     let order: any;
-
-    // Auto-link to Checkout Session if provided
-    let checkoutSession = null;
-    if (body.sessionId) {
-      checkoutSession = await prisma.checkoutSession.findUnique({
-        where: { id: body.sessionId, merchantId: merchant.id }
-      });
-    }
 
     if (body.reference) {
       order = await prisma.order.findFirst({
@@ -308,6 +388,32 @@ router.post('/', requireAuth, async (req, res) => {
         },
         include: { steps: { orderBy: { sequence: 'asc' } } }
       });
+    }
+
+    // Session-scoped idempotency. A checkout session represents ONE payment
+    // intent, so at most one live order may hang off it. If the session already
+    // points at a non-terminal order, resume it instead of minting a duplicate
+    // — guarded by payer email so a different payer on a shared device (or a
+    // misbehaving client) can never inherit the previous payer's order. When
+    // either email is unknown (the hosted flow doesn't collect one at the
+    // widget), fall back to the session id alone, since merchants create one
+    // session per payer.
+    if (!order && checkoutSession?.orderId) {
+      const linked = await prisma.order.findUnique({
+        where: { id: checkoutSession.orderId },
+        include: { steps: { orderBy: { sequence: 'asc' } } },
+      });
+      if (linked && ['awaiting_deposit', 'processing'].includes(linked.status)) {
+        const sessionEmail = normalizeEmail((checkoutSession.customer as any)?.email);
+        const incomingEmail = normalizeEmail(customer?.email);
+        const emailMismatch = !!sessionEmail && !!incomingEmail && sessionEmail !== incomingEmail;
+        if (emailMismatch) {
+          console.log(`[orders] session ${checkoutSession.id} email mismatch — starting a fresh order (silent)`);
+        } else {
+          order = linked;
+          console.log(`[orders] resuming session-linked order ${linked.id} for session ${checkoutSession.id}`);
+        }
+      }
     }
 
     if (!order) {
@@ -334,14 +440,25 @@ router.post('/', requireAuth, async (req, res) => {
           },
         });
         console.log(`[orders] created new order: ${order.id}`);
+        recordServerEvent(order.id, 'order.created', 'Order created', {
+          sourceAsset: sourceInstrument.assetKey,
+          destAsset: destInstrument.assetKey,
+          amount: sourceAmount,
+          sandbox: req.sandboxMode ?? false,
+          // Payer context — the widget's request. Drives the device/IP tiles.
+          ip: req.ip ?? null,
+          userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+        });
 
-        // Link to checkout session if it exists and isn't already linked
-        if (checkoutSession && !checkoutSession.orderId) {
+        // Link the session to this order. Re-link (not just first-link) so the
+        // silent-fresh path — where a mismatched payer's order was previously
+        // linked — repoints the session at the current payer's new order.
+        if (checkoutSession && checkoutSession.orderId !== order.id) {
           await prisma.checkoutSession.update({
             where: { id: checkoutSession.id },
-            data: { 
+            data: {
               orderId: order.id,
-              status: 'processing' 
+              status: 'processing'
             }
           });
           console.log(`[orders] linked session ${checkoutSession.id} to order ${order.id}`);
@@ -375,6 +492,10 @@ router.post('/', requireAuth, async (req, res) => {
     const refundAddress = srcP.kind === 'crypto'
       ? (body.refundAddress || sourceInstrument.walletAddress || '')
       : undefined;
+    // The wallet that signs (as opposed to the one we refund to). Only set
+    // when the caller named it; the planner has already ruled out signing
+    // rails when it is absent.
+    const sourceWallet = srcP.kind === 'crypto' ? (sourceInstrument.walletAddress || undefined) : undefined;
     const refundAccount = srcP.kind === 'fiat' ? (bankFromInstrument(sourceInstrument) ?? undefined) : undefined;
     const destBank = dstP.kind === 'fiat' ? (bankFromInstrument(destInstrument) ?? undefined) : undefined;
     const destWallet = dstP.kind === 'crypto' ? (destInstrument.walletAddress ?? '') : undefined;
@@ -389,7 +510,11 @@ router.post('/', requireAuth, async (req, res) => {
       appFeeBps,
       reference: order.id,
       merchantMemo: `Weave ${order.id}`,
+      // The payer's email (same one used for the success receipt) — Paystack uses
+      // it as the customer email so charges aren't attributed to the merchant.
+      payerEmail: (order.customer as any)?.email,
       refundAddress,
+      sourceWallet,
       refundAccount,
       destBank,
       destWallet,
@@ -468,15 +593,19 @@ router.get('/:id', requireAuth, async (req, res) => {
         // syncOrder returns the raw provider statuses it polled. The widget
         // keys intermediate UI on these (NEAR 'incomplete_deposit' → underpayment
         // warning; Paycrest 'fulfilled' → advance stage), so surface them.
-        const synced = await syncOrder(order.id);
+        // Pass the order we already fetched above so syncOrder doesn't re-query
+        // it, and only pay for a refetch when a step actually transitioned —
+        // most polls land between provider updates and change nothing.
+        const synced = await syncOrder(order.id, { status: order.status, sandboxMode: order.sandboxMode, steps: order.steps, bachsSplitStatus: order.bachsSplitStatus });
         paycrestStatus = synced.paycrestStatus;
         nearStatus = synced.nearStatus;
-        // Refetch to get the latest state after sync
-        const fresh = await prisma.order.findUnique({
-          where: { id: req.params.id },
-          include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
-        });
-        if (fresh) order = fresh;
+        if (synced.changed) {
+          const fresh = await prisma.order.findUnique({
+            where: { id: req.params.id },
+            include: { steps: { orderBy: { sequence: 'asc' } }, sourceInstrument: true, destInstrument: true },
+          });
+          if (fresh) order = fresh;
+        }
       } catch (err: any) {
         console.warn(`[orders] sync failed for ${order.id}:`, err.message);
       }
@@ -488,16 +617,228 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/v1/orders — list for the merchant.
+// ── LI.FI Stellar leg: bridge XDR + submission hash ──────────────────────────
+// The payer's wallet signs the `approve` XDR returned at creation, then asks
+// for the bridge XDR here (LI.FI can only simulate it once the allowance is
+// on-chain), signs it, and reports the resulting Stellar tx hash.
+
+async function loadLifiStep(req: any, res: any) {
+  const seq = Number(req.params.seq);
+  const order = await prisma.order.findFirst({
+    where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
+    select: { id: true, status: true },
+  });
+  if (!order) { res.status(404).json({ success: false, error: 'Order not found' }); return null; }
+  const step = await prisma.routeStep.findUnique({ where: { orderId_sequence: { orderId: order.id, sequence: seq } } });
+  if (!step || step.provider !== 'lifi') { res.status(404).json({ success: false, error: 'No LI.FI step at that sequence' }); return null; }
+  if (['done', 'failed'].includes(step.status)) { res.status(409).json({ success: false, error: `Step already ${step.status}` }); return null; }
+  return step;
+}
+
+router.post('/:id/steps/:seq/approve-tx', requireAuth, async (req, res) => {
+  try {
+    const step = await loadLifiStep(req, res);
+    if (!step) return;
+    // { standing: true } → approve a bounded standing allowance so later sends need one signature.
+    res.json({ success: true, data: await buildLifiApproveTx(step, { standing: req.body?.standing === true }) });
+  } catch (err: any) {
+    res.status(502).json({ success: false, error: err.message || 'Could not build the approval transaction' });
+  }
+});
+
+router.post('/:id/steps/:seq/bridge-tx', requireAuth, async (req, res) => {
+  try {
+    const step = await loadLifiStep(req, res);
+    if (!step) return;
+    const { unsignedXdr } = await buildLifiBridgeTx(step);
+    res.json({ success: true, data: { unsignedXdr } });
+  } catch (err: any) {
+    // Simulation failure before the allowance lands is the common case — tell the client to retry.
+    const allowance = /allowance/i.test(err.message ?? '');
+    res.status(allowance ? 409 : 502).json({
+      success: false,
+      error: allowance ? 'Approval not confirmed on-chain yet — retry in a few seconds.' : (err.message || 'Could not build the bridge transaction'),
+      code: allowance ? 'ALLOWANCE_PENDING' : 'BRIDGE_TX_FAILED',
+    });
+  }
+});
+
+router.post('/:id/steps/:seq/submitted', requireAuth, async (req, res) => {
+  try {
+    const step = await loadLifiStep(req, res);
+    if (!step) return;
+    await recordLifiSubmission(step, String(req.body?.txHash ?? ''));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/v1/orders/:id/events — the payment session timeline for the merchant
+// dashboard. Merchant-scoped; returns events (oldest-first) + a derived summary.
+router.get('/:id/events', requireAuth, async (req, res) => {
+  try {
+    const order = await prisma.order.findFirst({
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
+      select: { id: true, createdAt: true, updatedAt: true },
+    });
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+
+    const events = await prisma.orderEvent.findMany({
+      where: { orderId: order.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Derived summary (computed, never stored) — mirrors the Paystack-style tiles.
+    const attempts = events.filter((e) => e.type === 'auth_window.opened' || e.type === 'retry').length;
+    const errors = events.filter((e) => e.type === 'error.shown' || e.type === 'order.failed').length;
+    const first = events[0]?.createdAt ?? order.createdAt;
+    const last = events.length ? events[events.length - 1].createdAt : order.updatedAt;
+    const durationSec = Math.max(0, Math.round((new Date(last).getTime() - new Date(first).getTime()) / 1000));
+
+    // Device + IP: prefer the customer's browser context (captured on a client
+    // event) over order.created — which for API/server-created orders is the
+    // merchant's backend, not the payer. Fall back to order.created otherwise.
+    const clientCtx = [...events].reverse().find(
+      (e) => e.source === 'client' && (e.metadata as Record<string, unknown> | null)?.userAgent,
+    );
+    const ctxSource = clientCtx ?? events.find((e) => e.type === 'order.created');
+    const cm = (ctxSource?.metadata ?? {}) as Record<string, unknown>;
+    const ip = cm.ip ? String(cm.ip) : null;
+    const device = deviceTypeFromUA(cm.userAgent ? String(cm.userAgent) : null);
+
+    res.json({
+      success: true,
+      data: { events, summary: { eventCount: events.length, attempts, errors, durationSec, device, ip } },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Whitelisted client event types → server-owned label builders. The server
+// controls the label (clients can't inject arbitrary text); only bounded,
+// sanitized bits of metadata flow through.
+const CLIENT_EVENT_LABELS: Record<string, (m: Record<string, unknown>) => string> = {
+  'checkout.opened':    () => 'Checkout opened',
+  'method.selected':    (m) => `Set payment method to: ${clip(m.method, 40) || 'unknown'}`,
+  'chain.selected':     (m) => `Selected ${clip(m.chain, 40) || 'chain'}`,
+  'auth_window.opened': () => 'Third-party authentication window opened',
+  'auth_window.closed': () => 'Third-party authentication window closed',
+  'retry':              () => 'Payment retried',
+  'error.shown':        (m) => `Error shown${m.message ? `: ${clip(m.message, 120)}` : ''}`,
+};
+
+function clip(v: unknown, max: number): string {
+  if (v == null) return '';
+  return String(v).slice(0, max);
+}
+
+// POST /api/v1/orders/:id/events — the widget appends client-side session events
+// (method chosen, auth window open/close, retries). Untrusted: forced to
+// source="client", server-owned labels, type-whitelisted, batch-capped.
+router.post('/:id/events', requireApiKey, async (req, res) => {
+  try {
+    const order = await prisma.order.findFirst({
+      where: { id: req.params.id, merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
+      select: { id: true },
+    });
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+
+    const raw = Array.isArray(req.body?.events) ? req.body.events : [];
+    if (raw.length === 0) return res.status(400).json({ success: false, error: 'events array required' });
+    if (raw.length > 50) return res.status(400).json({ success: false, error: 'too many events (max 50)' });
+
+    // This request IS the customer's browser (the widget), so it carries the real
+    // payer device/IP — unlike order.created, which for API/server-created orders
+    // is the merchant's backend. Stamp it server-side (client can't spoof it).
+    const clientIp = req.ip ?? null;
+    const clientUa = (req.headers['user-agent'] as string | undefined) ?? null;
+
+    let recorded = 0;
+    for (const ev of raw) {
+      const type = String(ev?.type ?? '');
+      const build = CLIENT_EVENT_LABELS[type];
+      if (!build) continue; // silently drop unknown types
+      const metadata = (ev?.metadata && typeof ev.metadata === 'object' && !Array.isArray(ev.metadata))
+        ? ev.metadata as Record<string, unknown>
+        : {};
+      // Client-reported timestamp is informational; server createdAt is authoritative.
+      const occurredAt = ev?.occurredAt ? new Date(ev.occurredAt) : new Date();
+      recordOrderEvent({
+        orderId: order.id,
+        type,
+        label: build(metadata),
+        source: 'client',
+        // Server-set ip/userAgent LAST so client-supplied metadata can't spoof them.
+        metadata: { ...metadata, ip: clientIp, userAgent: clientUa },
+        occurredAt: isNaN(occurredAt.getTime()) ? new Date() : occurredAt,
+      });
+      recorded++;
+    }
+
+    res.json({ success: true, data: { recorded } });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/v1/orders — paginated, server-filtered list for the merchant.
+// Params: limit (default 25, max 500), offset, status, direction, q, fromDate,
+// toDate. Returns { orders, total, limit, offset, aggregates } — the aggregates
+// span the merchant's WHOLE set (not the page) so the stat cards stay accurate.
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const orders = await prisma.order.findMany({
-      where: { merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 500);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const status = req.query.status && req.query.status !== 'all' ? String(req.query.status) : undefined;
+    const direction = req.query.direction && req.query.direction !== 'all' ? String(req.query.direction) : undefined;
+    const q = req.query.q ? String(req.query.q).trim() : '';
+    const fromDate = req.query.fromDate ? new Date(String(req.query.fromDate)) : null;
+    const toDate = req.query.toDate ? new Date(String(req.query.toDate)) : null;
+
+    const base = { merchantId: req.merchantId, sandboxMode: req.sandboxMode ?? false };
+    const where: any = { ...base };
+    if (status) where.status = status;
+    if (fromDate && !isNaN(fromDate.getTime())) where.createdAt = { ...(where.createdAt ?? {}), gte: fromDate };
+    if (toDate && !isNaN(toDate.getTime())) where.createdAt = { ...(where.createdAt ?? {}), lte: toDate };
+    // Direction derives from asset kinds — the two common corridors map cleanly.
+    if (direction === 'offramp') { where.sourceAssetKey = { startsWith: 'crypto:' }; where.destAssetKey = { startsWith: 'fiat:' }; }
+    else if (direction === 'onramp') { where.sourceAssetKey = { startsWith: 'fiat:' }; where.destAssetKey = { startsWith: 'crypto:' }; }
+    if (q) {
+      where.OR = [
+        { id: { contains: q, mode: 'insensitive' } },
+        { reference: { contains: q, mode: 'insensitive' } },
+        { sourceInstrument: { bankAccountName: { contains: q, mode: 'insensitive' } } },
+        { destInstrument: { bankAccountName: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const [orders, total, completedCount, todayAgg, pendingAgg] = await Promise.all([
+      prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, skip: offset, take: limit, include: { steps: { orderBy: { sequence: 'asc' } } } }),
+      prisma.order.count({ where }),
+      prisma.order.count({ where: { ...base, status: 'completed' } }),
+      prisma.order.aggregate({ _sum: { destAmount: true }, where: { ...base, status: 'completed', createdAt: { gte: startOfToday } } }),
+      prisma.order.aggregate({ _sum: { destAmount: true }, where: { ...base, status: { in: ['awaiting_deposit', 'processing', 'bridging'] } } }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        orders: orders.map(serializeOrder),
+        total,
+        limit,
+        offset,
+        aggregates: {
+          completedCount,
+          todayNetSum: Number(todayAgg._sum.destAmount ?? 0),
+          pendingNetSum: Number(pendingAgg._sum.destAmount ?? 0),
+        },
+      },
     });
-    res.json({ success: true, data: orders.map(serializeOrder) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

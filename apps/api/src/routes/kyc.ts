@@ -5,6 +5,7 @@ import { redis } from '../lib/serverless-redis';
 import { requireSession } from '../middleware/auth';
 import { authLimiter } from '../middleware/rate-limit';
 import { sendEmailVerificationEmail } from '../services/email.service';
+import { recordMerchantAudit } from '../services/audit.service';
 
 const router = Router();
 
@@ -126,6 +127,8 @@ router.post('/email/verify', requireSession, async (req, res) => {
         },
       });
     });
+
+    recordMerchantAudit(req, 'email.verified', { metadata: { email: merchant.email } });
 
     return res.json({
       success: true,

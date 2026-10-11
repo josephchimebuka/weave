@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import Link from 'next/link';
+import Script from 'next/script';
 import CyclingWidget from '../components/CyclingWidget';
 import { RequestAccessModal } from '../components/RequestAccessModal';
 
@@ -61,27 +63,6 @@ function WovenBackground() {
 export default function Home() {
   const [isRequestAccessOpen, setIsRequestAccessOpen] = useState(false);
 
-  // Load Calendly script on page load
-  useEffect(() => {
-    // Check if script already exists
-    const existingScript = document.querySelector('script[src*="calendly"]');
-    if (existingScript) {
-      return;
-    }
-
-    // Add preconnect for faster DNS resolution
-    const preconnect = document.createElement('link');
-    preconnect.rel = 'preconnect';
-    preconnect.href = 'https://assets.calendly.com';
-    document.head.appendChild(preconnect);
-
-    // Load the Calendly script
-    const script = document.createElement('script');
-    script.src = 'https://assets.calendly.com/assets/external/widget.js';
-    script.async = true;
-    document.head.appendChild(script);
-  }, []);
-
   return (
     <div className='w-full h-full 3xl:h-screen' style={{
       background: '#F5F4EF',
@@ -89,6 +70,7 @@ export default function Home() {
       color: '#0B0F0E', overflow: 'hidden',
       display: 'flex', flexDirection: 'column',
     }}>
+      <Script src="https://assets.calendly.com/assets/external/widget.js" strategy="lazyOnload" />
       <RequestAccessModal isOpen={isRequestAccessOpen} onClose={() => setIsRequestAccessOpen(false)} />
       <WovenBackground />
 
@@ -96,11 +78,11 @@ export default function Home() {
       <nav className="px-6 md:px-14 py-4 md:py-6 max-w-[1280px] w-full mx-auto flex items-center justify-between relative z-10 shrink-0">
         <Wordmark size={26} />
         <div style={{ display: 'flex', gap: 24, alignItems: 'center' }}>
-          <a href="/demo" style={{
+          <Link href="/demo" style={{
             color: '#0B0F0E', fontSize: 14, fontWeight: 500,
           }} className="hidden sm:inline no-underline hover:underline hover:text-forest transition-colors cursor-pointer">
             Try Demo
-          </a>
+          </Link>
           <a href="https://app.paywithweave.com/docs" rel="noreferrer" target="_blank" style={{
             color: '#0B0F0E', fontSize: 14, fontWeight: 500,
             display: 'flex', alignItems: 'center', gap: 6,
@@ -144,14 +126,14 @@ export default function Home() {
           }} className="w-full sm:w-auto bg-ink hover:bg-forest transition-all active:scale-95 shadow-leaf">
             Request Access
           </button>
-          <a href="/demo" style={{
+          <Link href="/demo" style={{
             height: 44, padding: '0 22px', borderRadius: 10,
             color: '#0B0F0E',
             border: '1px solid #E8EAE6', fontFamily: 'inherit', fontSize: 14, fontWeight: 500,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }} className="w-full sm:w-auto bg-white hover:bg-cream-soft no-underline active:scale-95 transition-all shadow-sm">
             Try Demo
-          </a>
+          </Link>
         </div>
       </section>
 
@@ -161,6 +143,7 @@ export default function Home() {
         display: 'flex', justifyContent: 'center',
         flex: 1, overflow: 'hidden',
       }} className="px-4 lg:px-0 origin-center">
+        <h2 className="sr-only">Live checkout preview</h2>
         <CyclingWidget />
       </div>
 

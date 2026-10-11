@@ -13,9 +13,10 @@ import {
   CreditCard,
   ShoppingBag,
 } from 'lucide-react';
-import { fetchOrdersClient as fetchOrders, fetchOrderClient as fetchOrder, applyOrderFilter } from '../lib/dashboard-api-client';
+import { fetchOrdersPageClient, fetchOrderEventsClient, type OrdersAggregates } from '../lib/dashboard-api-client';
 import { directionOf, parseAsset } from '../types';
 import type { Order } from '../types';
+import { EVENT_TONE, fmtDuration, eventTime, type OrderTimeline } from '../lib/order-events';
 
 type SearchParams = {
   q?: string;
@@ -35,6 +36,15 @@ const STATUS_PALETTE: Record<string, { chip: string; dot: string; label: string 
   refunded: { chip: 'bg-cream-deep text-ink-soft', dot: 'bg-ink-muted', label: 'Refunded' },
   failed: { chip: 'bg-terracotta-soft text-terracotta', dot: 'bg-terracotta', label: 'Failed' },
   expired: { chip: 'bg-terracotta-soft text-terracotta', dot: 'bg-terracotta', label: 'Expired' },
+};
+
+// Sub-label shown under the order status for Bachs naira orders — the bank payout leg.
+const PAYOUT_MINI: Record<string, { label: string; cls: string }> = {
+  paid:       { label: 'Paid out',   cls: 'text-forest-deep' },
+  processing: { label: 'Processing', cls: 'text-tan-deep' },
+  pending:    { label: 'Processing', cls: 'text-tan-deep' },
+  blocked:    { label: 'Blocked',    cls: 'text-terracotta' },
+  failed:     { label: 'Payout failed', cls: 'text-terracotta' },
 };
 
 function counterpartyName(order: Order): string {
@@ -108,21 +118,105 @@ function fmtDate(iso: string): string {
 }
 
 import AutoRefresh from '../AutoRefresh';
+import { Select } from '../../components/Select';
+
+const PAGE_SIZE = 25;
+
+type RangeKey = 'today' | 'yesterday' | 'last7' | 'thisMonth' | 'lastMonth' | 'alltime' | 'custom';
+
+const DATE_RANGE_OPTIONS: { value: RangeKey; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'last7', label: 'Last 7 days' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'lastMonth', label: 'Last month' },
+  { value: 'alltime', label: 'All time' },
+  { value: 'custom', label: 'Custom' },
+];
+
+function startOfDay(d: Date) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function endOfDay(d: Date) { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; }
+
+// Maps a preset (or custom inputs) to createdAt bounds the API understands.
+function computeRange(key: RangeKey, customFrom: string, customTo: string): { fromDate?: string; toDate?: string } {
+  const now = new Date();
+  switch (key) {
+    case 'today':
+      return { fromDate: startOfDay(now).toISOString(), toDate: endOfDay(now).toISOString() };
+    case 'yesterday': {
+      const y = new Date(now); y.setDate(now.getDate() - 1);
+      return { fromDate: startOfDay(y).toISOString(), toDate: endOfDay(y).toISOString() };
+    }
+    case 'last7': {
+      const from = new Date(now); from.setDate(now.getDate() - 6);
+      return { fromDate: startOfDay(from).toISOString(), toDate: endOfDay(now).toISOString() };
+    }
+    case 'thisMonth': {
+      const from = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { fromDate: startOfDay(from).toISOString(), toDate: endOfDay(now).toISOString() };
+    }
+    case 'lastMonth': {
+      const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const to = new Date(now.getFullYear(), now.getMonth(), 0); // day 0 = last day of prev month
+      return { fromDate: startOfDay(from).toISOString(), toDate: endOfDay(to).toISOString() };
+    }
+    case 'custom': {
+      const out: { fromDate?: string; toDate?: string } = {};
+      if (customFrom) out.fromDate = startOfDay(new Date(customFrom)).toISOString();
+      if (customTo) out.toDate = endOfDay(new Date(customTo)).toISOString();
+      return out;
+    }
+    case 'alltime':
+    default:
+      return {};
+  }
+}
 
 export default function TransactionsPage() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [total, setTotal] = useState(0);
+  const [aggregates, setAggregates] = useState<OrdersAggregates>({ completedCount: 0, todayNetSum: 0, pendingNetSum: 0 });
+  const [page, setPage] = useState(0); // zero-based
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('completed');
   const [directionFilter, setDirectionFilter] = useState('all');
+  const [dateRange, setDateRange] = useState<RangeKey>('today');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [selected, setSelected] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Debounce the search box so we don't refetch on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const range = computeRange(dateRange, customFrom, customTo);
+
+  // Any filter change resets to the first page.
+  useEffect(() => { setPage(0); }, [debouncedQuery, statusFilter, directionFilter, dateRange, customFrom, customTo]);
+
+  const query = {
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    q: debouncedQuery || undefined,
+    status: statusFilter,
+    direction: directionFilter,
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+  };
+
   const load = async (isSilent = false) => {
     try {
       if (!isSilent) setLoading(true);
-      const rawOrders = await fetchOrders(20);
-      setOrders(rawOrders);
+      const res = await fetchOrdersPageClient(query);
+      setOrders(res.orders);
+      setTotal(res.total);
+      setAggregates(res.aggregates);
+      setError(null);
       setLoading(false);
     } catch (err) {
       if (!isSilent) {
@@ -134,34 +228,16 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedQuery, statusFilter, directionFilter, dateRange, customFrom, customTo]);
 
-  // Filter orders based on search and filters
-  const filteredOrders = orders.filter((o) => {
-    const q = searchQuery.toLowerCase();
-    const matchesSearch =
-      !q ||
-      counterpartyName(o).toLowerCase().includes(q) ||
-      o.id.toLowerCase().includes(q);
+  const filteredOrders = orders; // filtering is server-side now
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const hasActiveFilter = !!debouncedQuery || statusFilter !== 'all' || directionFilter !== 'all' || dateRange !== 'alltime';
 
-    const matchesStatus =
-      statusFilter === 'all' || o.status === statusFilter;
-
-    const matchesDirection =
-      directionFilter === 'all' || directionOf(o) === directionFilter;
-
-    return matchesSearch && matchesStatus && matchesDirection;
-  });
-
-  // Stat aggregates
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayDone = orders.filter((o) => o.status === 'completed' && o.createdAt.slice(0, 10) === todayStr);
-  const pending = orders.filter((o) => ['awaiting_deposit', 'processing', 'bridging'].includes(o.status));
-
-  // Determine merchant's active fiat currency from their recent orders
+  // Merchant's active fiat currency, inferred from the current page.
   let currencyCode = 'USD';
   let currencySymbol = '$';
-
   for (const o of orders) {
     if (o.destAssetKey) {
       const parsed = parseAsset(o.destAssetKey);
@@ -176,16 +252,20 @@ export default function TransactionsPage() {
   const fmtAggregate = (n: number | null | undefined): string => {
     if (n == null || isNaN(n)) return '—';
     const suffix = ['$', '₦', '€', '£'].includes(currencySymbol) ? '' : ` ${currencyCode}`;
-    return `${currencySymbol}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix}`;
+    return `${currencySymbol}${Math.round(n).toLocaleString('en-US')}${suffix}`;
   };
 
-  const todaySalesFiat = todayDone.reduce((sum, o) => sum + (netSettlement(o) ?? 0), 0);
-  const pendingFiat = pending.reduce((sum, o) => sum + (netSettlement(o) ?? 0), 0);
-  const completedCount = orders.filter((o) => o.status === 'completed').length;
+  // Stat cards now use server aggregates (whole set, not just this page).
+  const statToday = aggregates.todayNetSum;
+  const statPending = aggregates.pendingNetSum;
+  const statSuccess = aggregates.completedCount;
 
-  const statToday = todaySalesFiat;
-  const statPending = pendingFiat;
-  const statSuccess = completedCount;
+  const exportParams = new URLSearchParams();
+  if (debouncedQuery) exportParams.set('q', debouncedQuery);
+  if (statusFilter !== 'all') exportParams.set('status', statusFilter);
+  if (directionFilter !== 'all') exportParams.set('direction', directionFilter);
+  if (range.fromDate) exportParams.set('fromDate', range.fromDate);
+  if (range.toDate) exportParams.set('toDate', range.toDate);
 
   return (
     <div className="flex flex-col xl:flex-row gap-0 -mx-6 md:-mx-10 lg:-mx-14 -my-8 md:-my-10 min-h-[calc(100vh-2rem)]">
@@ -193,7 +273,7 @@ export default function TransactionsPage() {
       {/* List side */}
       <div className={`flex-1 flex flex-col overflow-hidden px-6 md:px-10 lg:px-14 py-8 md:py-10 ${selected ? 'xl:max-w-[calc(100%-420px)]' : ''}`}>
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
+        <div className="relative z-20 flex flex-col md:flex-row md:items-center justify-between gap-5 mb-8">
           <div className="fade-up">
             <h1 className="font-display text-[32px] sm:text-[42px] font-semibold text-ink tracking-tight leading-none">
               Transactions
@@ -206,7 +286,7 @@ export default function TransactionsPage() {
           {error ? (
             <div className="text-terracotta text-[14px] font-medium">{error}</div>
           ) : (
-            <div className="flex items-center gap-3 fade-up" style={{ animationDelay: '80ms' }}>
+            <div className="flex items-center flex-wrap gap-3 fade-up" style={{ animationDelay: '80ms' }}>
               <div className="relative">
                 <Search size={15} strokeWidth={1.9} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-muted" />
                 <input
@@ -217,10 +297,10 @@ export default function TransactionsPage() {
                   className="w-64 pl-10 pr-4 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink placeholder:text-ink-faint focus:outline-none focus:border-forest/40 focus:ring-0 transition-colors shadow-leaf"
                 />
               </div>
-              <select
+              <Select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
+                className="pl-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
               >
                 <option value="all">All Status</option>
                 <option value="completed">Completed</option>
@@ -229,14 +309,36 @@ export default function TransactionsPage() {
                 <option value="awaiting_deposit">Awaiting</option>
                 <option value="failed">Failed</option>
                 <option value="refunded">Refunded</option>
-              </select>
-              <Link
-                href="/transactions/export"
-                className="flex items-center gap-2 px-5 py-3 bg-forest text-cream-soft rounded-full text-[14px] hover:bg-forest-deep transition-all shadow-leaf font-medium"
+              </Select>
+              <Select
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value as RangeKey)}
+                className="pl-5 py-3 bg-cream-soft border border-hair rounded-full text-[14px] text-ink-soft hover:text-forest-deep hover:border-forest/30 transition-all shadow-leaf font-medium focus:outline-none"
               >
-                <Download size={15} strokeWidth={2} />
-                Export
-              </Link>
+                {DATE_RANGE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </Select>
+              {dateRange === 'custom' && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={customFrom}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                    className="px-3.5 py-3 bg-cream-soft border border-hair rounded-full text-[13px] text-ink-soft focus:outline-none focus:border-forest/40 shadow-leaf"
+                  />
+                  <span className="text-ink-muted text-[13px]">to</span>
+                  <input
+                    type="date"
+                    value={customTo}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                    className="px-3.5 py-3 bg-cream-soft border border-hair rounded-full text-[13px] text-ink-soft focus:outline-none focus:border-forest/40 shadow-leaf"
+                  />
+                </div>
+              )}
+              <ExportMenu baseParams={exportParams.toString()} />
+
+
             </div>
           )}
         </div>        {/* Stat cards */}
@@ -291,8 +393,10 @@ export default function TransactionsPage() {
             <div className="hidden sm:block text-right min-w-22.5">Settlement</div>
           </div>
 
-          {filteredOrders.length === 0 ? (
-            <EmptyList hasFilter={searchQuery.length > 0 || statusFilter !== 'all'} />
+          {loading && orders.length === 0 ? (
+            <div className="py-20 text-center text-[14px] text-ink-muted">Loading transactions…</div>
+          ) : filteredOrders.length === 0 ? (
+            <EmptyList hasFilter={hasActiveFilter} onClear={() => { setSearchQuery(''); setStatusFilter('all'); setDirectionFilter('all'); setDateRange('alltime'); }} />
           ) : (
             <div className="flex-1 overflow-y-auto">
               {filteredOrders.map((o) => {
@@ -331,6 +435,10 @@ export default function TransactionsPage() {
                         <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
                         {status.label}
                       </span>
+                      {(() => {
+                        const p = PAYOUT_MINI[o.bachsPayoutStatus ?? ''];
+                        return p ? <div className={`mt-1 text-[10px] font-semibold uppercase tracking-wide ${p.cls}`}>{p.label}</div> : null;
+                      })()}
                     </div>
                     <div className="hidden sm:block text-right font-semibold text-ink tabular-nums whitespace-nowrap text-[14px]">
                       {fmtAmount(netSettlement(o), o.destAssetKey)}
@@ -338,6 +446,32 @@ export default function TransactionsPage() {
                   </button>
                 );
               })}
+            </div>
+          )}
+
+          {/* Pagination */}
+          {total > 0 && (
+            <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3.5 border-t border-hair-soft bg-cream-soft">
+              <p className="text-[12px] text-ink-muted tabular-nums">
+                {total === 0 ? 'No results' : `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total.toLocaleString()}`}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0 || loading}
+                  className="px-3.5 py-2 rounded-full text-[13px] font-medium border border-hair text-ink-soft hover:text-forest-deep hover:border-forest/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Previous
+                </button>
+                <span className="text-[12px] text-ink-muted tabular-nums px-1">Page {page + 1} of {totalPages}</span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1 || loading}
+                  className="px-3.5 py-2 rounded-full text-[13px] font-medium border border-hair text-ink-soft hover:text-forest-deep hover:border-forest/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -388,22 +522,102 @@ function StatCard({
   );
 }
 
-function EmptyList({ hasFilter }: { hasFilter: boolean }) {
+function EmptyList({ hasFilter, onClear }: { hasFilter: boolean; onClear?: () => void }) {
   return (
     <div className="py-20 text-center">
       <p className="text-[14px] text-ink-muted">
         {hasFilter ? 'No transactions match your filters.' : 'No transactions yet.'}
       </p>
       {hasFilter && (
-        <Link href="/transactions" className="inline-block mt-3 text-[13px] text-forest-deep font-semibold hover:underline">
+        <button onClick={onClear} className="inline-block mt-3 text-[13px] text-forest-deep font-semibold hover:underline">
           Clear filters
-        </Link>
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Export menu — "Everything" (respects current filters) or a custom date range.
+function ExportMenu({ baseParams }: { baseParams: string }) {
+  const [open, setOpen] = useState(false);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+
+  const buildHref = (withRange: boolean) => {
+    const p = new URLSearchParams(baseParams);
+    if (withRange) {
+      if (from) p.set('fromDate', new Date(from).toISOString());
+      // Include the whole `to` day.
+      if (to) p.set('toDate', new Date(new Date(to).setHours(23, 59, 59, 999)).toISOString());
+    }
+    const qs = p.toString();
+    return `/transactions/export${qs ? `?${qs}` : ''}`;
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 px-5 py-3 bg-forest text-cream-soft rounded-full text-[14px] hover:bg-forest-deep transition-all shadow-leaf font-medium"
+      >
+        <Download size={15} strokeWidth={2} />
+        Export
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-72 z-40 rounded-2xl bg-cream-soft border border-hair-soft shadow-leaf-lg p-3 fade-up">
+            <a
+              href={buildHref(false)}
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2.5 rounded-xl text-[13.5px] text-ink hover:bg-cream-deep/50 transition-colors"
+            >
+              Export everything
+              <span className="block text-[11.5px] text-ink-muted">All transactions matching current filters</span>
+            </a>
+            <div className="my-2 border-t border-hair-soft" />
+            <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted mb-2">Date range</p>
+            <div className="px-3 flex flex-col gap-2">
+              <label className="text-[11px] text-ink-muted">From
+                <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-cream border border-hair rounded-lg text-[13px] text-ink focus:outline-none focus:border-forest/40" />
+              </label>
+              <label className="text-[11px] text-ink-muted">To
+                <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-cream border border-hair rounded-lg text-[13px] text-ink focus:outline-none focus:border-forest/40" />
+              </label>
+              <a
+                href={buildHref(true)}
+                onClick={(e) => { if (!from && !to) e.preventDefault(); else setOpen(false); }}
+                aria-disabled={!from && !to}
+                className={`mt-1 text-center px-4 py-2 rounded-full text-[13px] font-medium transition-all ${
+                  from || to ? 'bg-forest text-cream-soft hover:bg-forest-deep' : 'bg-cream-deep text-ink-faint cursor-not-allowed'
+                }`}
+              >
+                Export range
+              </a>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
 }
 
 function QuickView({ order, onClose }: { order: Order; onClose: () => void }) {
+  const [timeline, setTimeline] = useState<OrderTimeline | null>(null);
+  const [loadingTimeline, setLoadingTimeline] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingTimeline(true);
+    setTimeline(null);
+    fetchOrderEventsClient(order.id).then((t) => {
+      if (!cancelled) { setTimeline(t); setLoadingTimeline(false); }
+    });
+    return () => { cancelled = true; };
+  }, [order.id]);
+
   const status = STATUS_PALETTE[order.status] ?? STATUS_PALETTE.processing;
   const headline = fmtAmount(netSettlement(order), order.destAssetKey);
   const customer = counterpartyName(order);
@@ -497,6 +711,43 @@ function QuickView({ order, onClose }: { order: Order; onClose: () => void }) {
             </div>
           </div>
         </div>
+
+        {/* Payment activity — the payer's session timeline */}
+        {!loadingTimeline && timeline && timeline.events.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[11px] font-semibold tracking-[0.15em] uppercase text-ink-muted">
+                Payment Activity
+              </h3>
+              <div className="flex items-center gap-3 text-[11px] text-ink-muted">
+                <span>{fmtDuration(timeline.summary.durationSec)}</span>
+                {timeline.summary.errors > 0 && <span className="text-terracotta font-medium">{timeline.summary.errors} err</span>}
+              </div>
+            </div>
+            {(timeline.summary.device || timeline.summary.ip) && (
+              <div className="flex items-center gap-4 mb-3 text-[12px] text-ink-muted">
+                {timeline.summary.device && <span>Device <span className="text-ink font-medium">{timeline.summary.device}</span></span>}
+                {timeline.summary.ip && <span>IP <span className="text-ink font-mono">{timeline.summary.ip}</span></span>}
+              </div>
+            )}
+            <ol className="relative border-l border-hair-soft ml-1">
+              {timeline.events.map((e) => (
+                <li key={e.id} className="relative pl-5 pb-3.5 last:pb-0">
+                  <span className={`absolute -left-[5px] top-1 w-2.5 h-2.5 rounded-full ring-2 ring-cream-soft ${EVENT_TONE[e.type] ?? 'bg-ink-faint'}`} />
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-[12.5px] text-ink leading-snug">
+                      {e.label}
+                      {e.source === 'client' && (
+                        <span className="ml-1.5 text-[9px] font-semibold uppercase tracking-wide text-ink-faint">reported</span>
+                      )}
+                    </span>
+                    <span className="text-[11px] text-ink-muted tabular-nums shrink-0">{eventTime(e.createdAt)}</span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
 
         <div className="mt-auto pt-4 flex items-center justify-between text-[12px] text-ink-muted border-t border-hair-soft/50 pt-6">
           <span>Processed via {providerName}</span>

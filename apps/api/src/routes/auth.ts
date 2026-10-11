@@ -11,6 +11,7 @@ import {
   sendAdminSignupNotification
 } from '../services/email.service';
 import { authLimiter } from '../middleware/rate-limit';
+import { recordAudit, isPlatformAdmin } from '../services/audit.service';
 
 const router = Router();
 
@@ -62,6 +63,10 @@ function generateSecretKey(): string {
   return 'sk_live_' + crypto.randomBytes(32).toString('hex');
 }
 
+function generateSandboxSecretKey(): string {
+  return 'sk_test_' + crypto.randomBytes(32).toString('hex');
+}
+
 function pickPublicMerchant(m: { id: string; email: string; name: string; publishableKey: string; sandboxPublishableKey?: string | null; createdAt: Date; updatedAt: Date; kycLevel: string; emailVerifiedAt: Date | null }) {
   return {
     id:                    m.id,
@@ -73,6 +78,9 @@ function pickPublicMerchant(m: { id: string; email: string; name: string; publis
     updatedAt:             m.updatedAt,
     kycLevel:              m.kycLevel,
     emailVerifiedAt:       m.emailVerifiedAt,
+    // Drives the dashboard's platform-wide audit view. Env-designated, so it
+    // reflects config not a stored flag (see isPlatformAdmin).
+    isPlatformAdmin:       isPlatformAdmin(m.email),
   };
 }
 
@@ -108,8 +116,10 @@ router.post('/signup', authLimiter, async (req, res) => {
     const sandboxPublishableKey = generateSandboxKey();
     const secretKey             = generateSecretKey();
     const hashedSecret          = hashCode(secretKey);
+    const sandboxSecretKey      = generateSandboxSecretKey();
+    const hashedSandboxSecret   = hashCode(sandboxSecretKey);
 
-    // Create Merchant + KeyPair in one transaction so signup is atomic.
+    // Create Merchant + live/sandbox KeyPairs in one transaction so signup is atomic.
     const { merchant, session } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const merchant = await tx.merchant.create({
         data: {
@@ -127,6 +137,16 @@ router.post('/signup', authLimiter, async (req, res) => {
           hashedSecretKey: hashedSecret,
           merchantId:     merchant.id,
           isActive:       true,
+        },
+      });
+      // Sandbox pair: server-to-server auth with this drives sandbox mode.
+      await tx.keyPair.create({
+        data: {
+          publicKey:       sandboxPublishableKey,
+          hashedSecretKey: hashedSandboxSecret,
+          merchantId:      merchant.id,
+          isActive:        true,
+          isSandbox:       true,
         },
       });
       const token     = createSessionToken();
@@ -151,13 +171,24 @@ router.post('/signup', authLimiter, async (req, res) => {
       console.error('[signup] admin notification error:', err.message);
     }
 
+    recordAudit({
+      merchantId: merchant.id,
+      actorType: 'merchant',
+      actorId: merchant.id,
+      action: 'auth.signup',
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { email },
+    });
+
     return res.json({
       success: true,
       data: {
         merchant: pickPublicMerchant(merchant),
         session:  { token: session.token, expiresAt: session.expiresAt },
-        // Secret key is shown exactly once — merchant must store it.
+        // Secret keys are shown exactly once — merchant must store them now.
         secretKey,
+        sandboxSecretKey,
         sandboxPublishableKey,
       },
     });
@@ -178,10 +209,33 @@ router.post('/login', authLimiter, async (req, res) => {
   try {
     const merchant = await prisma.merchant.findUnique({ where: { email } });
     if (!merchant || !verifyPassword(password, merchant.passwordHash)) {
+      // Security signal: failed login. Attach merchantId when the email resolved
+      // (wrong password) so a targeted attack on a known account is visible; leave
+      // it null for an unknown email so we don't confirm which emails exist.
+      recordAudit({
+        merchantId: merchant?.id ?? null,
+        actorType: 'merchant',
+        actorId: merchant?.id ?? null,
+        action: 'auth.login_failed',
+        ip: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+        metadata: { email, reason: merchant ? 'bad_password' : 'unknown_email' },
+      });
       return res.status(401).json({ success: false, error: 'invalid email or password' });
     }
 
     const session = await issueSession(merchant.id);
+
+    recordAudit({
+      merchantId: merchant.id,
+      actorType: 'merchant',
+      actorId: merchant.id,
+      action: 'auth.login',
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { email },
+    });
+
     return res.json({
       success: true,
       data: {
@@ -318,6 +372,16 @@ router.post('/reset-password', authLimiter, async (req, res) => {
       return m;
     });
 
+    recordAudit({
+      merchantId: updated.id,
+      actorType: 'merchant',
+      actorId: updated.id,
+      action: 'auth.password_reset',
+      ip: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      metadata: { email: merchant.email },
+    });
+
     const session = await issueSession(updated.id);
     return res.json({
       success: true,
@@ -337,7 +401,19 @@ router.post('/logout', async (req, res) => {
   if (!token) return res.status(400).json({ success: false, error: 'x-session-token header is required' });
 
   try {
+    // Resolve the owning merchant BEFORE deleting, so the sign-out is attributed.
+    const session = await prisma.session.findUnique({ where: { token }, select: { merchantId: true } });
     await prisma.session.deleteMany({ where: { token } });
+    if (session?.merchantId) {
+      recordAudit({
+        merchantId: session.merchantId,
+        actorType: 'merchant',
+        actorId: session.merchantId,
+        action: 'auth.logout',
+        ip: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
+    }
     return res.json({ success: true, data: { loggedOut: true } });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });

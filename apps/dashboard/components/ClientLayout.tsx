@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { Menu } from 'lucide-react';
 import Sidebar from './Sidebar';
+import { NoticeBanner } from './NoticeBanner';
 
 export function ClientLayout({
   children,
@@ -26,7 +27,17 @@ export function ClientLayout({
   }, [pathname]);
 
   const isAuth   = pathname.startsWith('/auth') || pathname === '/pay' || pathname.startsWith('/pay/') || pathname.startsWith('/checkout/');
-  const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy');
+  const isPublic = pathname.startsWith('/docs') || pathname.startsWith('/terms') || pathname.startsWith('/privacy') || pathname.startsWith('/esign-consent');
+  // Full-bleed, no wrapper: the cash-out page is a merchant-BRANDED surface that
+  // must theme the entire viewport (its own bg color/image edge-to-edge), so it
+  // can't sit inside the centered, cream-padded auth container.
+  // /ramp/* are the SEP-24 anchor pages opened inside a wallet's webview — same
+  // edge-to-edge treatment.
+  const isFullBleed = pathname.startsWith('/cashout/') || pathname.startsWith('/ramp/');
+
+  if (isFullBleed) {
+    return <>{children}</>;
+  }
 
   if (isAuth) {
     return (
@@ -85,6 +96,19 @@ export function ClientLayout({
 
         <main className="flex-1">
           <div className="px-6 md:px-10 lg:px-14 py-8 md:py-10 max-w-[1400px] mx-auto">
+            {/* Global service notice. Swap tone/message (or remove) as needed;
+                see components/NoticeBanner.tsx for the reusable variants.
+                `expiresAt` = naira go-live + 72h — set this to your actual go-live
+                instant; the banner auto-hides for everyone once it passes. */}
+            <NoticeBanner
+              tone="success"
+              title="Naira payments are back"
+              message="Naira collection and payouts are fully restored — everything's back to normal. Thanks for your patience."
+              dismissible
+              storageKey="naira-restored-2026-08"
+              expiresAt="2026-08-12T12:00:00Z"
+              className="mb-6"
+            />
             {children}
           </div>
         </main>

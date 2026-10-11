@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowLeft, Receipt, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import { fetchOrder } from '../../lib/dashboard-api';
+import { fetchOrder, fetchOrderEvents } from '../../lib/dashboard-api';
+import { EVENT_TONE, fmtDuration, type OrderEvent } from '../../lib/order-events';
 import { assetLabel, parseAsset, institutionName } from '../../types';
 import { WalletAddress } from '../../../components/WalletAddress';
 
@@ -33,7 +34,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 
 export default async function TransactionReceiptPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const order = await fetchOrder(id, 10);
+  const [order, timeline] = await Promise.all([fetchOrder(id, 10), fetchOrderEvents(id, 10)]);
 
   if (!order) {
     return (
@@ -123,6 +124,22 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
           />
           {order.paycrestStatus && <Field label="Paycrest status" value={order.paycrestStatus} />}
           {order.nearStatus && <Field label="NEAR status" value={order.nearStatus} />}
+          {(order.bachsPayoutStatus || order.bachsSplitStatus) && (
+            <Field
+              label="Payout to your bank"
+              value={
+                order.bachsPayoutStatus === 'paid'       ? 'Paid to your bank ✓'
+                : order.bachsPayoutStatus === 'processing' ? 'Paying out…'
+                : order.bachsPayoutStatus === 'blocked'    ? 'Blocked — verify your payout bank'
+                : order.bachsPayoutStatus === 'failed'     ? 'Failed — being retried'
+                : order.bachsPayoutStatus === 'pending'    ? 'Processing — paying out to your bank'
+                // No payout row yet: fall back to the split (collection→balance) stage.
+                : order.bachsSplitStatus === 'settled'     ? 'Collected — payout queued'
+                : order.bachsSplitStatus === 'failed'      ? 'Failed — being retried'
+                : 'Settling (usually within 1–2 business days)'
+              }
+            />
+          )}
         </div>
       </div>
 
@@ -200,6 +217,56 @@ export default async function TransactionReceiptPage({ params }: { params: Promi
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Payment activity — the payer's session timeline */}
+      {timeline && timeline.events.length > 0 && (
+        <div className="rounded-[24px] bg-cream-soft border border-hair-soft shadow-leaf overflow-hidden fade-up" style={{ animationDelay: '240ms' }}>
+          <div className="px-7 py-5 border-b border-hair-soft flex items-center justify-between gap-4">
+            <h2 className="font-display text-[20px] font-semibold text-ink">Payment activity</h2>
+            <div className="flex items-center gap-5 text-[12px] text-ink-muted">
+              <span>Duration <span className="font-semibold text-ink tabular-nums">{fmtDuration(timeline.summary.durationSec)}</span></span>
+              <span>Attempts <span className="font-semibold text-ink tabular-nums">{timeline.summary.attempts}</span></span>
+              <span>Errors <span className={`font-semibold tabular-nums ${timeline.summary.errors ? 'text-terracotta' : 'text-ink'}`}>{timeline.summary.errors}</span></span>
+            </div>
+          </div>
+          <div className="px-7 py-6">
+            {(timeline.summary.device || timeline.summary.ip) && (
+              <div className="flex flex-wrap gap-3 mb-6">
+                {timeline.summary.device && (
+                  <div className="bg-cream-deep/50 border border-hair-soft rounded-2xl px-4 py-3 min-w-[120px]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted">Device</p>
+                    <p className="text-[15px] font-medium text-ink mt-0.5">{timeline.summary.device}</p>
+                  </div>
+                )}
+                {timeline.summary.ip && (
+                  <div className="bg-cream-deep/50 border border-hair-soft rounded-2xl px-4 py-3 min-w-[120px]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-ink-muted">IP address</p>
+                    <p className="text-[14px] font-mono text-ink mt-0.5">{timeline.summary.ip}</p>
+                  </div>
+                )}
+              </div>
+            )}
+            <ol className="relative border-l border-hair-soft ml-2">
+              {timeline.events.map((e: OrderEvent) => (
+                <li key={e.id} className="relative pl-6 pb-5 last:pb-0">
+                  <span className={`absolute -left-[5px] top-1.5 w-2.5 h-2.5 rounded-full ring-2 ring-cream-soft ${EVENT_TONE[e.type] ?? 'bg-ink-faint'}`} />
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="text-[13.5px] text-ink">
+                      {e.label}
+                      {e.source === 'client' && (
+                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">reported</span>
+                      )}
+                    </p>
+                    <span className="text-[12px] text-ink-muted tabular-nums shrink-0">
+                      {new Date(e.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
       )}

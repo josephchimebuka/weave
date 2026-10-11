@@ -68,6 +68,22 @@ export interface CreateOnrampParams {
   reference:       string;
 }
 
+// Institutions (bank lists) change rarely — cache per currency.
+const institutionsCache = new Map<string, { data: PCInstitution[]; cachedAt: number }>();
+const INSTITUTIONS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Rates: stale-while-revalidate. Paycrest's /rates endpoint was observed taking
+// 1.3–7s, and it sits on the hot path of every quote and every fiat order. A
+// plain TTL cache would serve stale rates silently; instead:
+//   age < FRESH_MS      → serve cached, no fetch
+//   age < MAX_STALE_MS  → serve cached instantly, refresh in background (deduped)
+//   older / no entry    → blocking fetch (fails loudly if Paycrest is down —
+//                         we never quote money off an old rate when it's truly old)
+interface RateCacheEntry { data: PCRate; fetchedAt: number; revalidating: Promise<unknown> | null }
+const rateCache = new Map<string, RateCacheEntry>();
+const RATE_FRESH_MS     = Number(process.env.PAYCREST_RATE_FRESH_MS     ?? 10_000);
+const RATE_MAX_STALE_MS = Number(process.env.PAYCREST_RATE_MAX_STALE_MS ?? 60_000);
+
 // ── Service ──────────────────────────────────────────────────────────────────
 
 export class PaycrestService {
@@ -103,24 +119,59 @@ export class PaycrestService {
     }
   }
 
-  /** GET /v2/rates/{network}/{token}/{amount}/{fiat} — no auth. */
+  /** GET /v2/rates/{network}/{token}/{amount}/{fiat} — no auth.
+   *  Stale-while-revalidate (see rateCache above): instant answer within the
+   *  stale window, blocking fetch beyond it. */
   async getRate(network: string, token: string, amount: number | string, fiat: string): Promise<PCRate> {
-    return this.request<PCRate>(
+    const key = `${network}/${token}/${amount}/${fiat.toUpperCase()}`;
+    const cached = rateCache.get(key);
+    const age = cached ? Date.now() - cached.fetchedAt : Infinity;
+
+    if (cached && age < RATE_FRESH_MS) return cached.data;
+
+    if (cached && age < RATE_MAX_STALE_MS) {
+      if (!cached.revalidating) {
+        cached.revalidating = this.fetchRate(key, network, token, amount, fiat)
+          .catch((err: any) => {
+            // Keep serving the stale entry; the next call past a failed refresh retries.
+            console.warn(`[paycrest] background rate refresh failed for ${key}:`, err.message);
+          })
+          .finally(() => {
+            const entry = rateCache.get(key);
+            if (entry) entry.revalidating = null;
+          });
+      }
+      return cached.data;
+    }
+
+    return this.fetchRate(key, network, token, amount, fiat);
+  }
+
+  private async fetchRate(key: string, network: string, token: string, amount: number | string, fiat: string): Promise<PCRate> {
+    const data = await this.request<PCRate>(
       'GET',
       `/rates/${network}/${token}/${amount}/${fiat}`,
       undefined,
       false,
     );
+    rateCache.set(key, { data, fetchedAt: Date.now(), revalidating: null });
+    return data;
   }
 
-  /** GET /v2/institutions/{currency} — no auth. */
+  /** GET /v2/institutions/{currency} — no auth. Cached 24h per currency. */
   async getInstitutions(currency: string): Promise<PCInstitution[]> {
-    return this.request<PCInstitution[]>(
+    const key = currency.toUpperCase();
+    const cached = institutionsCache.get(key);
+    if (cached && Date.now() - cached.cachedAt < INSTITUTIONS_CACHE_TTL_MS) return cached.data;
+
+    const data = await this.request<PCInstitution[]>(
       'GET',
-      `/institutions/${currency.toUpperCase()}`,
+      `/institutions/${key}`,
       undefined,
       false,
     );
+    institutionsCache.set(key, { data, cachedAt: Date.now() });
+    return data;
   }
 
   /** POST /v2/sender/orders — offramp (crypto → fiat). */
@@ -179,24 +230,63 @@ export class PaycrestService {
     return this.request<string>('POST', '/verify-account', params);
   }
 
-  /** HMAC-SHA256(secret, rawBody). Accepts optional `sha256=` prefix. */
+  /** HMAC-SHA256(secret, rawBody), hex. Accepts an optional `sha256=` prefix.
+   *
+   *  Trailing-newline quirk: Paycrest's aggregator signs `json.Marshal(payload)`
+   *  (no trailing newline) but transmits the body via fast-shot's `AsJSON`, which
+   *  uses `json.NewEncoder(...).Encode()` — and that ALWAYS appends a trailing
+   *  '\n'. So the raw body we receive is `signedBytes + "\n"`, one byte longer
+   *  than what was signed, and a standard raw-body HMAC never matches. We verify
+   *  against the body as-received AND with a trailing newline stripped, so both
+   *  the quirky and any future fixed sender path pass. The secret is `.trim()`ed
+   *  and the signature `.trim().toLowerCase()`ed to tolerate copy-paste/casing noise. */
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
-    if (!this.webhookSecret) {
+    const key = (this.webhookSecret || '').trim();
+    if (!key) {
       console.error('[security] PAYCREST_WEBHOOK_SECRET not set. Rejecting all webhooks.');
       return false;
     }
-    if (!signature) return false;
-    const expected = crypto.createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex');
-    const sig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-    try {
-      const sigBuf = Buffer.from(sig, 'hex');
-      const expectedBuf = Buffer.from(expected, 'hex');
-      if (sigBuf.length !== expectedBuf.length) return false;
-      return crypto.timingSafeEqual(sigBuf, expectedBuf);
-    } catch {
-      return false;
+    const sig = (signature || '').trim().toLowerCase().replace(/^sha256=/, '');
+    if (!sig) return false;
+
+    // Candidate bodies: exactly as received, and with a single trailing newline
+    // removed (the aggregator's fast-shot Encoder appends one after signing).
+    const candidates: Array<{ body: string; label: string }> = [{ body: rawBody, label: 'raw' }];
+    const stripped = rawBody.replace(/\r?\n$/, '');
+    if (stripped !== rawBody) candidates.push({ body: stripped, label: 'newline-stripped' });
+
+    let lastExpected = '';
+    for (const { body, label } of candidates) {
+      const expected = crypto.createHmac('sha256', key).update(body, 'utf8').digest('hex');
+      lastExpected = expected;
+      if (expected.length !== sig.length) continue;
+      try {
+        if (crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(sig, 'utf8'))) {
+          if (label !== 'raw') {
+            console.log(`[webhook] paycrest sig verified against ${label} body — confirms aggregator trailing-\\n quirk`);
+          }
+          return true;
+        }
+      } catch { /* fall through to next candidate */ }
     }
+
+    console.warn(
+      `[webhook] paycrest sig mismatch — expected ${lastExpected.slice(0, 12)}… got ${sig.slice(0, 12)}… ` +
+      `(secret len ${key.length}, body len ${rawBody.length})`,
+    );
+    return false;
   }
 }
 
 export const paycrest = new PaycrestService();
+
+/**
+ * Paycrest omits a rate leg entirely when it has no provider for that
+ * direction — `GET /rates/base/USDC/1/NGN` came back with `sell` and no `buy`
+ * at all on 2026-10-01, while KES still had both. That is a closed corridor,
+ * not a malformed response, so it gets a message a payer can act on instead of
+ * a TypeError on `.rate`.
+ */
+export function rateUnavailable(currency: string, leg: 'deposits' | 'payouts'): string {
+  return `${currency} ${leg} are temporarily unavailable — our payment partner has no provider for this corridor right now.`;
+}

@@ -161,11 +161,14 @@ The hosted payment link page (`app/pay/[slug]/PayClient.tsx`) collects customer 
 
 ### Sandbox
 
-Sandbox routing is fully wired. Using a `pk_test_` / `sk_test_` key:
-- `auth.ts` middleware sets `req.sandboxMode = true`.
-- `executor.service.ts` branches to `sandboxDispatch` in `sandbox-executor.ts`.
-- All provider calls are mocked — no real funds move.
-- Sandbox orders are isolated from live orders and only appear when authenticated with test keys.
+Sandbox routing is fully wired. Two credentials enter sandbox mode (`req.sandboxMode = true`):
+- **Publishable key** (`x-api-key: pk_test_...`) — the browser/widget path (`Merchant.sandboxPublishableKey`).
+- **Sandbox secret key** (`x-secret-key: sk_test_...`) — the server-to-server path. The secret key authenticates **standalone** (`requireKeyPair` resolves the pair by `sha256(secret)` → `hashedSecretKey`); `x-public-key` is optional and, if sent, must match the resolved pair. `KeyPair.isSandbox = true` drives `req.sandboxMode`, so backend/SDK integrations (incl. **checkout sessions**) can be exercised end-to-end against sandbox. Signup mints both a live and a sandbox pair; existing merchants get one via `POST /merchant/keys/regenerate { mode: 'sandbox' }`.
+
+Execution:
+- `executor.service.ts` branches to `sandboxDispatch` in `sandbox-executor.ts`; crypto legs are mocked and auto-completed at creation — no real funds move.
+- **Paystack leg is real-in-test when `PAYSTACK_SECRET_KEY_TEST` is set**: the executor provisions a genuine Paystack test transaction (test key, no subaccount), the widget opens the real test popup via the access code, and the order settles synchronously from the test-card payment (verified on poll in `syncOrder`). Without the test key it falls back to the fully-mocked instant-complete path.
+- Sandbox orders/sessions are isolated from live and only appear when authenticated with test credentials.
 
 ### Layout & Routes
 

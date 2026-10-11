@@ -1,35 +1,28 @@
 import { NextRequest } from 'next/server';
-import { applyOrderFilter, fetchOrders } from '../../lib/dashboard-api';
+import { fetchAllOrders } from '../../lib/dashboard-api';
 import { directionOf } from '../../types';
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const orders = applyOrderFilter(await fetchOrders(0), {
-    q: sp.get('q') || undefined,
+  // Exports the ENTIRE matching set (looped, not capped). Filters — including an
+  // optional fromDate/toDate range — are applied server-side by the API.
+  const orders = await fetchAllOrders({
     status: sp.get('status') || undefined,
     direction: sp.get('direction') || undefined,
-    provider: sp.get('provider') || undefined,
-    corridor: sp.get('corridor') || undefined,
+    q: sp.get('q') || undefined,
     fromDate: sp.get('fromDate') || undefined,
     toDate: sp.get('toDate') || undefined,
-    amountMin: sp.get('amountMin') || undefined,
-    amountMax: sp.get('amountMax') || undefined,
-    sort: (sp.get('sort') as 'createdAt_desc' | 'createdAt_asc' | 'amount_desc' | 'amount_asc' | null) || undefined,
   });
 
   const header = [
-    'order_id',
-    'created_at',
-    'status',
-    'direction',
-    'source_asset',
-    'dest_asset',
-    'source_amount',
-    'dest_amount',
-    'sender_fee_usd',
-    'app_fee_usd',
-    'bridge_fee_usd',
-    'providers',
+    'Order ID',
+    'Date',
+    'Status',
+    'Direction',
+    'Source Asset',
+    'Destination Asset',
+    'Amount Paid',
+    'Settlement Amount',
   ];
 
   const rows = orders.map((o) => ([
@@ -41,10 +34,6 @@ export async function GET(req: NextRequest) {
     o.destAssetKey,
     o.sourceAmount ?? '',
     o.destAmount ?? '',
-    o.senderFeeUsd ?? '',
-    o.appFeeUsd ?? '',
-    o.bridgeFeeUsd ?? '',
-    (o.steps || []).map((s) => s.provider).join(' → '),
   ]));
 
   const csv = [header, ...rows]

@@ -1,4 +1,5 @@
 import { readSessionCookie } from '../../../lib/auth-server';
+import { proxyHeaders } from '../../../lib/proxy-headers';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
@@ -8,7 +9,7 @@ export async function GET() {
     if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const res = await fetch(`${API_BASE}/merchant/payouts`, {
-      headers: { 'x-session-token': token },
+      headers: await proxyHeaders(token),
       cache: 'no-store',
     });
     if (!res.ok) return Response.json({ error: 'Failed' }, { status: res.status });
@@ -29,7 +30,7 @@ export async function PUT(req: Request) {
 
     const res = await fetch(`${API_BASE}/merchant/payouts`, {
       method: 'PUT',
-      headers: { 'x-session-token': token, 'Content-Type': 'application/json' },
+      headers: await proxyHeaders(token, { 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     

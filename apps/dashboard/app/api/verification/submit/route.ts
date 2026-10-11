@@ -1,4 +1,5 @@
 import { readSessionCookie } from '../../../lib/auth-server';
+import { proxyHeaders } from '../../../lib/proxy-headers';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:4000/api/v1';
 
@@ -8,7 +9,7 @@ export async function POST() {
 
   const res = await fetch(`${API_BASE}/verification/submit`, {
     method: 'POST',
-    headers: { 'x-session-token': token },
+    headers: await proxyHeaders(token),
   });
 
   const data = await res.json();

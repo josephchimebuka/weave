@@ -1,0 +1,44 @@
+# Weave
+
+> Universal crypto ↔ fiat checkout for merchants. An end-user can pay from any supported chain or token, and the merchant receives funds in their chosen corridor — fiat (e.g. NGN) to a bank account, or crypto (e.g. USDC on Base) to a wallet. Weave orchestrates the route and never takes custody of funds; licensed providers settle each leg.
+
+## Core concepts
+
+- **Asset keys** are load-bearing. Every asset is `fiat:<CCY>` (e.g. `fiat:NGN`) or `crypto:<CHAIN>:<TOKEN>` (e.g. `crypto:BASE:USDC`). Chain and token are UPPERCASE; currency is ISO 4217 uppercase.
+- **Auth.** External/server and widget requests use an API key in the `x-api-key` header. Each merchant has a live key (`pk_...`) and a sandbox publishable key (`pk_test_...`); server-to-server sandbox uses a secret key (`sk_test_...`).
+- **Flows.** `POST /orders` takes an optional `flow`: `external` (default — send-from-another-wallet; NEAR Intents handles the cross-chain leg) or `self` (connect-wallet; ChainRails). Chain-agnosticism comes from NEAR Intents (any chain → Base USDC), then Paycrest settles the final fiat leg.
+- **Response shape.** Every endpoint returns `{ success: boolean, data?, error? }`. Upstream provider failures map to HTTP 502.
+- **Sandbox first.** Build against sandbox with test keys; crypto legs are mocked and auto-complete. Going live is a key swap. Webhooks are the source of truth for fulfilment — never client-side events.
+
+## Ways to accept a payment
+
+- **Widget** (`@weave-sdk/widget`) — an embeddable React checkout (`WeaveCheckout`). Resolves its API base and key from props/globals. Best when you want an in-page overlay.
+- **Hosted checkout session** — `POST /checkout/sessions` returns a `checkoutUrl`; redirect the user to a Weave-hosted page, they pay, and land back on your `redirectUrl` with `session_id` and `order_id`. The Stripe-Checkout-style "create intent → redirect → confirm via webhook" pattern. Best for invoice emails, SMS links, server-rendered apps, or backends with no UI.
+- **Direct API** — `POST /quotes` then `POST /orders`; poll `GET /orders/:id` or rely on webhooks. Returns a `nextAction` (deposit address, memo, or a provider popup) for the payer.
+
+## Payment corridors
+
+Weave routes automatically; pass `flow` to control the bridge.
+
+- `fiat:NGN → fiat:NGN` — direct naira collection (card & bank transfer), settled to the merchant's bank in ~30 s – 2 min, via the licensed naira processor (Bachs).
+- `any chain → crypto:BASE:USDC` — NEAR Intents cross-chain swap; a deposit address is generated, the customer sends from any wallet (~30–90 s).
+- `EVM → crypto:BASE:USDC` — ChainRails connected-wallet flow (customer signs; ~60 s).
+- `crypto:BASE:USDC ↔ fiat:NGN` — Paycrest terminal settlement whenever a route touches NGN; also handles onramp (NGN → USDC). ~30 s – 2 min.
+
+## Payouts / cash-out (help your users offramp crypto to naira)
+
+Merchants can let their users cash out crypto to the user's OWN Nigerian bank. Two ways:
+
+- **Cash-out links (no code)** — create a shareable, branded, self-serve page from the dashboard (Cash-out Links → New link). The user opens it, picks amount + token/chain, enters their own bank, sends crypto to a deposit address, and naira lands in their bank. Chain-agnostic; fully brandable (logo, colours, name, headline, font via Settings → Branding).
+- **API** — list naira banks, create an offramp order supplying the recipient's own `bankInstitution` + account as the destination, hand the returned deposit address (+ memo where required) to the user; Paycrest offramps their crypto to that bank. Independent of naira collection being enabled. Third-party payouts are subject to the offramp provider's KYC/AML.
+
+Money moves: Crypto → Paycrest (licensed offramp) → the recipient's bank. Weave never holds the funds — a facilitated offramp, not money transmission.
+
+## Webhooks
+
+Register an endpoint to receive normalized events (e.g. `order.completed`). Inbound provider webhooks (Bachs, Paycrest, ChainRails) are HMAC-verified before any state change; outgoing merchant webhooks are HMAC-SHA256 signed over `{timestamp}.{rawBody}`. Idempotency is enforced. Treat webhooks — not redirects — as the source of truth.
+
+## Where to read more
+
+- Developer docs: https://docs.paywithweave.com (llms.txt at https://docs.paywithweave.com/llms.txt) — Introduction, Widget Playground, API Reference, API Playground, Checkout Sessions, Cash-out Links, Webhooks, Agents, Security, Support.
+- Support: support@paywithweave.com · Status/incidents: status@paywithweave.com

@@ -25,6 +25,7 @@ export type SessionData = {
   cancelUrl: string | null;
   merchantName: string;
   publishableKey: string;
+  orderId: string | null;
 };
 
 function parseDestCurrency(destAsset: string): string {
@@ -54,16 +55,34 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
     if (session.status === 'complete') return 'redirecting';
     return 'pay';
   });
+  // The URL to bounce the payer to once payment is confirmed. Single source of
+  // truth so there's never a double-navigation with mismatched query params.
+  const [redirectTarget, setRedirectTarget] = useState<string | null>(() =>
+    session.status === 'complete'
+      ? appendQuery(session.redirectUrl, {
+          session_id: session.id,
+          // Keep the param set identical to the fresh-success path so order_id
+          // never silently disappears when a payer reloads or hits back on an
+          // already-completed session. A completed session always has an order.
+          ...(session.orderId ? { order_id: session.orderId } : {}),
+        })
+      : null,
+  );
 
-  // If the session is already complete (e.g. user hit back), bounce straight to merchant.
+  // Redirect as soon as we enter the 'redirecting' view. On a fresh success this
+  // fires immediately (no timer) so the payer never sees a Weave success screen —
+  // the merchant's redirectUrl is the confirmation. On an already-complete load
+  // (user hit back) a short beat lets the "redirecting" note paint first.
   useEffect(() => {
-    if (view === 'redirecting') {
-      const t = setTimeout(() => {
-        window.location.href = appendQuery(session.redirectUrl, { session_id: session.id });
-      }, 600);
-      return () => clearTimeout(t);
+    if (view !== 'redirecting' || !redirectTarget) return;
+    const cameFromPayment = session.status !== 'complete';
+    if (cameFromPayment) {
+      window.location.href = redirectTarget;
+      return;
     }
-  }, [view, session.id, session.redirectUrl]);
+    const t = setTimeout(() => { window.location.href = redirectTarget; }, 600);
+    return () => clearTimeout(t);
+  }, [view, redirectTarget, session.status]);
 
   // Countdown
   useEffect(() => {
@@ -91,10 +110,15 @@ export default function SessionCheckoutClient({ session }: { session: SessionDat
     // `sessionId` field, and executor.markStepDone transitions the session to
     // `complete` when the order completes. The redirect is the user-facing
     // signal that payment is confirmed.
-    window.location.href = appendQuery(session.redirectUrl, {
+    //
+    // Switch to the 'redirecting' view immediately so the WeaveCheckout widget
+    // unmounts before it can paint its own success screen — for a hosted session
+    // the merchant's redirectUrl is the success surface, not a Weave screen.
+    setRedirectTarget(appendQuery(session.redirectUrl, {
       session_id: session.id,
       order_id: txn.orderId,
-    });
+    }));
+    setView('redirecting');
   }
 
   if (view === 'redirecting') {

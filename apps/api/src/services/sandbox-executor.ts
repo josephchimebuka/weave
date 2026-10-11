@@ -1,7 +1,10 @@
 import type { RoutePlanStep } from './router.service';
 import { parseAsset } from '../lib/assets';
 
-const SANDBOX_NGN_RATE = 1600;
+// Fixed NGN-per-USD(C) rate for sandbox. Single source of truth so order
+// creation, quotes, and mock execution all price sandbox flows identically
+// without touching live Paycrest.
+export const SANDBOX_NGN_RATE = 1400;
 
 export interface SandboxExecution {
   externalId: string;
@@ -81,6 +84,16 @@ export function sandboxDispatch(
         depositAddress: '0xSa000000000000000000000000000000000002nd',
         depositMemo: 'sandbox-memo', expiresAt,
         feeUsd: amountIn * 0.002,
+      };
+
+    case 'lifi':
+      // Mocked Stellar → Base bridge. No XDR to sign in sandbox — the order
+      // auto-completes like every other mocked leg.
+      return {
+        externalId, amountIn,
+        amountOut: amountIn * 0.9975,
+        depositAddress: null, depositMemo: null, expiresAt,
+        feeUsd: amountIn * 0.0025,
       };
 
     case 'chainrails':

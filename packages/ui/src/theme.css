@@ -84,11 +84,17 @@ h1, h2, h3, h4, h5, h6, .font-display {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-tan); }
 
-/* Focus — quiet ring in brand green */
-*:focus-visible {
-  outline: 2px solid var(--color-forest);
-  outline-offset: 2px;
-  border-radius: 4px;
+/* Focus — a quiet brand-green ring that follows each element's OWN border-radius.
+   A box-shadow tracks border-radius (rounded pills stay pills); the old approach
+   set `border-radius: 4px` on focus, which squared off every rounded control.
+   Form fields also use :focus so the ring shows on a mouse click, not just keyboard
+   (Chrome doesn't match :focus-visible when you click a <select> or input). */
+:focus-visible,
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(15, 93, 76, 0.35);
 }
 
 /* Nicer range track for the corner-radius slider */
