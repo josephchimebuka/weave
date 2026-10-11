@@ -113,6 +113,7 @@ export default function DemoPage() {
   const [cryptoAddress, setCryptoAddress] = useState('');
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
+  const demoApiKey = process.env.NEXT_PUBLIC_API_KEY?.trim() || '';
 
   useEffect(() => {
     fetch(`${apiUrl}/institutions?currency=NGN`)
@@ -205,6 +206,12 @@ export default function DemoPage() {
             Payments are live but limited to <span className="font-semibold text-[#0B0F0E]">₦700 - ₦1,000</span> for safety.
           </p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl">Changes here update the widget on the right in real time. Press the <span className="font-bold text-[#0B0F0E]">Bank transfer</span> or <span className="font-bold text-[#0B0F0E]">Pay with crypto wallet</span> button in the widget to walk through the customer&apos;s checkout.</p>
+          {!demoApiKey && (
+            <div className="mt-3 max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 leading-relaxed">
+              <strong>Demo checkout needs an API key.</strong> Sign up on the merchant dashboard, copy your publishable key (<code className="text-xs">pk_test_…</code>), and set{' '}
+              <code className="text-xs">NEXT_PUBLIC_API_KEY</code> in <code className="text-xs">apps/www/.env.local</code> (local) or your hosting env (production). Restart the site after saving.
+            </div>
+          )}
         </div>
         {/* Config Panel */}
         <div className=" grid grid-cols-1 lg:grid-cols-2 gap-8 lg:max-h-[calc(100vh-160px)] lg:overflow-y-auto lg:pr-4 custom-scrollbar">

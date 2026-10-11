@@ -63,7 +63,8 @@ import {
   postOrderEvents,
   type ClientOrderEvent,
 } from '../api/client';
-import { openStellarWalletModal, sendStellarUsdcPayment } from '../lib/stellar';
+import { openStellarWalletModal, sendStellarUsdcPayment, getStellarNetwork } from '../lib/stellar';
+import { buildCryptoOfframpProgress, buildFiatOnrampProgress } from '@weave/shared';
 
 // ── Session-timeline emitter ───────────────────────────────────────────────
 // Best-effort client telemetry (method chosen, popup open/close, retries) for
@@ -309,6 +310,17 @@ function depositAddressError(
 // duplicate submit), fetch the existing order so the caller can resume from it
 // instead of dead-ending on an error. Returns the order, or null if it's not a
 // recoverable 409 / the fetch fails.
+function friendlyCheckoutError(message: string | undefined): string {
+  const msg = message ?? '';
+  if (/invalid api key/i.test(msg)) {
+    return 'Invalid API key. Use your publishable key (pk_test_…) from the merchant dashboard — it must match the API this checkout is calling.';
+  }
+  if (/missing x-api-key/i.test(msg)) {
+    return 'Checkout is not configured with an API key. Set NEXT_PUBLIC_API_KEY (demo) or pass apiKey to WeaveCheckout.';
+  }
+  return msg || 'Something went wrong. Please try again.';
+}
+
 async function fetchExistingOrderOn409(apiKey: string, e: any): Promise<any | null> {
   if (e?.status !== 409 || !e?.data?.orderId) return null;
   try { return await fetchOrder(apiKey, e.data.orderId); } catch { return null; }
@@ -1309,7 +1321,8 @@ const TERMINAL_OK = new Set(['completed']);
 const TERMINAL_BAD = new Set(['failed', 'expired', 'refunded']);
 
 function ScreenProcessing({
-  onNext, merchant, mode, apiKey, orderId, bankDetails, fmtCur
+  onNext, merchant, mode, apiKey, orderId, bankDetails, fmtCur,
+  walletAddress, submittedTxHash,
 }: {
   onNext: (s: string) => void;
   merchant: Merchant;
@@ -1319,9 +1332,12 @@ function ScreenProcessing({
   bankDetails?: BankDetails | null;
   currencies: Record<string, Currency>;
   fmtCur: (n: number, cur: string, dec?: number) => string;
+  walletAddress?: string | null;
+  submittedTxHash?: string | null;
 }) {
   const [stage, setStage] = useState(0);
   const [seconds, setSeconds] = useState(0);
+  const [liveOrder, setLiveOrder] = useState<any | null>(null);
   const pollTerminated = useRef(false);
   const c = CURRENCIES[merchant.currency];
 
@@ -1338,19 +1354,24 @@ function ScreenProcessing({
     })()
     : fmtCur(merchant.amount, merchant.currency);
 
-  const stages = mode === 'fiat' ? [
-    { label: 'Confirming your transfer', sub: `Matching the ${fiatDisplay} from your bank`, dur: 1600 },
-    { label: 'Completing payment', sub: `Sending to ${merchant.name}`, dur: 2400 },
-  ] : [
-    { label: 'Confirming transaction', sub: 'Processing your transaction on-chain', dur: 1400 },
-    { label: 'Confirming your payment', sub: `Settling ${c?.name || merchant.currency} to ${merchant.name}`, dur: 2600 },
-  ];
+  const { steps: progressSteps, activeIndex } = mode === 'fiat'
+    ? buildFiatOnrampProgress(merchant.name, fiatDisplay, liveOrder?.paycrestStatus)
+    : buildCryptoOfframpProgress(liveOrder, {
+      merchantName: merchant.name,
+      currency: merchant.currency,
+      walletAddress: walletAddress ?? null,
+      submittedTxHash: submittedTxHash ?? null,
+      stellarNetwork: getStellarNetwork(),
+    });
+
+  const stages = progressSteps.map(s => ({ label: s.label, sub: s.sub }));
+  const displayStage = orderId ? activeIndex : stage;
 
   // Simulated animation when no orderId (demo) — fall back to original behavior
   useEffect(() => {
     if (orderId) return;
     if (stage >= stages.length) { onNext('success'); return; }
-    const t = setTimeout(() => setStage((s) => s + 1), stages[stage].dur);
+    const t = setTimeout(() => setStage((s) => s + 1), mode === 'fiat' ? (stage === 0 ? 1600 : 2400) : (stage === 0 ? 1400 : 2600));
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, orderId]);
@@ -1369,8 +1390,8 @@ function ScreenProcessing({
       try {
         const order = await fetchOrder(apiKey, orderId);
         failCount = 0;
+        setLiveOrder(order);
         const status = String(order.status ?? '').toLowerCase();
-        const pcStatus = String(order.paycrestStatus ?? '').toLowerCase();
         if (TERMINAL_OK.has(status)) {
           pollTerminated.current = true;
           onNext('success');
@@ -1380,11 +1401,6 @@ function ScreenProcessing({
           pollTerminated.current = true;
           onNext('error');
           return;
-        }
-        // Keep users on "detecting on-chain" until Paycrest reports `fulfilled`,
-        // then advance to confirming fiat settlement.
-        if (pcStatus === 'fulfilled') {
-          setStage(1);
         }
       } catch {
         failCount++;
@@ -1400,7 +1416,8 @@ function ScreenProcessing({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId, apiKey]);
 
-  const currentStage = stages[Math.min(stage, stages.length - 1)];
+  const currentStage = stages[Math.min(displayStage, stages.length - 1)] ?? stages[0];
+  const explorerLink = progressSteps.find(s => s.explorerUrl && (s.state === 'active' || s.state === 'done'))?.explorerUrl;
   // Bank-led settlement is 30s–2min; past ~2min, reassure rather than spin
   // silently forever. Polling continues — this is informational, not terminal.
   const takingLong = !!orderId && seconds >= 120;
@@ -1419,33 +1436,48 @@ function ScreenProcessing({
         </div>
       </Stack>
 
+      {explorerLink && (
+        <a
+          href={explorerLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontSize: 12, fontWeight: 600, color: WEAVE.accent, textAlign: 'center', textDecoration: 'none' }}
+        >
+          View transaction on Stellar Explorer →
+        </a>
+      )}
+
       <Stack gap={0} style={{ padding: '4px 8px' }}>
-        {stages.map((s, i) => (
-          <Row key={i} gap={12} style={{ padding: '10px 0' }}>
+        {progressSteps.map((s, i) => {
+          const done = orderId ? s.state === 'done' : i < displayStage;
+          const active = orderId ? s.state === 'active' : i === displayStage;
+          return (
+          <Row key={s.id} gap={12} style={{ padding: '10px 0' }}>
             <div style={{
               width: 22, height: 22, borderRadius: 11, flexShrink: 0,
-              background: i < stage ? WEAVE.accent : '#fff',
-              border: i < stage ? 'none' : `1.5px solid ${i === stage ? WEAVE.accent : WEAVE.hair}`,
+              background: done ? WEAVE.accent : '#fff',
+              border: done ? 'none' : `1.5px solid ${active ? WEAVE.accent : WEAVE.hair}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               position: 'relative',
             }}>
-              {i < stage && (
+              {done && (
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12L10 17L19 7" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>
               )}
-              {i === stage && (
+              {active && !done && (
                 <div style={{ width: 8, height: 8, borderRadius: 4, background: WEAVE.accent, animation: 'wpulse 1.1s ease-in-out infinite' }} />
               )}
             </div>
             <Stack gap={1}>
-              <div style={{ fontSize: 13, fontWeight: 500, color: i <= stage ? WEAVE.ink : WEAVE.mute }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: done || active ? WEAVE.ink : WEAVE.mute }}>
                 {s.label}
               </div>
               <div style={{ fontSize: 11.5, color: WEAVE.mute }}>
-                {i < stage ? 'Completed' : i === stage ? s.sub : 'Pending'}
+                {done ? 'Completed' : active ? s.sub : 'Pending'}
               </div>
             </Stack>
           </Row>
-        ))}
+          );
+        })}
       </Stack>
 
       {takingLong && (
@@ -2106,7 +2138,16 @@ function ScreenDeposit({
             <div style={{ padding: 8, background: '#fff', borderRadius: 10, border: `1px solid ${WEAVE.hair}`, flexShrink: 0 }}>
               {qrPayload ? (
                 <QRCodeSVG value={qrPayload} size={120} level="M" includeMargin={false} />
-              ) : (
+              ) : error && !loading ? (
+                <div style={{
+                  width: 120, height: 120, borderRadius: 12,
+                  background: '#FFF5F5', border: `1px solid #FFD1D1`,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12,
+                }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" /></svg>
+                  <div style={{ fontSize: 9.5, color: '#DC2626', letterSpacing: 0.6, fontWeight: 600, textTransform: 'uppercase', textAlign: 'center' }}>Could not generate</div>
+                </div>
+              ) : loading ? (
                 <div style={{
                   width: 120, height: 120, borderRadius: 12,
                   background: WEAVE.panel, border: `1px dashed ${WEAVE.hair}`,
@@ -2114,6 +2155,15 @@ function ScreenDeposit({
                 }}>
                   <div className="weaving-spinner" />
                   <div style={{ fontSize: 10, color: WEAVE.mute, letterSpacing: 0.8, fontWeight: 500, textTransform: 'uppercase' }}>Generating Address</div>
+                </div>
+              ) : (
+                <div style={{
+                  width: 120, height: 120, borderRadius: 12,
+                  background: WEAVE.panel, border: `1px dashed ${WEAVE.hair}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, color: WEAVE.mute, textAlign: 'center', padding: 12,
+                }}>
+                  Address will appear here
                 </div>
               )}
             </div>
@@ -2251,6 +2301,15 @@ function ScreenDeposit({
               <div style={{ flex: 1, fontSize: 12, color: '#D94E4E', fontWeight: 500, lineHeight: 1.4 }}>
                 Partial payment received. Still waiting for the remaining balance to complete your order.
               </div>
+            ) : nearStatus === 'processing' ? (
+              <>
+                <div style={{ position: 'relative', width: 10, height: 10 }}>
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: 5, background: WEAVE.accent }} />
+                </div>
+                <div style={{ flex: 1, fontSize: 12, color: WEAVE.ink2 }}>
+                  Deposit received — preparing your payout…
+                </div>
+              </>
             ) : (
               <>
                 <div style={{ position: 'relative', width: 10, height: 10 }}>
@@ -2970,6 +3029,7 @@ function WeaveCheckoutInner({
   const [stellarWalletAddress, setStellarWalletAddress] = useState<string | null>(null);
   const [stellarPaying, setStellarPaying] = useState(false);
   const [stellarError, setStellarError] = useState<string | null>(null);
+  const [submittedTxHash, setSubmittedTxHash] = useState<string | null>(null);
   const [ethUsdPrice, setEthUsdPrice] = useState<number>(3400);
   const [loadingEthPrice, setLoadingEthPrice] = useState(true);
 
@@ -3165,13 +3225,14 @@ function WeaveCheckoutInner({
   }, [orderId, screen, storageKey]);
 
   // Derived Helpers
-  const currencies: Record<string, Currency> = supportedAssets.fiat.reduce((acc, f) => {
+  const currencies: Record<string, Currency> = supportedAssets.fiat.filter(Boolean).reduce((acc, f) => {
+    if (!f?.key) return acc;
     const code = f.key.split(':').pop()!;
     acc[code] = {
       name: f.name,
       symbol: f.symbol,
       flag: f.flag,
-      rate: f.rate,
+      rate: f.rate ?? CURRENCIES[code]?.rate ?? 1515,
       min: f.min,
       country: f.country,
       psp: 'GTBank',
@@ -3243,6 +3304,7 @@ function WeaveCheckoutInner({
         from, to,
         amount: merchant.amount,
         amountIn: merchant.amountIn ?? 'dest',
+        flow: 'stellar',
       });
       pendingOrderRef.current ??= newOrderRef();
       const res = await createOrder(apiKey, {
@@ -3265,10 +3327,13 @@ function WeaveCheckoutInner({
       setDepositToken('USDC');
       setDepositChain('STELLAR');
       setScreen('stellarPay');
+      setApiError(null);
+      setStellarError(null);
     } catch (e: any) {
       pendingOrderRef.current = null;
-      setStellarError(e.message ?? 'Could not start Stellar checkout');
-      setApiError(e.message);
+      const errMsg = friendlyCheckoutError(e.message);
+      setStellarError(errMsg);
+      setApiError(errMsg);
       onError?.(e);
     } finally {
       setSubmitting(false);
@@ -3297,11 +3362,12 @@ function WeaveCheckoutInner({
         addr = await openStellarWalletModal();
         setStellarWalletAddress(addr);
       }
-      await sendStellarUsdcPayment({
+      const { txHash } = await sendStellarUsdcPayment({
         destination: depositAddress,
         amount: depositAmount,
         memo: depositMemo,
       });
+      setSubmittedTxHash(txHash);
       setScreen('processing');
     } catch (e: any) {
       const msg = e.message ?? '';
@@ -3404,7 +3470,7 @@ function WeaveCheckoutInner({
       // Clear the idempotency ref so a retry (especially on a different chain)
       // gets a fresh reference instead of colliding with this failed attempt.
       pendingOrderRef.current = null;
-      setDepositError(e.message ?? 'Could not generate a deposit address');
+      setDepositError(friendlyCheckoutError(e.message) || 'Could not generate a deposit address');
       onError?.(e);
     } finally {
       if (depositReq.current === myReq) setDepositLoading(false);
@@ -3730,6 +3796,7 @@ function WeaveCheckoutInner({
     setWalletBalanceEntry(null);
     setStellarWalletAddress(null);
     setStellarError(null);
+    setSubmittedTxHash(null);
     setScreen(target);
   };
 
@@ -3762,7 +3829,7 @@ function WeaveCheckoutInner({
       if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainKey={preSelectedChainKey} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'wallet') return <ScreenBalances onNext={() => advanceToQuote()} merchant={merchant} balances={BALANCES} selected={selectedBalance} setSelected={setSelectedBalance} currencies={currencies} />;
       if (screen === 'quote') return <ScreenQuote merchant={merchant} balance={walletBalanceEntry ?? balance} onConfirm={confirmOfframp} submitting={submitting} error={apiError} quote={quote} quoteLoading={quoteLoading} currencies={currencies} fmtCur={fmtCur} />;
-      if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} />;
+      if (screen === 'processing') return <ScreenProcessing onNext={advance} merchant={merchant} mode="crypto" apiKey={apiKey} orderId={orderId} currencies={currencies} fmtCur={fmtCur} walletAddress={stellarWalletAddress} submittedTxHash={submittedTxHash} />;
       if (screen === 'success') return <ScreenSuccess onNext={advance} balance={balance} merchant={merchant} direction={direction} apiKey={apiKey} orderId={orderId} accentColor={accentColor} currencies={currencies} fmtCur={fmtCur} />;
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('quote')} message={apiError} />;
     }

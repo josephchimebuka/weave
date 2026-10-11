@@ -132,13 +132,14 @@ export interface Quote {
 
 export async function fetchQuote(
   publishableKey: string,
-  args: { from: string; to: string; amount: number; amountIn?: 'source' | 'dest' },
+  args: { from: string; to: string; amount: number; amountIn?: 'source' | 'dest'; flow?: Flow },
 ): Promise<Quote> {
   const qs = new URLSearchParams({
     from:   args.from,
     to:     args.to,
     amount: String(args.amount),
     ...(args.amountIn ? { amountIn: args.amountIn } : {}),
+    ...(args.flow ? { flow: args.flow } : {}),
   });
   return apiFetch(`/quotes?${qs}`, publishableKey);
 }

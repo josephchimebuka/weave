@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fontStack, ensureFontLoaded } from '../../lib/brand-fonts';
+import { buildCryptoOfframpProgress } from '@weave/shared';
+import { CashoutProgressTimeline } from '../CashoutProgressTimeline';
 
 // Customer-facing, merchant-BRANDED, chain-agnostic cash-out. A SINGLE progressive
 // screen: each field reveals under the previous as it's completed, the next input
@@ -24,6 +26,11 @@ type Mode = 'form' | 'send' | 'done' | 'error';
 
 const PROXY = '/api/public';
 const COMMON = ['crypto:BASE:USDC', 'crypto:BASE:ETH', 'crypto:ETHEREUM:USDC', 'crypto:ETHEREUM:USDT'];
+
+function stellarNetworkFromEnv(): 'testnet' | 'mainnet' {
+  const env = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
+  return String(env).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
+}
 // Nigerians type the short name — match "gtb", "uba", "fbn", "fcmb"… to the full
 // institution name. Keyed by a substring of the official name.
 const BANK_ALIASES: Record<string, string> = {
@@ -94,6 +101,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
 
   const [submitting, setSubmitting] = useState(false);
   const [order, setOrder] = useState<any>(null);
+  const [liveOrder, setLiveOrder] = useState<any>(null);
   const [deposit, setDeposit] = useState<{ address: string; memo: string | null; amount: number; token: string; chain: string } | null>(null);
   const [payoutAmount, setPayoutAmount] = useState<number | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -108,6 +116,23 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   const showBank = Number(amount) > 0;
   const showAccount = showBank && !!bankCode;
   const showAction = showAccount && !!accountName && (!needsRefund || !!refundAddress.trim());
+
+  const progress = useMemo(() => {
+    if (!liveOrder) return null;
+    return buildCryptoOfframpProgress(liveOrder, {
+      merchantName: accountName || t.name || link.merchantName,
+      currency: link.payoutCurrency,
+      stellarNetwork: stellarNetworkFromEnv(),
+    });
+  }, [liveOrder, accountName, t.name, link.merchantName, link.payoutCurrency]);
+
+  const nearStatus = String(liveOrder?.nearStatus ?? '').toLowerCase();
+
+  const orderStatus = String(liveOrder?.status ?? order?.status ?? '').toLowerCase();
+  const depositStepDone = liveOrder?.steps?.some(
+    (s: any) => (s.provider === 'nearintents' || s.provider === 'stellar') && String(s.status).toLowerCase() === 'done',
+  );
+  const showDepositDetails = mode === 'send' && deposit && (!depositStepDone || orderStatus === 'awaiting_deposit');
 
   useEffect(() => { ensureFontLoaded(t.fontKey); }, [t.fontKey]);
 
@@ -185,6 +210,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
       const na = j.data.nextAction;
       if (!na?.depositAddress) throw new Error('No deposit address was returned. Please try again.');
       setOrder(j.data.order);
+      setLiveOrder(j.data.order);
       setPayoutAmount(j.data.order?.destAmount ?? estimate ?? null);
       setDeposit({ address: na.depositAddress, memo: na.depositMemo ?? null, amount: Number(na.amount ?? amount), token: na.token ?? tokenLabel, chain: na.chain ?? networkLabel });
       setMode('send');
@@ -195,19 +221,30 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   // Poll to terminal.
   useEffect(() => {
     if (mode !== 'send' || !order?.id) return;
-    let stopped = false; let timer: ReturnType<typeof setTimeout>;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let failCount = 0;
+    const POLL_BASE = 4000;
+    const POLL_MAX = 30000;
+
     const tick = async () => {
       if (stopped) return;
       try {
         const r = await fetch(`${PROXY}/orders/${order.id}`, { headers: { 'x-api-key': key } });
-        const j = await r.json(); const s = String(j?.data?.status ?? '').toLowerCase();
+        const j = await r.json();
+        failCount = 0;
+        if (j?.data) setLiveOrder(j.data);
+        const s = String(j?.data?.status ?? '').toLowerCase();
         if (j?.data?.destAmount != null) setPayoutAmount(Number(j.data.destAmount));
         if (s === 'completed') { stopped = true; setMode('done'); return; }
         if (['failed', 'expired', 'refunded'].includes(s)) { stopped = true; setError('Your cash-out could not be completed.'); setMode('error'); return; }
-      } catch { /* keep polling */ }
-      timer = setTimeout(tick, 4000);
+      } catch {
+        failCount++;
+      }
+      const delay = Math.min(POLL_BASE * Math.pow(2, failCount), POLL_MAX);
+      timer = setTimeout(tick, delay);
     };
-    timer = setTimeout(tick, 4000);
+    timer = setTimeout(tick, POLL_BASE);
     return () => { stopped = true; clearTimeout(timer); };
   }, [mode, order?.id, key]);
 
@@ -219,7 +256,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
     setBankCode(''); setBankQuery(''); setBankOpen(false);
     setAccountNumber(''); setAccountName(''); setResolveError(null);
     setEmail(''); setEmailOpen(false); setNeedsRefund(false); setRefundAddress('');
-    setOrder(null); setDeposit(null); setPayoutAmount(null); setError(null);
+    setOrder(null); setLiveOrder(null); setDeposit(null); setPayoutAmount(null); setError(null);
     setMode('form');
   }
 
@@ -337,16 +374,57 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
           {mode === 'send' && deposit && (
             <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 20, fontWeight: 700 }}>Send {deposit.amount} {deposit.token}</div>
-                <div style={{ fontSize: 13.5, color: mute, marginTop: 3 }}>on <b>{deposit.chain}</b> to finish</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: t.accent, textTransform: 'uppercase', letterSpacing: 0.5 }}>Cash-out in progress</div>
+                <div style={{ fontSize: 20, fontWeight: 700, marginTop: 6 }}>
+                  {depositStepDone ? 'Settling to your bank' : `Send ${deposit.amount} ${deposit.token}`}
+                </div>
+                <div style={{ fontSize: 13.5, color: mute, marginTop: 3 }}>
+                  {depositStepDone
+                    ? (payoutAmount != null ? <>About <b>{fmtNgn(payoutAmount, sym)}</b> to {accountName}</> : `Payout to ${accountName}`)
+                    : <>on <b>{deposit.chain}</b> — then we send {link.payoutCurrency} to your bank</>}
+                </div>
               </div>
-              <CopyRow label="Deposit address" value={deposit.address} id="addr" copied={copied} onCopy={copy} accent={t.accent} hair={hair} ink={ink} />
-              {deposit.memo && <CopyRow label="Memo / tag (required)" value={deposit.memo} id="memo" copied={copied} onCopy={copy} accent={t.accent} hair={hair} ink={ink} />}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, border: `1px solid ${hair}`, borderRadius: 13, padding: '13px 14px', background: '#FAFAF5' }}>
-                <div style={{ width: 16, height: 16, border: `2px solid ${t.accent}33`, borderTopColor: t.accent, borderRadius: '50%', animation: 'wspin 0.8s linear infinite', flexShrink: 0 }} />
-                <p style={{ fontSize: 13, color: mute }}>Waiting for your transfer{payoutAmount != null ? <> — you’ll get <b style={{ color: ink }}>{fmtNgn(payoutAmount, sym)}</b></> : '…'}</p>
-              </div>
-              <p style={{ fontSize: 11.5, color: mute, textAlign: 'center' }}>Keep this page open — it usually settles in a couple of minutes.</p>
+
+              {progress?.steps?.length ? (
+                <CashoutProgressTimeline steps={progress.steps} accent={t.accent} ink={ink} mute={mute} hair={hair} />
+              ) : null}
+
+              {showDepositDetails && (
+                <>
+                  <div style={{ height: 1, background: hair, margin: '4px 0' }} />
+                  <div style={{ fontSize: 11, fontWeight: 600, color: mute, textTransform: 'uppercase', letterSpacing: 0.4 }}>Payment details</div>
+                  <CopyRow label="Deposit address" value={deposit.address} id="addr" copied={copied} onCopy={copy} accent={t.accent} hair={hair} ink={ink} />
+                  {deposit.memo && <CopyRow label="Memo / tag (required)" value={deposit.memo} id="memo" copied={copied} onCopy={copy} accent={t.accent} hair={hair} ink={ink} />}
+                </>
+              )}
+
+              {!depositStepDone && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 12px',
+                  background: nearStatus === 'incomplete_deposit' ? '#FFF5F5' : panel,
+                  border: `1px solid ${nearStatus === 'incomplete_deposit' ? '#FFD1D1' : hair}`,
+                  borderRadius: 10,
+                }}>
+                  {nearStatus === 'incomplete_deposit' ? (
+                    <p style={{ fontSize: 12.5, color: '#C45B4F', lineHeight: 1.45, margin: 0 }}>
+                      Partial payment received — send the remaining amount to finish this cash-out.
+                    </p>
+                  ) : nearStatus === 'processing' ? (
+                    <p style={{ fontSize: 12.5, color: ink, lineHeight: 1.45, margin: 0 }}>
+                      Deposit received. Preparing your bank payout…
+                    </p>
+                  ) : (
+                    <p style={{ fontSize: 12.5, color: mute, lineHeight: 1.45, margin: 0 }}>
+                      Send the exact amount from your wallet or exchange. This page updates when we see your transfer.
+                    </p>
+                  )}
+                </div>
+              )}
+              {order?.id && (
+                <p style={{ fontSize: 10.5, color: mute, textAlign: 'center', opacity: 0.85 }}>Reference: {order.id.slice(0, 8)}…</p>
+              )}
+              <p style={{ fontSize: 11.5, color: mute, textAlign: 'center' }}>Safe to leave open — we’ll keep checking until your bank payout completes.</p>
             </div>
           )}
 
@@ -355,6 +433,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
               <div style={{ margin: '0 auto', width: 60, height: 60, borderRadius: '50%', background: `${t.accent}1a`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, color: t.accent }}>✓</div>
               <h2 style={{ fontSize: 23, fontWeight: 700 }}>All done</h2>
               <p style={{ fontSize: 14.5, color: mute, lineHeight: 1.5 }}>{payoutAmount != null ? <><b style={{ color: ink }}>{fmtNgn(payoutAmount, sym)}</b> is on its way to </> : 'Your funds are on the way to '}{accountName}.</p>
+              {order?.id && <p style={{ fontSize: 11, color: mute }}>Reference: {order.id}</p>}
               <button onClick={reset} style={{ ...primaryBtn(true), marginTop: 6 }}>New cash-out</button>
             </div>
           )}
