@@ -201,6 +201,9 @@ export default function DemoPage() {
           <h1 className="text-4xl font-serif font-medium tracking-tight">
             Try it <span className="italic text-[#0F5D4C]">live.</span>
           </h1>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-[#0F5D4C]/80 mt-1">
+            Preview · joe-dev · cash-out timeline &amp; stablecoin checkout
+          </p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl">
             This is a <strong className="text-[#0B0F0E]">real-life demo</strong>. You can run through the actual checkout experience.
             Payments are live but limited to <span className="font-semibold text-[#0B0F0E]">₦700 - ₦1,000</span> for safety.
