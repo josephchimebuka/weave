@@ -30,32 +30,68 @@ const USDC_ISSUERS: Record<StellarNetwork, string> = {
 };
 
 let kitInitialized = false;
+let kitNetwork: StellarNetwork | null = null;
+
+/** Overrides build-time VITE_* when set from GET /stellar/config (must match API). */
+let runtimeFromApi: {
+  network?: StellarNetwork;
+  horizonUrl?: string;
+  usdcIssuer?: string;
+  networkPassphrase?: string;
+} | null = null;
+
+export function applyStellarPublicConfig(cfg: {
+  network?: string;
+  horizonUrl?: string;
+  usdcIssuer?: string;
+  networkPassphrase?: string;
+}): void {
+  const n = String(cfg.network ?? '').toLowerCase();
+  const network: StellarNetwork | undefined =
+    n === 'mainnet' ? 'mainnet' : n === 'testnet' ? 'testnet' : undefined;
+  runtimeFromApi = {
+    network,
+    horizonUrl: cfg.horizonUrl?.trim() || undefined,
+    usdcIssuer: cfg.usdcIssuer?.trim() || undefined,
+    networkPassphrase: cfg.networkPassphrase?.trim() || undefined,
+  };
+  const active = getStellarNetwork();
+  if (kitInitialized && kitNetwork !== active) {
+    kitInitialized = false;
+    kitNetwork = null;
+  }
+}
 
 export function getStellarNetwork(): StellarNetwork {
+  if (runtimeFromApi?.network) return runtimeFromApi.network;
   const env = (import.meta as any).env?.VITE_STELLAR_NETWORK ?? 'testnet';
   return String(env).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
 }
 
 export function getHorizonUrl(): string {
+  if (runtimeFromApi?.horizonUrl) return runtimeFromApi.horizonUrl;
   return (import.meta as any).env?.VITE_STELLAR_HORIZON_URL ?? HORIZON_URLS[getStellarNetwork()];
 }
 
 export function getUsdcIssuer(): string {
+  if (runtimeFromApi?.usdcIssuer) return runtimeFromApi.usdcIssuer;
   return (import.meta as any).env?.VITE_STELLAR_USDC_ISSUER ?? USDC_ISSUERS[getStellarNetwork()];
 }
 
 export function getNetworkPassphrase(): string {
+  if (runtimeFromApi?.networkPassphrase) return runtimeFromApi.networkPassphrase;
   return NETWORK_PASSPHRASES[getStellarNetwork()];
 }
 
 function ensureKit(): void {
-  if (kitInitialized) return;
   const network = getStellarNetwork();
+  if (kitInitialized && kitNetwork === network) return;
   StellarWalletsKit.init({
     modules: defaultModules(),
     network: network === 'mainnet' ? KitNetworks.PUBLIC : KitNetworks.TESTNET,
   });
   kitInitialized = true;
+  kitNetwork = network;
 }
 
 /** Opens wallet picker modal and returns connected Stellar address. */

@@ -134,6 +134,11 @@ export type StellarPublicConfig = {
   enabled?: boolean;
   checkoutEnabled?: boolean;
   network?: string;
+  horizonUrl?: string;
+  networkPassphrase?: string;
+  treasuryPublicKey?: string | null;
+  usdcIssuer?: string;
+  usdcAssetCode?: string;
 };
 
 /** Public treasury/network flags — no API key required. */
