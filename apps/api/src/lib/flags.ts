@@ -26,3 +26,20 @@ export const NAIRA_ENABLED = PAYSTACK_ENABLED || BACHS_ENABLED;
 // corridor is disabled. Kept here so the copy is identical everywhere it surfaces.
 export const NAIRA_DISABLED_MESSAGE =
   'Naira card & bank payments are temporarily unavailable. Please pay with crypto instead.';
+
+/** Basic-tier (email verified, not KYB) rolling 30-day order cap. */
+export function basicMonthlyOrderLimit(): number {
+  const n = Number(process.env.BASIC_MONTHLY_ORDER_LIMIT ?? 30);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 30;
+}
+
+/** Publishable key(s) used on paywithweave.com/demo — exempt from basic-tier cap. */
+export function isWeaveDemoPublishableKey(key: string | undefined): boolean {
+  const k = key?.trim();
+  if (!k) return false;
+  const allowed = (process.env.WEAVE_DEMO_PUBLISHABLE_KEY ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return allowed.includes(k);
+}
