@@ -13,6 +13,7 @@ import { nearIntents, classifyNearStatus } from '../services/nearintents.service
 import { fetchCryptoUsdPrice } from '../lib/crypto-usd-price';
 import { estimateFiatFromUsdOfframp } from '../lib/offramp-estimate';
 import { Decimal } from 'decimal.js';
+import { basicMonthlyOrderLimit, isWeaveDemoPublishableKey } from '../lib/flags';
 
 const router = Router();
 
@@ -140,9 +141,11 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     // Basic-tier merchants (email verified, not yet fully KYB'd) are capped at
-    // 30 non-failed orders per rolling 30-day window to limit compliance exposure.
-    if (merchant.kycLevel === 'basic') {
-      const BASIC_MONTHLY_LIMIT = 30;
+    // N non-failed orders per rolling 30-day window to limit compliance exposure.
+    // The public /demo checkout key is exempt (see WEAVE_DEMO_PUBLISHABLE_KEY).
+    const demoPublishableKey = (req.headers['x-api-key'] as string | undefined)?.trim();
+    if (merchant.kycLevel === 'basic' && !isWeaveDemoPublishableKey(demoPublishableKey)) {
+      const BASIC_MONTHLY_LIMIT = basicMonthlyOrderLimit();
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const count = await prisma.order.count({
         where: { merchantId: req.merchantId, status: { not: 'failed' }, createdAt: { gte: since } },
