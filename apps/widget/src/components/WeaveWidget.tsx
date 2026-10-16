@@ -1692,9 +1692,12 @@ function ScreenError({ onNext, onBack, message }: { onNext: (s: string) => void;
 
 // ── Stellar wallet pay ───────────────────────────────────────────────────────
 
+const TREASURY_NOT_READY_MSG =
+  'Weave’s receive address is not active on Stellar mainnet yet (treasury must be funded with XLM and a USDC trustline). Wallet payments cannot land until that is done.';
+
 function ScreenStellarPay({
   merchant, depositAddress, depositMemo, amountToSend, walletAddress, loading, paying, error,
-  onConnect, onPay, fmtCur, copyMode,
+  treasuryReady, onConnect, onPay, fmtCur, copyMode,
 }: {
   merchant: Merchant;
   depositAddress: string | null;
@@ -1704,6 +1707,7 @@ function ScreenStellarPay({
   loading: boolean;
   paying: boolean;
   error: string | null;
+  treasuryReady?: boolean | null;
   onConnect: () => void;
   onPay: () => void;
   fmtCur: (n: number, cur: string) => string;
@@ -1777,6 +1781,12 @@ function ScreenStellarPay({
         </div>
       )}
 
+      {treasuryReady === false && (
+        <div style={{ fontSize: 12, color: '#9A6700', background: '#FFF8E6', borderRadius: 8, padding: '10px 12px', lineHeight: 1.45 }}>
+          {TREASURY_NOT_READY_MSG}
+        </div>
+      )}
+
       {error && <div style={{ fontSize: 12.5, color: WEAVE.err }}>{error}</div>}
 
       {loading ? (
@@ -1786,7 +1796,7 @@ function ScreenStellarPay({
           {copyMode === 'dev' ? 'Connect Stellar wallet' : 'Connect wallet'}
         </button>
       ) : (
-        <button onClick={onPay} disabled={paying || !depositAddress || !amountToSend} style={{ ...primaryBtn, opacity: (paying || !depositAddress) ? 0.7 : 1 }}>
+        <button onClick={onPay} disabled={paying || !depositAddress || !amountToSend || treasuryReady === false} style={{ ...primaryBtn, opacity: (paying || !depositAddress || treasuryReady === false) ? 0.7 : 1 }}>
           {paying ? 'Confirm in wallet…' : `Pay ${usdcAmount.toFixed(2)} USDC`}
         </button>
       )}
@@ -3085,6 +3095,7 @@ function WeaveCheckoutInner({
   const [stellarError, setStellarError] = useState<string | null>(null);
   const [submittedTxHash, setSubmittedTxHash] = useState<string | null>(null);
   const [stellarCheckoutEnabled, setStellarCheckoutEnabled] = useState(isStellarCheckoutEnabledFromEnv());
+  const [stellarTreasuryReady, setStellarTreasuryReady] = useState<boolean | null>(null);
   const paymentCopyMode = getPaymentCopyMode();
   const [ethUsdPrice, setEthUsdPrice] = useState<number>(3400);
   const [loadingEthPrice, setLoadingEthPrice] = useState(true);
@@ -3097,6 +3108,8 @@ function WeaveCheckoutInner({
     fetchStellarPublicConfig().then((cfg) => {
       if (!cfg) return;
       applyStellarPublicConfig(cfg);
+      if (cfg.treasuryReady === false) setStellarTreasuryReady(false);
+      else if (cfg.treasuryReady === true) setStellarTreasuryReady(true);
       if (cfg.checkoutEnabled === false) setStellarCheckoutEnabled(false);
       else if (cfg.enabled) setStellarCheckoutEnabled(true);
     }).catch(() => {});
@@ -3372,7 +3385,11 @@ function WeaveCheckoutInner({
     setStellarWalletAddress(null);
     try {
       const stellarCfg = await fetchStellarPublicConfig();
-      if (stellarCfg) applyStellarPublicConfig(stellarCfg);
+      if (stellarCfg) {
+        applyStellarPublicConfig(stellarCfg);
+        if (stellarCfg.treasuryReady === false) setStellarTreasuryReady(false);
+        else if (stellarCfg.treasuryReady === true) setStellarTreasuryReady(true);
+      }
       const to = merchant.destAssetKey || fiatKey(merchant.currency);
       const from = cryptoKey('STELLAR', 'USDC');
       await fetchQuote(apiKey, {
@@ -3900,7 +3917,7 @@ function WeaveCheckoutInner({
       if (screen === 'error') return <ScreenError onNext={() => retry('connect')} onBack={() => retry('refundAccount')} message={apiError} />;
     } else {
       if (screen === 'walletConnect') return <ScreenWalletConnect onConnected={() => setScreen('walletAsset')} onExternalFlow={() => { setDirection('offramp'); setScreen('deposit'); }} />;
-      if (screen === 'stellarPay') return <ScreenStellarPay merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} walletAddress={stellarWalletAddress} loading={depositLoading} paying={stellarPaying} error={stellarError} onConnect={connectStellarWallet} onPay={payWithStellar} fmtCur={fmtCur} copyMode={paymentCopyMode} />;
+      if (screen === 'stellarPay') return <ScreenStellarPay merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} walletAddress={stellarWalletAddress} loading={depositLoading} paying={stellarPaying} error={stellarError} treasuryReady={stellarTreasuryReady} onConnect={connectStellarWallet} onPay={payWithStellar} fmtCur={fmtCur} copyMode={paymentCopyMode} />;
       if (screen === 'walletAsset') return <ScreenWalletAsset onSelectToken={(token, bal) => advanceToWalletQuote(bal, token)} onExternalFlow={() => setScreen('deposit')} merchant={merchant} currencies={currencies} fmtCur={fmtCur} ethUsdPrice={ethUsdPrice} loadingEthPrice={loadingEthPrice} />;
       if (screen === 'walletSign') return <ScreenWalletSign onRetry={confirmOfframp} />;
       if (screen === 'deposit') return <ScreenDeposit onNext={advance} merchant={merchant} depositAddress={depositAddress} depositMemo={depositMemo} amountToSend={depositAmount} sourceToken={depositToken} sourceChain={depositChain} loading={depositLoading} error={depositError} onChainChange={onDepositChainChange} ready={!!orderId && !!depositAddress && !depositLoading} apiKey={apiKey} orderId={orderId} preSelectedChainKey={preSelectedChainKey} depositChains={depositChainsList} currencies={currencies} fmtCur={fmtCur} />;

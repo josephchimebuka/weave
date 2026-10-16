@@ -139,6 +139,9 @@ export type StellarPublicConfig = {
   treasuryPublicKey?: string | null;
   usdcIssuer?: string;
   usdcAssetCode?: string;
+  treasuryReady?: boolean;
+  treasuryAccountExists?: boolean;
+  treasuryUsdcTrustline?: boolean;
 };
 
 /** Public treasury/network flags — no API key required. */

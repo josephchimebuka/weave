@@ -130,6 +130,15 @@ export async function sendStellarUsdcPayment(params: {
     ensureKit();
     const { address } = await StellarWalletsKit.getAddress();
     const server = new Horizon.Server(getHorizonUrl());
+    try {
+      await server.loadAccount(params.destination);
+    } catch (destErr: any) {
+      const d = String(destErr?.response?.data?.detail ?? destErr?.message ?? '').toLowerCase();
+      if (d.includes('not found') || destErr?.response?.status === 404) {
+        throw new Error('op_no_destination');
+      }
+      throw destErr;
+    }
     const sourceAccount = await server.loadAccount(address);
     const usdc = new Asset('USDC', getUsdcIssuer());
     const passphrase = getNetworkPassphrase();
