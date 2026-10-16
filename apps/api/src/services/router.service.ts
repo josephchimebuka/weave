@@ -151,11 +151,12 @@ const EDGES: Edge[] = [
     flows: ['self'],
   },
   // Stellar direct: USDC on Stellar → Weave treasury (Stellar Wallets Kit flow).
-  // Priority 1 collection rail — merchant fiat settlement follows in Tranche 2.
+  // `to` is crypto-only so fiat payouts plan stellar → BASE USDC → paycrest, not
+  // a misleading single hop straight to fiat.
   {
     provider: 'stellar',
     from: (a) => a.kind === 'crypto' && a.token === 'USDC' && a.chain === 'STELLAR',
-    to: (_a) => true,
+    to: (a) => a.kind === 'crypto',
     expectedFeeBps: 5,
     expectedSecs: 5,
     note: 'stellar USDC → Weave treasury',

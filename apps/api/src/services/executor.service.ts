@@ -1656,6 +1656,20 @@ export async function markStepDone(params: {
     recordServerEvent(step.orderId, 'order.completed', 'Payment completed');
   }
 
+  // Stellar wallet collection → Paycrest: bridge treasury USDC to Paycrest's Base address.
+  if (
+    params.provider === 'stellar' &&
+    !step.order.sandboxMode &&
+    step.sequence === 0
+  ) {
+    const next = fresh.find((s: any) => s.sequence === step.sequence + 1);
+    if (next?.provider === 'paycrest' && !['done', 'failed'].includes(next.status)) {
+      import('./stellar-treasury-bridge.service')
+        .then(m => m.scheduleTreasuryBridge(step.orderId))
+        .catch(err => console.warn(`[stellar] treasury bridge schedule failed for ${step.orderId}:`, err.message));
+    }
+  }
+
   // ── Roll up linked CheckoutSession ────────────────────────────────────────
   // Mirror the order's terminal state onto any hosted checkout session bound to
   // this order. The hosted page polls/observes the order, so this keeps session
