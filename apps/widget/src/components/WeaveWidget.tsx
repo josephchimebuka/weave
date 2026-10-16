@@ -64,7 +64,12 @@ import {
   fetchStellarPublicConfig,
   type ClientOrderEvent,
 } from '../api/client';
-import { openStellarWalletModal, sendStellarUsdcPayment, getStellarNetwork } from '../lib/stellar';
+import {
+  applyStellarPublicConfig,
+  openStellarWalletModal,
+  sendStellarUsdcPayment,
+  getStellarNetwork,
+} from '../lib/stellar';
 import {
   getPaymentCopyMode,
   isStellarCheckoutEnabledFromEnv,
@@ -3084,6 +3089,7 @@ function WeaveCheckoutInner({
     }
     fetchStellarPublicConfig().then((cfg) => {
       if (!cfg) return;
+      applyStellarPublicConfig(cfg);
       if (cfg.checkoutEnabled === false) setStellarCheckoutEnabled(false);
       else if (cfg.enabled) setStellarCheckoutEnabled(true);
     }).catch(() => {});
@@ -3358,6 +3364,8 @@ function WeaveCheckoutInner({
     setStellarError(null);
     setStellarWalletAddress(null);
     try {
+      const stellarCfg = await fetchStellarPublicConfig();
+      if (stellarCfg) applyStellarPublicConfig(stellarCfg);
       const to = merchant.destAssetKey || fiatKey(merchant.currency);
       const from = cryptoKey('STELLAR', 'USDC');
       await fetchQuote(apiKey, {
