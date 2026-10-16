@@ -3412,6 +3412,8 @@ function WeaveCheckoutInner({
   const connectStellarWallet = async () => {
     setStellarError(null);
     try {
+      const cfg = await fetchStellarPublicConfig();
+      if (cfg) applyStellarPublicConfig(cfg);
       const addr = await openStellarWalletModal();
       setStellarWalletAddress(addr);
     } catch (e: any) {
@@ -3425,6 +3427,8 @@ function WeaveCheckoutInner({
     setStellarPaying(true);
     setStellarError(null);
     try {
+      const cfg = await fetchStellarPublicConfig();
+      if (cfg) applyStellarPublicConfig(cfg);
       let addr = stellarWalletAddress;
       if (!addr) {
         addr = await openStellarWalletModal();
