@@ -16,14 +16,14 @@ const baseUrl = "https://paywithweave.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
-  title: "Weave | Bridge Fiat & Crypto Seamlessly",
-  description: "Accept global crypto payments and settle instantly in local fiat. The ultimate bridge between traditional banking and the future of finance.",
+  title: "Weave | Unified checkout & payments",
+  description: "One checkout for bank, card, and wallet payments. Merchants embed Weave, share payment links, and settle in Naira or stablecoins.",
   alternates: {
     canonical: "/",
   },
   openGraph: {
-    title: "Weave | Bridge Fiat & Crypto Seamlessly",
-    description: "Accept global crypto payments and settle instantly in local fiat.",
+    title: "Weave | Unified checkout & payments",
+    description: "One checkout for bank, card, and wallet. Settle in Naira or stablecoins.",
     url: baseUrl,
     siteName: "Weave",
     locale: "en_US",
@@ -31,8 +31,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Weave | Bridge Fiat & Crypto Seamlessly",
-    description: "Accept global crypto payments and settle instantly in local fiat.",
+    title: "Weave | Unified checkout & payments",
+    description: "One checkout for bank, card, and wallet. Settle in Naira or stablecoins.",
   },
 };
 
@@ -52,7 +52,7 @@ const jsonLd = {
       "@id": `${baseUrl}/#website`,
       url: baseUrl,
       name: "Weave",
-      description: "Accept global crypto payments and settle instantly in local fiat.",
+      description: "Unified checkout and payments for merchants — bank, card, wallet, and payment links.",
       publisher: { "@id": `${baseUrl}/#organization` },
     },
   ],
