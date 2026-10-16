@@ -10,6 +10,8 @@ import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
 import { resolveInstrument, bankFromInstrument, type InstrumentRef } from '../lib/instruments';
 import { paycrest, rateUnavailable } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
+import { fetchCryptoUsdPrice } from '../lib/crypto-usd-price';
+import { estimateFiatFromUsdOfframp } from '../lib/offramp-estimate';
 import { Decimal } from 'decimal.js';
 
 const router = Router();
@@ -315,8 +317,13 @@ router.post('/', requireAuth, async (req, res) => {
       } else {
         // Standard 'amountIn === source' logic
         if (srcP.kind === 'crypto') {
-          const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
-          if (token.price > 0) usdEquivalent = body.amount * token.price;
+          const srcPrice = await fetchCryptoUsdPrice(sourceInstrument.assetKey);
+          usdEquivalent = body.amount * srcPrice;
+          if (dstP.kind === 'fiat') {
+            const est = estimateFiatFromUsdOfframp(usdEquivalent, sellRate, plan);
+            destAmountFiat = est.estimatedDest;
+            appFeeBps = est.appFeeBps;
+          }
         } else if (srcP.kind === 'fiat') {
           sourceAmount = body.amount;
           usdEquivalent = body.amount / buyRate;

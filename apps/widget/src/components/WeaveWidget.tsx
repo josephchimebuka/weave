@@ -588,6 +588,7 @@ function WidgetHeader({
       padding: '16px 20px 14px',
       display: 'flex', alignItems: 'center', gap: 10,
       borderBottom: `1px solid ${WEAVE.hair}`,
+      flexShrink: 0,
     }}>
       {showBack ? (
         <button onClick={onBack} style={backBtn} aria-label="Go back">
@@ -617,6 +618,7 @@ function WidgetFooter() {
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       fontSize: 11, color: WEAVE.mute, background: WEAVE.panel,
       borderRadius: '0 0 16px 16px',
+      flexShrink: 0,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M12 2L3 6V12C3 17 6.5 21 12 22C17.5 21 21 17 21 12V6L12 2Z" stroke="currentColor" strokeWidth="1.8" /></svg>
@@ -3917,6 +3919,9 @@ function WeaveCheckoutInner({
         borderRadius: borderRadius,
         boxShadow: '0 30px 80px rgba(11, 15, 14, 0.22), 0 0 0 1px rgba(0,0,0,0.04)',
         overflow: 'hidden',
+        maxHeight: 'min(92dvh, 720px)',
+        display: 'flex',
+        flexDirection: 'column',
         fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif',
         color: WEAVE.ink,
         animation: 'wslide 0.35s cubic-bezier(0.2, 1, 0.3, 1)',
@@ -3943,7 +3948,18 @@ function WeaveCheckoutInner({
           No connection — your payment is safe, reconnecting…
         </div>
       )}
-      <div key={screen} style={{ animation: 'wfade 0.25s ease' }}>
+      <div
+        key={screen}
+        style={{
+          animation: 'wfade 0.25s ease',
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehavior: 'contain',
+        }}
+      >
         {body}
       </div>
       <WidgetFooter />

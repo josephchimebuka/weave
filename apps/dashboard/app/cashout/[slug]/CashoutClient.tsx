@@ -4,6 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { fontStack, ensureFontLoaded } from '../../lib/brand-fonts';
 import { buildCryptoOfframpProgress } from '@weave/shared';
 import { CashoutProgressTimeline } from '../CashoutProgressTimeline';
+import {
+  configureCashoutStellarFromApi,
+  connectCashoutStellarWallet,
+  isStellarUsdcAsset,
+  sendCashoutStellarUsdc,
+} from '../../lib/cashout-stellar-pay';
 
 // Customer-facing, merchant-BRANDED, chain-agnostic cash-out. A SINGLE progressive
 // screen: each field reveals under the previous as it's completed, the next input
@@ -23,6 +29,11 @@ type PayoutLink = {
 type Asset = { key: string; token: string; network: string; name: string; logo?: string; tint?: string };
 type Bank = { name: string; code: string };
 type Mode = 'form' | 'send' | 'done' | 'error';
+
+type QuoteSnap = {
+  estimatedDest: number;
+  sellRate: number | null;
+};
 
 const PROXY = '/api/public';
 const COMMON = ['crypto:BASE:USDC', 'crypto:BASE:ETH', 'crypto:ETHEREUM:USDC', 'crypto:ETHEREUM:USDT'];
@@ -83,7 +94,11 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [amount, setAmount] = useState(fixedAmount != null ? String(fixedAmount) : '');
   const [estimate, setEstimate] = useState<number | null>(null);
+  const [quoteSnap, setQuoteSnap] = useState<QuoteSnap | null>(null);
+  const [lockedPayout, setLockedPayout] = useState<number | null>(null);
   const [estimating, setEstimating] = useState(false);
+  const [walletPaying, setWalletPaying] = useState(false);
+  const [walletErr, setWalletErr] = useState<string | null>(null);
 
   const [banks, setBanks] = useState<Bank[]>([]);
   const [bankCode, setBankCode] = useState('');
@@ -137,6 +152,13 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   useEffect(() => { ensureFontLoaded(t.fontKey); }, [t.fontKey]);
 
   useEffect(() => {
+    fetch(`${PROXY}/stellar/config`)
+      .then(r => r.ok ? r.json() : null)
+      .then(j => configureCashoutStellarFromApi(j?.data ?? null))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     fetch('/api/assets').then(r => r.ok ? r.json() : null).then(j => {
       const c: Asset[] = j?.crypto ?? j?.data?.crypto ?? [];
       c.sort((a, b) => (COMMON.indexOf(a.key) + 1 || 99) - (COMMON.indexOf(b.key) + 1 || 99));
@@ -149,12 +171,24 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   // Live ₦ estimate (debounced).
   useEffect(() => {
     const amt = Number(amount);
-    if (!amt || amt <= 0) { setEstimate(null); return; }
+    if (!amt || amt <= 0) { setEstimate(null); setQuoteSnap(null); return; }
     let cancelled = false; setEstimating(true);
+    const flow = isStellarUsdcAsset(asset) ? 'stellar' : 'external';
     const id = setTimeout(() => {
-      fetch(`${PROXY}/quotes?from=${encodeURIComponent(asset)}&to=fiat:${link.payoutCurrency}&amount=${amt}&amountIn=source`, { headers: { 'x-api-key': key } })
-        .then(r => r.json()).then(j => { if (!cancelled) setEstimate(j?.success ? Number(j.data?.estimatedDest ?? null) : null); })
-        .catch(() => { if (!cancelled) setEstimate(null); })
+      fetch(`${PROXY}/quotes?from=${encodeURIComponent(asset)}&to=fiat:${link.payoutCurrency}&amount=${amt}&amountIn=source&flow=${flow}`, { headers: { 'x-api-key': key } })
+        .then(r => r.json()).then(j => {
+          if (cancelled || !j?.success) {
+            if (!cancelled) { setEstimate(null); setQuoteSnap(null); }
+            return;
+          }
+          const est = Number(j.data?.estimatedDest ?? null);
+          setEstimate(Number.isFinite(est) ? est : null);
+          setQuoteSnap({
+            estimatedDest: est,
+            sellRate: j.data?.breakdown?.sellRate != null ? Number(j.data.breakdown.sellRate) : null,
+          });
+        })
+        .catch(() => { if (!cancelled) { setEstimate(null); setQuoteSnap(null); } })
         .finally(() => { if (!cancelled) setEstimating(false); });
     }, 450);
     return () => { cancelled = true; clearTimeout(id); setEstimating(false); };
@@ -198,6 +232,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
           source: { inline: { kind: 'crypto_wallet', assetKey: asset } },
           dest: { inline: { kind: 'bank_account', assetKey: `fiat:${link.payoutCurrency}`, bankInstitution: bankCode, bankAccountIdentifier: accountNumber.trim(), bankAccountName: accountName, label: `cashout:${link.id}` } },
           amount: Number(amount), amountIn: 'source',
+          flow: isStellarUsdcAsset(asset) ? 'stellar' : 'external',
           ...(refundAddress.trim() ? { refundAddress: refundAddress.trim() } : {}),
           ...(email.trim() ? { customer: { email: email.trim() } } : {}),
         }),
@@ -211,8 +246,11 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
       if (!na?.depositAddress) throw new Error('No deposit address was returned. Please try again.');
       setOrder(j.data.order);
       setLiveOrder(j.data.order);
-      setPayoutAmount(j.data.order?.destAmount ?? estimate ?? null);
+      const locked = j.data.order?.destAmount != null ? Number(j.data.order.destAmount) : (estimate ?? null);
+      setLockedPayout(locked);
+      setPayoutAmount(locked);
       setDeposit({ address: na.depositAddress, memo: na.depositMemo ?? null, amount: Number(na.amount ?? amount), token: na.token ?? tokenLabel, chain: na.chain ?? networkLabel });
+      setWalletErr(null);
       setMode('send');
     } catch (e: any) { setError(e.message ?? 'Something went wrong.'); }
     finally { setSubmitting(false); }
@@ -250,13 +288,33 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
 
   function copy(id: string, text: string) { navigator.clipboard.writeText(text).then(() => { setCopied(id); setTimeout(() => setCopied(null), 1600); }).catch(() => {}); }
 
+  const canPayWithStellarWallet = !!(deposit?.memo && isStellarUsdcAsset(asset));
+
+  async function payWithConnectedWallet() {
+    if (!deposit?.memo) return;
+    setWalletPaying(true);
+    setWalletErr(null);
+    try {
+      await connectCashoutStellarWallet();
+      await sendCashoutStellarUsdc({
+        destination: deposit.address,
+        amount: deposit.amount,
+        memo: deposit.memo,
+      });
+    } catch (e: any) {
+      setWalletErr(e?.message ?? 'Wallet payment failed.');
+    } finally {
+      setWalletPaying(false);
+    }
+  }
+
   // Reset back to a fresh cash-out (keeps the chosen token — they'll likely repeat it).
   function reset() {
-    setAmount(fixedAmount != null ? String(fixedAmount) : ''); setEstimate(null);
+    setAmount(fixedAmount != null ? String(fixedAmount) : ''); setEstimate(null); setQuoteSnap(null); setLockedPayout(null);
     setBankCode(''); setBankQuery(''); setBankOpen(false);
     setAccountNumber(''); setAccountName(''); setResolveError(null);
     setEmail(''); setEmailOpen(false); setNeedsRefund(false); setRefundAddress('');
-    setOrder(null); setLiveOrder(null); setDeposit(null); setPayoutAmount(null); setError(null);
+    setOrder(null); setLiveOrder(null); setDeposit(null); setPayoutAmount(null); setWalletErr(null); setError(null);
     setMode('form');
   }
 
@@ -311,6 +369,13 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
                 <div style={{ minHeight: 20, marginTop: 8, fontSize: 13.5, color: t.accent, fontWeight: 600 }}>
                   {estimating ? <span style={{ color: mute, fontWeight: 400 }}>Calculating…</span> : estimate ? `≈ ${fmtNgn(estimate, sym)} to your bank` : ''}
                 </div>
+                {quoteSnap?.sellRate != null && Number(quoteSnap.sellRate) > 0 && (
+                  <p style={{ fontSize: 11.5, color: mute, marginTop: 6, lineHeight: 1.45 }}>
+                    Live rate: <strong style={{ color: ink }}>1 {tokenLabel}</strong> ≈{' '}
+                    <strong style={{ color: ink }}>{sym}{Math.round(quoteSnap.sellRate).toLocaleString()}</strong> {link.payoutCurrency}
+                    {' '}· Bank payout is estimated after network &amp; platform fees at this rate.
+                  </p>
+                )}
               </div>
 
               {/* Bank (reveals under amount) */}
@@ -383,14 +448,37 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
                     ? (payoutAmount != null ? <>About <b>{fmtNgn(payoutAmount, sym)}</b> to {accountName}</> : `Payout to ${accountName}`)
                     : <>on <b>{deposit.chain}</b> — then we send {link.payoutCurrency} to your bank</>}
                 </div>
+                {lockedPayout != null && (
+                  <p style={{ fontSize: 12, color: ink, marginTop: 10, lineHeight: 1.45 }}>
+                    Locked at checkout: <strong>{fmtNgn(lockedPayout, sym)}</strong>
+                    {quoteSnap?.sellRate ? (
+                      <span style={{ color: mute }}> · 1 {tokenLabel} ≈ {sym}{Math.round(quoteSnap.sellRate).toLocaleString()}</span>
+                    ) : null}
+                  </p>
+                )}
               </div>
 
               {progress?.steps?.length ? (
                 <CashoutProgressTimeline steps={progress.steps} accent={t.accent} ink={ink} mute={mute} hair={hair} />
               ) : null}
 
+              {canPayWithStellarWallet && !depositStepDone && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button type="button" onClick={payWithConnectedWallet} disabled={walletPaying} style={primaryBtn(!walletPaying)}>
+                    {walletPaying ? 'Confirm in your wallet…' : `Pay ${deposit.amount} USDC from wallet`}
+                  </button>
+                  {walletErr && <p style={{ fontSize: 12.5, color: '#C45B4F', margin: 0 }}>{walletErr}</p>}
+                  <p style={{ fontSize: 11.5, color: mute, textAlign: 'center', margin: 0 }}>Fastest option — connect Freighter or another Stellar wallet.</p>
+                </div>
+              )}
+
               {showDepositDetails && (
                 <>
+                  {canPayWithStellarWallet && !depositStepDone && (
+                    <div style={{ fontSize: 11, fontWeight: 600, color: mute, textTransform: 'uppercase', letterSpacing: 0.4, textAlign: 'center' }}>
+                      Or send manually
+                    </div>
+                  )}
                   <div style={{ height: 1, background: hair, margin: '4px 0' }} />
                   <div style={{ fontSize: 11, fontWeight: 600, color: mute, textTransform: 'uppercase', letterSpacing: 0.4 }}>Payment details</div>
                   <CopyRow label="Deposit address" value={deposit.address} id="addr" copied={copied} onCopy={copy} accent={t.accent} hair={hair} ink={ink} />
