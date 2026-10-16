@@ -14,6 +14,9 @@ export function mapStellarPaymentError(raw: unknown): string {
   if (msg.includes('user denied') || msg.includes('user rejected') || msg.includes('cancel')) {
     return 'Payment cancelled in your wallet.';
   }
+  if (msg.includes('op_no_destination') || msg.includes('no_destination')) {
+    return 'Weave’s treasury is not active on this Stellar network yet. Our team must fund the receive address on mainnet before wallet pay-in works.';
+  }
   if (msg.includes('op_no_trust') || msg.includes('trustline')) {
     return 'Your wallet needs a USDC trustline on this network. Add USDC in Freighter (Assets → Add), then try again.';
   }

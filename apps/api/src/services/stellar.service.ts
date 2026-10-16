@@ -176,6 +176,44 @@ export function publicConfig() {
   };
 }
 
+/** Whether the treasury account exists on the active network and can receive USDC. */
+export async function getTreasuryReadiness(): Promise<{
+  accountExists: boolean;
+  usdcTrustline: boolean;
+  ready: boolean;
+}> {
+  if (!isStellarEnabled()) {
+    return { accountExists: false, usdcTrustline: false, ready: false };
+  }
+  try {
+    const treasury = getTreasuryPublicKey();
+    const account = await getServer().loadAccount(treasury);
+    const issuer = getUsdcIssuer();
+    const usdcTrustline = account.balances.some((b) => {
+      if (b.asset_type !== 'credit_alphanum4' && b.asset_type !== 'credit_alphanum12') return false;
+      return b.asset_code === 'USDC' && b.asset_issuer === issuer;
+    });
+    return { accountExists: true, usdcTrustline, ready: usdcTrustline };
+  } catch (e: any) {
+    const detail = String(e?.response?.data?.detail ?? e?.message ?? '').toLowerCase();
+    if (detail.includes('not found') || e?.response?.status === 404) {
+      return { accountExists: false, usdcTrustline: false, ready: false };
+    }
+    return { accountExists: false, usdcTrustline: false, ready: false };
+  }
+}
+
+export async function publicConfigWithTreasuryStatus() {
+  const base = publicConfig();
+  const treasury = await getTreasuryReadiness();
+  return {
+    ...base,
+    treasuryAccountExists: treasury.accountExists,
+    treasuryUsdcTrustline: treasury.usdcTrustline,
+    treasuryReady: treasury.ready,
+  };
+}
+
 const STELLAR_POLL_DELAY_S = Math.round(Number(process.env.STELLAR_POLL_INTERVAL_MS ?? 10_000) / 1000);
 const STELLAR_POLL_MAX_ATTEMPTS = 180; // ~30 min at 10s
 
