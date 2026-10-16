@@ -100,22 +100,30 @@ export default function Home() {
         position: 'relative', zIndex: 2,
         display: 'flex', flexDirection: 'column', alignItems: 'center',
       }} className="px-4 py-6 md:py-10 shrink-0">
+        <p style={{
+          fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase',
+          color: '#0F5D4C', textAlign: 'center', margin: '0 0 12px',
+        }} className="px-4">
+          Checkout &amp; payments for merchants
+        </p>
         <h1 style={{
           fontSize: 'clamp(36px, 9vw, 60px)', fontWeight: 500, letterSpacing: -1.2, lineHeight: 1.06,
           textAlign: 'center', margin: 0, maxWidth: 860, color: '#0B0F0E',
           fontFamily: 'Georgia, "Times New Roman", serif',
         }} className="px-4">
-          One checkout that{' '}
-          <em style={{ fontStyle: 'italic', color: '#0F5D4C' }}>weaves</em>
+          One{' '}
+          <em style={{ fontStyle: 'italic', color: '#0F5D4C' }}>checkout</em>
+          {' '}for every way
           <br className="hidden sm:block" />
-          fiat and crypto into a single thread.
+          your customers pay.
         </h1>
         <p style={{
-          fontSize: 'clamp(14px, 4.5vw, 16px)', color: '#3A4240', textAlign: 'center', maxWidth: 560,
-          lineHeight: 1.5, marginTop: 18, marginBottom: 0,
+          fontSize: 'clamp(14px, 4.5vw, 16px)', color: '#3A4240', textAlign: 'center', maxWidth: 580,
+          lineHeight: 1.55, marginTop: 18, marginBottom: 0,
         }} className="px-4">
-          Customers pay with their bank or any wallet. You settle in stable
-          dollars or local currency — without seeing the seam.
+          Drop in checkout on your site, send payment links, or cash-out pages.
+          Customers pay by bank, card, or wallet — you get paid in Naira or stablecoins,
+          with one flow and one reconciliation.
         </p>
         <div style={{ display: 'flex', gap: 10, marginTop: 24 }} className="flex-col sm:flex-row w-full sm:w-auto px-6 sm:px-0">
           <button 

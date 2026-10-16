@@ -50,8 +50,8 @@ function Chrome({ children }: { children: React.ReactNode }) {
         padding: '10px 14px', borderTop: `1px solid ${W.hair}`, background: W.panel,
         fontSize: 10.5, color: W.mute, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
-        <span>Powered by Weave</span>
-        <span>Bank-grade · Encrypted</span>
+        <span>Weave checkout</span>
+        <span>Secured payments</span>
       </div>
     </div>
   )
@@ -83,13 +83,18 @@ function StatePicker() {
                   <path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={W.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               ),
-              label: 'Pay with Naira',
-              sub: 'Card, bank transfer & USSD · Instant',
+              label: 'Pay by bank',
+              sub: 'Transfer, card & USSD — familiar checkout',
             },
             {
-              icon: <span style={{ fontSize: 18 }}>🦊</span>,
-              label: 'Pay with crypto',
-              sub: 'Transfer from any chain, any token, any wallet.',
+              icon: (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <rect x="3" y="6" width="18" height="13" rx="2" stroke={W.ink} strokeWidth="1.7"/>
+                  <path d="M3 10H21" stroke={W.ink} strokeWidth="1.7"/>
+                </svg>
+              ),
+              label: 'Pay from wallet',
+              sub: 'Stablecoins & global wallets — same checkout',
             },
           ].map((item, i) => (
             <div key={i} style={{
@@ -126,9 +131,9 @@ function StateBalances() {
     <Chrome>
       <div style={{ padding: '16px 20px 6px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: -0.3 }}>Choose what to pay with</div>
+          <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: -0.3 }}>Confirm your payment</div>
           <div style={{ fontSize: 11.5, color: W.mute, marginTop: 4 }}>
-            We found these in your wallet. We&apos;ll convert to Naira for Afriloom Textiles.
+            Weave routes the payment and settles to the merchant — you just approve and pay.
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -192,7 +197,7 @@ function StateSuccess() {
           </div>
         </div>
         <div style={{ background: W.panel, border: `1px solid ${W.hair}`, borderRadius: 12, overflow: 'hidden' }}>
-          <KVRow label="Paid with"><span style={{ fontWeight: 500 }}>93.65 USDC</span></KVRow>
+          <KVRow label="Payment"><span style={{ fontWeight: 500 }}>Wallet · 93.65 USDC</span></KVRow>
           <div style={{ height: 1, background: W.hair }}/>
           <KVRow label="Settled to"><span style={{ fontWeight: 500 }}>GTBank ••7890</span></KVRow>
           <div style={{ height: 1, background: W.hair }}/>
