@@ -18,7 +18,13 @@ type CodeTab     = 'html' | 'react';
 type SettingsTab = 'developer' | 'profile' | 'payouts' | 'webhooks' | 'branding';
 type BachsRemainingField = { fieldKey: string; label: string; group: string; error: string | null };
 
-import { WeaveCheckout } from '@weave-sdk/widget';
+import dynamic from 'next/dynamic';
+// Load client-only: the widget imports @creit.tech/stellar-wallets-kit, which
+// touches globalThis.localStorage at import time and throws during SSR.
+const WeaveCheckout = dynamic(
+  () => import('@weave-sdk/widget').then((m) => m.WeaveCheckout),
+  { ssr: false },
+);
 import { apiFetch } from '../lib/api-fetch';
 import { BRAND_FONTS, BRAND_FONT_KEYS, fontStack, ensureFontLoaded } from '../lib/brand-fonts';
 import { toast } from '../components/Toaster';

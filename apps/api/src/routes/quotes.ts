@@ -65,7 +65,16 @@ router.get('/', requireAuth, async (req, res) => {
         // Sandbox quotes use the fixed rate so display matches sandbox execution.
         return { sellRate: SANDBOX_NGN_RATE, buyRate: SANDBOX_NGN_RATE, sellQuoted: true, buyQuoted: true };
       }
-      const rate = await paycrest.getRate('base', 'USDC', 1, fiatCurrency);
+      let rate: Awaited<ReturnType<typeof paycrest.getRate>>;
+      try {
+        rate = await paycrest.getRate('base', 'USDC', 1, fiatCurrency);
+      } catch (err: any) {
+        if (process.env.NODE_ENV !== 'production' && fiatCurrency === 'NGN') {
+          console.warn('[quotes] Paycrest unavailable in dev, using NGN fallback:', err.message);
+          return { sellRate: 1515, buyRate: 1515, sellQuoted: true, buyQuoted: true };
+        }
+        throw err;
+      }
       // Paycrest returns ONLY the legs it currently has a provider for: a
       // currency it can pay out but not collect comes back with `sell` and no
       // `buy` at all. Read the leg this direction actually needs — reading both
@@ -130,8 +139,6 @@ router.get('/', requireAuth, async (req, res) => {
       return amount * srcPrice;
     })();
 
-    // Reject sub-minimum crypto-funded quotes up-front so the widget can warn the
-    // payer before they attempt the order (mirrors the guard in POST /orders).
     const MIN_CRYPTO_PAYMENT_USD = Number(process.env.MIN_CRYPTO_PAYMENT_USD ?? 0.5);
     if (src.kind === 'crypto' && usdEquivalent < MIN_CRYPTO_PAYMENT_USD) {
       return res.status(400).json({
@@ -140,7 +147,8 @@ router.get('/', requireAuth, async (req, res) => {
       });
     }
 
-    const plan = planRoute({ sourceAsset: from, destAsset: to, amount: usdEquivalent });
+    const flow = (String(req.query.flow ?? 'external')) as 'self' | 'external' | 'stellar';
+    const plan = planRoute({ sourceAsset: from, destAsset: to, amount: usdEquivalent, flow });
 
     // Bridge-fee snapshot. ChainRails gives us a live figure; for NEAR Intents
     // we book the slippage buffer as bridge fee so the breakdown reflects the

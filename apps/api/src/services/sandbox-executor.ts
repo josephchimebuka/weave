@@ -105,6 +105,17 @@ export function sandboxDispatch(
         feeUsd: amountIn * 0.0015,
       };
 
+    case 'stellar': {
+      const memo = orderId.replace(/-/g, '').slice(0, 28);
+      return {
+        externalId: memo, amountIn,
+        amountOut: amountIn * 0.998,
+        depositAddress: 'GSANDBOXTREASURY000000000000000000000000000',
+        depositMemo: memo, expiresAt,
+        feeUsd: amountIn * 0.002,
+      };
+    }
+
     default:
       return {
         externalId, amountIn, amountOut: amountIn,

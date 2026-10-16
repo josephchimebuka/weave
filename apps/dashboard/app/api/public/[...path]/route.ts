@@ -42,6 +42,12 @@ async function proxy(request: NextRequest, path: string) {
     if (auth && path.startsWith('sep24/')) headers.set('authorization', auth);
     headers.set('Content-Type', 'application/json');
 
+    // Preserve the real client IP so the backend rate-limiter buckets by the
+    // actual origin instead of collapsing all traffic onto this proxy's IP.
+    const clientIp =
+      request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip');
+    if (clientIp) headers.set('x-forwarded-for', clientIp);
+
     const options: RequestInit = {
       method: request.method,
       headers,

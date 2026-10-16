@@ -97,6 +97,9 @@ async function apiFetch(path: string, publishableKey: string, options?: RequestI
 
     return json ? json.data : null;
   } catch (err: any) {
+    if (err?.name === 'TypeError' && /failed to fetch/i.test(err?.message ?? '')) {
+      throw new Error('Cannot reach Weave API — confirm it is running (http://localhost:4000/health) and CORS allows this page.');
+    }
     if (err?.name === 'AbortError') throw new Error('Request timed out — please check your connection');
     throw err;
   } finally {
@@ -127,15 +130,35 @@ export interface Quote {
   breakdown:     QuoteBreakdown;
 }
 
+export type StellarPublicConfig = {
+  enabled?: boolean;
+  checkoutEnabled?: boolean;
+  network?: string;
+};
+
+/** Public treasury/network flags — no API key required. */
+export async function fetchStellarPublicConfig(): Promise<StellarPublicConfig | null> {
+  try {
+    const base = getApiBase();
+    const res = await fetch(`${base}/stellar/config`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchQuote(
   publishableKey: string,
-  args: { from: string; to: string; amount: number; amountIn?: 'source' | 'dest' },
+  args: { from: string; to: string; amount: number; amountIn?: 'source' | 'dest'; flow?: Flow },
 ): Promise<Quote> {
   const qs = new URLSearchParams({
     from:   args.from,
     to:     args.to,
     amount: String(args.amount),
     ...(args.amountIn ? { amountIn: args.amountIn } : {}),
+    ...(args.flow ? { flow: args.flow } : {}),
   });
   return apiFetch(`/quotes?${qs}`, publishableKey);
 }
@@ -213,7 +236,7 @@ export interface NextAction {
   expiresAt?: string;
 }
 
-export type Flow = 'self' | 'external';
+export type Flow = 'self' | 'external' | 'stellar';
 
 export interface CreateOrderResponse {
   order:      { id: string; status: string; sourceAssetKey: string; destAssetKey: string; sourceAmount: number; destAmount: number | null };

@@ -1,7 +1,20 @@
 'use client';
 
 import { useState } from 'react';
-import { WeaveCheckout } from '@weave-sdk/widget';
+import dynamic from 'next/dynamic';
+
+// The widget pulls in @creit.tech/stellar-wallets-kit, which reads
+// globalThis.localStorage at import time and throws during SSR. Load it
+// client-only so the module is never evaluated on the server.
+const WeaveCheckout = dynamic(
+  () => import('@weave-sdk/widget').then((m) => m.WeaveCheckout),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-[420px] rounded-[28px] bg-cream-soft/40 border border-hair/10 animate-pulse" />
+    ),
+  },
+);
 
 // Point the widget to our internal safe public proxy
 if (typeof window !== 'undefined') {

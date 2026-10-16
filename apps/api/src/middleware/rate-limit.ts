@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { createHash } from 'crypto';
 import { redis } from '../lib/serverless-redis';
 
 interface RateLimitOptions {
@@ -28,7 +29,17 @@ export function rateLimit(options: RateLimitOptions) {
     // client could rotate the header to dodge the rate-limit bucket entirely.
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
 
-    const key = `${keyPrefix}:${role}:${ip}`;
+    // Bucket identity: widget traffic is proxied through the dashboard server, so
+    // every merchant shares one IP. Key widget requests on the API key instead so
+    // each merchant gets an isolated bucket; fall back to IP for anon/other roles.
+    // Hash the key so raw secrets never land in Redis key names.
+    const apiKey = req.headers['x-api-key'];
+    const identity =
+      role === 'widget' && typeof apiKey === 'string' && apiKey
+        ? `key:${createHash('sha256').update(apiKey).digest('hex').slice(0, 16)}`
+        : ip;
+
+    const key = `${keyPrefix}:${role}:${identity}`;
 
     // ── Bypass & Special Handling ───────────────────────────────────────────
 
@@ -51,10 +62,10 @@ export function rateLimit(options: RateLimitOptions) {
         try {
           const pollKey = `${keyPrefix}:poll:${ip}`;
           const count = await redis.incr(pollKey);
-          await redis.pexpire(pollKey, 60 * 1000, 'NX'); // arm/heal TTL, never extend a live window
+          await redis.pexpire(pollKey, 60 * 1000, 'NX');
           if (count > 300) return res.status(429).json({ success: false, error: 'Too many polling requests' });
         } catch (err: any) {
-          console.error('[rate-limit] poll error:', err.message); // fail open
+          console.error('[rate-limit] poll error:', err.message);
         }
         return next();
       }

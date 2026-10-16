@@ -214,21 +214,27 @@ router.post('/', requireAuth, async (req, res) => {
       let sellRate = 1; let buyRate = 1;
       if (fiat) {
         if (req.sandboxMode) {
-          // Sandbox is self-contained — use the fixed rate, never touch live Paycrest.
           sellRate = buyRate = quoteRate = SANDBOX_NGN_RATE;
         } else {
-          const r = await paycrest.getRate('base', 'USDC', 1, fiat);
-          // Only the leg this direction needs — see rateUnavailable(). Never
-          // fall back to 1 for a missing leg: a ₦2,000 onramp would price as
-          // 2,000 USDC.
-          const sell = Number(r?.sell?.rate);
-          const buy  = Number(r?.buy?.rate);
-          if (srcP.kind === 'fiat' && !buy)  closedCorridor = rateUnavailable(fiat, 'deposits');
-          if (dstP.kind === 'fiat' && !sell) closedCorridor = rateUnavailable(fiat, 'payouts');
-          if (closedCorridor) throw new Error(closedCorridor);
-          sellRate = sell || 1;
-          buyRate = buy || 1;
-          quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
+          try {
+            const r = await paycrest.getRate('base', 'USDC', 1, fiat);
+            const sell = Number(r?.sell?.rate);
+            const buy  = Number(r?.buy?.rate);
+            if (srcP.kind === 'fiat' && !buy)  closedCorridor = rateUnavailable(fiat, 'deposits');
+            if (dstP.kind === 'fiat' && !sell) closedCorridor = rateUnavailable(fiat, 'payouts');
+            if (closedCorridor) throw new Error(closedCorridor);
+            sellRate = sell || 1;
+            buyRate = buy || 1;
+            quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
+          } catch (err: any) {
+            if (process.env.NODE_ENV !== 'production' && fiat === 'NGN' && !closedCorridor) {
+              console.warn('[orders] Paycrest unavailable in dev, using NGN fallback:', err.message);
+              sellRate = buyRate = 1515;
+              quoteRate = srcP.kind === 'fiat' ? buyRate : sellRate;
+            } else {
+              throw err;
+            }
+          }
         }
       }
 

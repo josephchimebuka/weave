@@ -69,6 +69,15 @@ pnpm install
 pnpm dev
 ```
 
+### Stellar checkout (Priority 1 — testnet)
+
+See [`docs/stellar-integration.md`](docs/stellar-integration.md) for full setup. Quick start:
+
+1. Set treasury keys in `apps/api/.env` (`WEAVE_STELLAR_PUBLIC_KEY`, `WEAVE_STELLAR_SECRET_KEY`).
+2. Fund testnet account and establish USDC trustline (Circle testnet issuer).
+3. Set `VITE_STELLAR_NETWORK=testnet` in `apps/widget/.env`.
+4. Run `pnpm dev` — checkout shows **Pay with Stellar wallet** alongside bank and crypto options.
+
 ---
 
 ## 🛡️ Security & Architecture
