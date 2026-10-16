@@ -10,6 +10,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { StellarWalletsKit, Networks as KitNetworks } from '@creit.tech/stellar-wallets-kit';
 import { defaultModules } from '@creit.tech/stellar-wallets-kit/modules/utils';
+import { fetchStellarPublicConfig } from '../api/client';
 import { mapStellarPaymentError } from './stellar-errors';
 
 export type StellarNetwork = 'testnet' | 'mainnet';
@@ -62,10 +63,23 @@ export function applyStellarPublicConfig(cfg: {
   }
 }
 
+function stellarNetworkFromBuildEnv(): StellarNetwork {
+  const raw =
+    (import.meta as any).env?.VITE_STELLAR_NETWORK ??
+    (import.meta as any).env?.NEXT_PUBLIC_STELLAR_NETWORK ??
+    'testnet';
+  return String(raw).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
+}
+
 export function getStellarNetwork(): StellarNetwork {
   if (runtimeFromApi?.network) return runtimeFromApi.network;
-  const env = (import.meta as any).env?.VITE_STELLAR_NETWORK ?? 'testnet';
-  return String(env).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
+  return stellarNetworkFromBuildEnv();
+}
+
+/** Load network/issuer from API so hosted www (Next) matches production STELLAR_NETWORK. */
+export async function ensureStellarConfigSynced(): Promise<void> {
+  const cfg = await fetchStellarPublicConfig();
+  if (cfg) applyStellarPublicConfig(cfg);
 }
 
 export function getHorizonUrl(): string {
@@ -97,6 +111,7 @@ function ensureKit(): void {
 /** Opens wallet picker modal and returns connected Stellar address. */
 export async function openStellarWalletModal(): Promise<string> {
   try {
+    await ensureStellarConfigSynced();
     ensureKit();
     const { address } = await StellarWalletsKit.authModal();
     return address;
@@ -111,6 +126,7 @@ export async function sendStellarUsdcPayment(params: {
   memo: string;
 }): Promise<{ txHash: string }> {
   try {
+    await ensureStellarConfigSynced();
     ensureKit();
     const { address } = await StellarWalletsKit.getAddress();
     const server = new Horizon.Server(getHorizonUrl());
