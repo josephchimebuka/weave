@@ -63,6 +63,7 @@ import {
   postOrderEvents,
   fetchStellarPublicConfig,
   type ClientOrderEvent,
+  type StellarPublicConfig,
 } from '../api/client';
 import {
   applyStellarPublicConfig,
@@ -2937,6 +2938,8 @@ export interface WeaveCheckoutProps {
   onError?: (err: Error) => void;
   onClose?: () => void;
   apiBase?: string;
+  /** When set (e.g. demo page server fetch), applied before any wallet/network use. */
+  stellarPublicConfig?: StellarPublicConfig | null;
   disabledMethods?: Record<string, string>;
 }
 
@@ -2980,6 +2983,7 @@ function WeaveCheckoutInner({
   onError,
   onClose,
   apiBase,
+  stellarPublicConfig,
   disabledMethods,
 }: WeaveCheckoutProps) {
   // Route the trusted `apiBase` prop through a module-scoped setter rather than
@@ -2987,6 +2991,9 @@ function WeaveCheckoutInner({
   // global is no longer trusted for absolute URLs.
   if (apiBase) {
     configureApiBase(apiBase);
+  }
+  if (stellarPublicConfig) {
+    applyStellarPublicConfig(stellarPublicConfig);
   }
   const apiKey =
     propApiKey ??
