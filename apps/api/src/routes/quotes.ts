@@ -8,6 +8,8 @@ import { Decimal } from 'decimal.js';
 import { parseAsset } from '../lib/assets';
 import { planRoute } from '../services/router.service';
 import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
+import { fetchCryptoUsdPrice } from '../lib/crypto-usd-price';
+import { estimateFiatFromUsdOfframp } from '../lib/offramp-estimate';
 
 const router = Router();
 
@@ -90,32 +92,10 @@ router.get('/', requireAuth, async (req, res) => {
       return { sellRate: sell || 1, buyRate: buy || 1, sellQuoted: !!sell, buyQuoted: !!buy };
     }
 
-    async function fetchSrcPrice(): Promise<number> {
-      if (src.kind !== 'crypto') return 1;
-      const sym = src.token.toUpperCase();
-      if (sym === 'USDC' || sym === 'USDT') return 1;
-      try {
-        // Try Coinbase public API first for common assets
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        const cb = await fetch(`https://api.coinbase.com/v2/prices/${sym}-USD/spot`, { signal: controller.signal })
-          .then(r => r.json())
-          .finally(() => clearTimeout(timeoutId));
-        if (cb?.data?.amount) return Number(cb.data.amount);
-        // Fallback to Near Intents
-        const token = await nearIntents.resolveToken(from);
-        return token.price > 0 ? token.price : 1;
-      } catch {
-        try {
-          const token = await nearIntents.resolveToken(from);
-          return token.price > 0 ? token.price : 1;
-        } catch {
-          return 1;
-        }
-      }
-    }
-
-    const [{ sellRate, buyRate, sellQuoted, buyQuoted }, srcPrice] = await Promise.all([fetchFiatRate(), fetchSrcPrice()]);
+    const [{ sellRate, buyRate, sellQuoted, buyQuoted }, srcPrice] = await Promise.all([
+      fetchFiatRate(),
+      src.kind === 'crypto' ? fetchCryptoUsdPrice(from) : Promise.resolve(1),
+    ]);
 
     const usdEquivalent = (() => {
       if (src.kind === 'crypto' && dst.kind === 'fiat') {
@@ -159,25 +139,20 @@ router.get('/', requireAuth, async (req, res) => {
     await Promise.all(plan.steps.map(async (step) => {
       if (step.provider === 'chainrails') {
         try {
-          const from = parseAsset(step.fromAsset);
-          const to   = parseAsset(step.toAsset);
-          if (from.kind !== 'crypto' || to.kind !== 'crypto') return;
+          const fromA = parseAsset(step.fromAsset);
+          const toA   = parseAsset(step.toAsset);
+          if (fromA.kind !== 'crypto' || toA.kind !== 'crypto') return;
           const q = await chainRails.getBestQuote({
-            sourceChain:      from.chain,
-            sourceToken:      from.token,
-            destinationChain: to.chain,
-            destinationToken: to.token,
+            sourceChain:      fromA.chain,
+            sourceToken:      fromA.token,
+            destinationChain: toA.chain,
+            destinationToken: toA.token,
             amount:           usdEquivalent,
           });
           bridgeFeeUsd += Number(q.totalFeeFormatted) || 0;
         } catch {
           // Best-effort: missing bridge quote shouldn't block the overall quote.
         }
-      } else if (step.provider === 'nearintents') {
-        bridgeFeeUsd += usdEquivalent * slippageBuffer;
-      } else if (step.provider === 'lifi') {
-        // LI.FI fixed fee on the CCTP route (25 bps) — no slippage on a 1:1 USDC burn/mint.
-        bridgeFeeUsd += usdEquivalent * 0.0025;
       }
     }));
 
@@ -187,6 +162,14 @@ router.get('/', requireAuth, async (req, res) => {
     let appFeeUsd    = usdEquivalent * (APP_FEE_BPS    / 10000);
     let netUsd       = usdEquivalent - senderFeeUsd - appFeeUsd - bridgeFeeUsd;
     let finalSourceAmount = usdEquivalent;
+
+    if (src.kind === 'crypto' && dst.kind === 'fiat' && !isPurePaystack) {
+      const est = estimateFiatFromUsdOfframp(usdEquivalent, sellRate, plan);
+      bridgeFeeUsd = est.bridgeFeeUsd;
+      senderFeeUsd = est.senderFeeUsd;
+      appFeeUsd = est.appFeeUsd;
+      netUsd = est.netUsd;
+    }
 
     if (isPurePaystack) {
       // Use the actual Paystack gross-up logic for accurate display
