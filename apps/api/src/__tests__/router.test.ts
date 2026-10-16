@@ -46,6 +46,18 @@ describe('planRoute', () => {
     expect(plan.steps[0].toAsset).toBe('crypto:BASE:USDC');
   });
 
+  it('USDC(Stellar) → NGN with flow stellar: treasury collect then paycrest offramp', () => {
+    const plan = planRoute({
+      sourceAsset: 'crypto:STELLAR:USDC',
+      destAsset: 'fiat:NGN',
+      amount: 50,
+      flow: 'stellar',
+    });
+    expect(plan.steps.map(s => s.provider)).toEqual(['stellar', 'paycrest']);
+    expect(plan.steps[0].toAsset).toBe('crypto:BASE:USDC');
+    expect(plan.steps[1].toAsset).toBe('fiat:NGN');
+  });
+
   it('XLM(Stellar) → NGN: still nearintents (lifi edge is USDC-only)', () => {
     const plan = planRoute({ sourceAsset: 'crypto:STELLAR:XLM', destAsset: 'fiat:NGN', amount: 500 });
     expect(plan.steps.map(s => s.provider)).toEqual(['nearintents', 'paycrest']);

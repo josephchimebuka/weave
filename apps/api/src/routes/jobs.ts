@@ -530,6 +530,22 @@ router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
   }
 });
 
+// ── Treasury → Paycrest (after Stellar wallet collection) ───────────────────
+
+router.post('/bridge-stellar-treasury', verifyQStash, async (req, res) => {
+  const { orderId } = req.body as { orderId?: string };
+  if (!orderId) return res.status(400).json({ error: 'missing orderId' });
+
+  try {
+    const { bridgeTreasuryUsdcToPaycrest } = await import('../services/stellar-treasury-bridge.service');
+    const result = await bridgeTreasuryUsdcToPaycrest(orderId);
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('[jobs] bridge-stellar-treasury failed:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── Paystack subaccount re-sync (background retry) ──────────────────────────
 // Scheduled by schedulePaystackSyncRetry when a setup-time sync fails, so a
 // transient Paystack blip self-heals before any customer reaches checkout.
