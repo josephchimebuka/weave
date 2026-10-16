@@ -92,12 +92,21 @@ function WovenBackground() {
   )
 }
 
+type StellarPublicConfig = {
+  network?: string;
+  horizonUrl?: string;
+  networkPassphrase?: string;
+  usdcIssuer?: string;
+};
+
 export default function DemoClient({
   apiUrl,
   apiKey: demoApiKey,
+  stellarPublicConfig,
 }: {
   apiUrl: string;
   apiKey: string;
+  stellarPublicConfig?: StellarPublicConfig | null;
 }) {
   const [merchant, setMerchant] = useState({
     name: 'Afriloom Textiles',
@@ -406,6 +415,7 @@ export default function DemoClient({
                   onSuccess={(txn) => console.log('Payment Success:', txn)}
                   apiKey={demoApiKey || undefined}
                   apiBase={apiUrl}
+                  stellarPublicConfig={stellarPublicConfig ?? undefined}
                 />
                 {merchant.amount < 700 && (
                   <div className="absolute inset-0 flex items-center justify-center">
