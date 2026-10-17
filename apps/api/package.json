@@ -8,7 +8,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "stellar:setup-trustline": "ts-node-dev --transpile-only scripts/setup-stellar-treasury.ts"
+    "stellar:setup-trustline": "ts-node-dev --transpile-only scripts/setup-stellar-treasury.ts",
+    "stellar:retry-bridge": "ts-node-dev --transpile-only scripts/retry-stellar-treasury-bridge.ts",
+    "stellar:verify-lifi-route": "ts-node-dev --transpile-only scripts/verify-stellar-lifi-route.ts"
   },
   "dependencies": {
     "@axiomhq/pino": "^1.8.0",

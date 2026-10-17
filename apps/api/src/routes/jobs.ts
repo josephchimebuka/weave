@@ -542,6 +542,12 @@ router.post('/bridge-stellar-treasury', verifyQStash, async (req, res) => {
     return res.json({ success: true, ...result });
   } catch (err: any) {
     console.error('[jobs] bridge-stellar-treasury failed:', err.message);
+    try {
+      const { recordServerEvent } = await import('../services/order-event.service');
+      recordServerEvent(orderId, 'treasury.bridge.failed', 'Treasury bridge failed', {
+        error: String(err?.message ?? err),
+      });
+    } catch { /* ignore */ }
     return res.status(500).json({ success: false, error: err.message });
   }
 });

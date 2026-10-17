@@ -190,6 +190,22 @@ export class LifiService {
     return { xdr: assembled.toXDR(), expirationLedger };
   }
 
+  /**
+   * Soroban USDC balance for a G-address on the Stellar Asset Contract (LI.FI leg).
+   * For a classic G-address, SAC `balance` reflects the trustline (same asset as wallet pay-in).
+   */
+  async stellarSacBalance(params: { address: string; tokenContract: string }): Promise<bigint> {
+    const server = new rpc.Server(SOROBAN_RPC_URL);
+    const account = await server.getAccount(params.address);
+    const contract = new Contract(params.tokenContract);
+    const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.PUBLIC })
+      .addOperation(contract.call('balance', new Address(params.address).toScVal()))
+      .setTimeout(60).build();
+    const sim = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationError(sim) || !sim.result) return 0n;
+    try { return BigInt(scValToNative(sim.result.retval)); } catch { return 0n; }
+  }
+
   /** Current allowance the SAC has recorded for (from → spender), in base units. */
   async stellarAllowance(params: { from: string; spender: string; tokenContract: string }): Promise<bigint> {
     const server = new rpc.Server(SOROBAN_RPC_URL);

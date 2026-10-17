@@ -10,7 +10,7 @@
 import { Keypair, TransactionBuilder, rpc } from '@stellar/stellar-sdk';
 import { prisma } from '../lib/prisma';
 import { getNetworkPassphrase, getTreasuryPublicKey } from './stellar.service';
-import { lifi, lifiAsset, fromBaseUnits, LIFI_STELLAR_CHAIN_ID, type LifiStep } from './lifi.service';
+import { lifi, lifiAsset, LIFI_STELLAR_CHAIN_ID, type LifiStep } from './lifi.service';
 import { syncOrder } from './executor.service';
 import { recordServerEvent } from './order-event.service';
 
@@ -61,6 +61,13 @@ export async function bridgeTreasuryUsdcToPaycrest(orderId: string): Promise<{ b
   if (!stellarStep) throw new Error('No completed Stellar collection step');
   if (!paycrestStep?.depositAddress) throw new Error('No Paycrest deposit address on order');
 
+  if (paycrestStep.status === 'failed') {
+    await prisma.routeStep.update({
+      where: { id: paycrestStep.id },
+      data: { status: 'processing' },
+    });
+  }
+
   const amountIn = Number(stellarStep.amountIn ?? order.sourceAmount);
   if (!Number.isFinite(amountIn) || amountIn <= 0) throw new Error('Invalid Stellar amount for bridge');
 
@@ -69,10 +76,16 @@ export async function bridgeTreasuryUsdcToPaycrest(orderId: string): Promise<{ b
     throw new Error('Paycrest deposit address is not a Base EVM address');
   }
 
+  if (order.status === 'failed') {
+    await prisma.order.update({ where: { id: orderId }, data: { status: 'processing' } });
+  }
+
   recordServerEvent(orderId, 'treasury.bridge.started', 'Bridging treasury USDC to Paycrest', {
     amount: amountIn,
     toAddress,
   });
+
+  const fromMeta = lifiAsset('crypto:STELLAR:USDC');
 
   const route = await lifi.getRoute({
     fromAssetKey: 'crypto:STELLAR:USDC',
@@ -82,11 +95,18 @@ export async function bridgeTreasuryUsdcToPaycrest(orderId: string): Promise<{ b
     toAddress,
   });
   const lstep: LifiStep = route.steps[0];
-  const fromMeta = lifiAsset('crypto:STELLAR:USDC');
+  const need = BigInt(lstep.action.fromAmount);
+  const sacBal = await lifi.stellarSacBalance({ address: treasury, tokenContract: fromMeta.token }).catch(() => 0n);
+  if (sacBal < need) {
+    throw new Error(
+      `Treasury USDC balance (${sacBal}) is below LI.FI bridge amount (${need}). ` +
+        'Confirm the Stellar payment credited the treasury trustline.',
+    );
+  }
+
   const approvalAddress = lstep.estimate.approvalAddress ?? '';
 
   if (approvalAddress && !lstep.estimate.skipApproval) {
-    const need = BigInt(lstep.action.fromAmount);
     const have = await lifi.stellarAllowance({ from: treasury, spender: approvalAddress, tokenContract: fromMeta.token }).catch(() => 0n);
     if (have < need) {
       const { xdr } = await lifi.buildStellarApproveXdr({
@@ -139,17 +159,31 @@ export async function bridgeTreasuryUsdcToPaycrest(orderId: string): Promise<{ b
 }
 
 export async function scheduleTreasuryBridge(orderId: string): Promise<void> {
-  if (!isTreasuryBridgeEnabled()) return;
+  if (!isTreasuryBridgeEnabled()) {
+    recordServerEvent(orderId, 'treasury.bridge.skipped', 'Treasury bridge disabled (no WEAVE_STELLAR_SECRET_KEY)', {});
+    return;
+  }
 
   const { qstash } = await import('../lib/qstash');
   const apiBase = process.env.API_BASE;
   if (!apiBase) {
     console.warn('[stellar-bridge] API_BASE not set — cannot schedule treasury bridge');
+    recordServerEvent(orderId, 'treasury.bridge.skipped', 'API_BASE not set — bridge job was not scheduled', {});
     return;
   }
-  await qstash.publishJSON({
-    url: `${apiBase}/jobs/bridge-stellar-treasury`,
-    body: { orderId },
-    delay: 5,
-  });
+  try {
+    await qstash.publishJSON({
+      url: `${apiBase}/jobs/bridge-stellar-treasury`,
+      body: { orderId },
+      delay: 5,
+    });
+    recordServerEvent(orderId, 'treasury.bridge.scheduled', 'QStash bridge job scheduled', {
+      url: `${apiBase}/jobs/bridge-stellar-treasury`,
+    });
+  } catch (err: any) {
+    recordServerEvent(orderId, 'treasury.bridge.schedule_failed', 'Failed to enqueue QStash bridge job', {
+      error: String(err?.message ?? err),
+    });
+    throw err;
+  }
 }
