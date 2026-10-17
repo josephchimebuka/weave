@@ -1663,7 +1663,7 @@ export async function markStepDone(params: {
     step.sequence === 0
   ) {
     const next = fresh.find((s: any) => s.sequence === step.sequence + 1);
-    if (next?.provider === 'paycrest' && !['done', 'failed'].includes(next.status)) {
+    if (next?.provider === 'paycrest' && next.status !== 'done') {
       import('./stellar-treasury-bridge.service')
         .then(m => m.scheduleTreasuryBridge(step.orderId))
         .catch(err => console.warn(`[stellar] treasury bridge schedule failed for ${step.orderId}:`, err.message));
