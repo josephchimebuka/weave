@@ -7,6 +7,7 @@ import { CashoutProgressTimeline } from '../CashoutProgressTimeline';
 import {
   configureCashoutStellarFromApi,
   connectCashoutStellarWallet,
+  getCashoutStellarNetwork,
   isStellarUsdcAsset,
   sendCashoutStellarUsdc,
 } from '../../lib/cashout-stellar-pay';
@@ -38,10 +39,6 @@ type QuoteSnap = {
 const PROXY = '/api/public';
 const COMMON = ['crypto:BASE:USDC', 'crypto:BASE:ETH', 'crypto:ETHEREUM:USDC', 'crypto:ETHEREUM:USDT'];
 
-function stellarNetworkFromEnv(): 'testnet' | 'mainnet' {
-  const env = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
-  return String(env).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
-}
 // Nigerians type the short name — match "gtb", "uba", "fbn", "fcmb"… to the full
 // institution name. Keyed by a substring of the official name.
 const BANK_ALIASES: Record<string, string> = {
@@ -120,6 +117,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   const [deposit, setDeposit] = useState<{ address: string; memo: string | null; amount: number; token: string; chain: string } | null>(null);
   const [payoutAmount, setPayoutAmount] = useState<number | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [stellarNetwork, setStellarNetwork] = useState<'testnet' | 'mainnet'>(getCashoutStellarNetwork());
 
   const key = link.publishableKey;
   const accountRef = useRef<HTMLInputElement>(null);
@@ -137,9 +135,9 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
     return buildCryptoOfframpProgress(liveOrder, {
       merchantName: accountName || t.name || link.merchantName,
       currency: link.payoutCurrency,
-      stellarNetwork: stellarNetworkFromEnv(),
+      stellarNetwork,
     });
-  }, [liveOrder, accountName, t.name, link.merchantName, link.payoutCurrency]);
+  }, [liveOrder, accountName, t.name, link.merchantName, link.payoutCurrency, stellarNetwork]);
 
   const nearStatus = String(liveOrder?.nearStatus ?? '').toLowerCase();
 
@@ -154,7 +152,10 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   useEffect(() => {
     fetch(`${PROXY}/stellar/config`)
       .then(r => r.ok ? r.json() : null)
-      .then(j => configureCashoutStellarFromApi(j?.data ?? null))
+      .then(j => {
+        configureCashoutStellarFromApi(j?.data ?? null);
+        setStellarNetwork(getCashoutStellarNetwork());
+      })
       .catch(() => {});
   }, []);
 
