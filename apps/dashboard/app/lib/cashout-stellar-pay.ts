@@ -29,36 +29,104 @@ const USDC_ISSUERS: Record<StellarNetwork, string> = {
 };
 
 let kitInitialized = false;
-let issuerOverride: string | null = null;
+let kitNetwork: StellarNetwork | null = null;
 
-export function configureCashoutStellarFromApi(cfg: { network?: string; usdcIssuer?: string } | null) {
-  if (cfg?.usdcIssuer) issuerOverride = cfg.usdcIssuer;
+/** Overrides build-time env when set from GET /stellar/config (must match API). */
+let runtimeFromApi: {
+  network?: StellarNetwork;
+  horizonUrl?: string;
+  usdcIssuer?: string;
+  networkPassphrase?: string;
+} | null = null;
+
+let configSyncPromise: Promise<void> | null = null;
+
+export function configureCashoutStellarFromApi(cfg: {
+  network?: string;
+  horizonUrl?: string;
+  usdcIssuer?: string;
+  networkPassphrase?: string;
+} | null) {
+  if (!cfg) return;
+  const n = String(cfg.network ?? '').toLowerCase();
+  const network: StellarNetwork | undefined =
+    n === 'mainnet' ? 'mainnet' : n === 'testnet' ? 'testnet' : undefined;
+  runtimeFromApi = {
+    network,
+    horizonUrl: cfg.horizonUrl?.trim() || undefined,
+    usdcIssuer: cfg.usdcIssuer?.trim() || undefined,
+    networkPassphrase: cfg.networkPassphrase?.trim() || undefined,
+  };
+  const active = getCashoutStellarNetwork();
+  if (kitInitialized && kitNetwork !== active) {
+    kitInitialized = false;
+    kitNetwork = null;
+  }
 }
 
-function getNetwork(): StellarNetwork {
+function stellarNetworkFromBuildEnv(): StellarNetwork {
   const env = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
   return String(env).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
 }
 
+export function getCashoutStellarNetwork(): StellarNetwork {
+  if (runtimeFromApi?.network) return runtimeFromApi.network;
+  return stellarNetworkFromBuildEnv();
+}
+
+function getHorizonUrl(): string {
+  if (runtimeFromApi?.horizonUrl) return runtimeFromApi.horizonUrl;
+  return process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL ?? HORIZON_URLS[getCashoutStellarNetwork()];
+}
+
+function getUsdcIssuer(): string {
+  if (runtimeFromApi?.usdcIssuer) return runtimeFromApi.usdcIssuer;
+  return USDC_ISSUERS[getCashoutStellarNetwork()];
+}
+
+function getNetworkPassphrase(): string {
+  if (runtimeFromApi?.networkPassphrase) return runtimeFromApi.networkPassphrase;
+  return NETWORK_PASSPHRASES[getCashoutStellarNetwork()];
+}
+
+/** Load network from API before wallet connect/sign (matches hosted checkout widget). */
+export async function ensureCashoutStellarConfigSynced(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  if (!configSyncPromise) {
+    configSyncPromise = fetch('/api/public/stellar/config')
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        configureCashoutStellarFromApi(j?.data ?? null);
+      })
+      .catch(() => {});
+  }
+  await configSyncPromise;
+}
+
 function ensureKit(): void {
-  if (kitInitialized) return;
-  const network = getNetwork();
+  const network = getCashoutStellarNetwork();
+  if (kitInitialized && kitNetwork === network) return;
   StellarWalletsKit.init({
     modules: defaultModules(),
     network: network === 'mainnet' ? KitNetworks.PUBLIC : KitNetworks.TESTNET,
   });
   kitInitialized = true;
+  kitNetwork = network;
 }
 
 function friendlyError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e ?? 'Payment failed');
   if (/user rejected|cancel/i.test(msg)) return 'Payment cancelled in wallet.';
   if (/no trustline|op_no_trust/i.test(msg)) return 'Add a USDC trustline in your wallet, then try again.';
+  if (/test net|testnet/i.test(msg) && getCashoutStellarNetwork() === 'mainnet') {
+    return 'Wallet network mismatch — refresh the page and try again. Freighter should be on Mainnet.';
+  }
   return msg;
 }
 
 export async function connectCashoutStellarWallet(): Promise<string> {
   try {
+    await ensureCashoutStellarConfigSynced();
     ensureKit();
     const { address } = await StellarWalletsKit.authModal();
     return address;
@@ -73,13 +141,14 @@ export async function sendCashoutStellarUsdc(params: {
   memo: string;
 }): Promise<{ txHash: string }> {
   try {
+    await ensureCashoutStellarConfigSynced();
     ensureKit();
     const { address } = await StellarWalletsKit.getAddress();
-    const network = getNetwork();
-    const server = new Horizon.Server(process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL ?? HORIZON_URLS[network]);
+    const network = getCashoutStellarNetwork();
+    const server = new Horizon.Server(getHorizonUrl());
     const sourceAccount = await server.loadAccount(address);
-    const usdc = new Asset('USDC', issuerOverride ?? USDC_ISSUERS[network]);
-    const passphrase = NETWORK_PASSPHRASES[network];
+    const usdc = new Asset('USDC', getUsdcIssuer());
+    const passphrase = getNetworkPassphrase();
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: '100000',
