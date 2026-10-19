@@ -7,6 +7,7 @@ import { CashoutProgressTimeline } from '../CashoutProgressTimeline';
 import {
   configureCashoutStellarFromApi,
   connectCashoutStellarWallet,
+  getCashoutStellarNetwork,
   isStellarUsdcAsset,
   sendCashoutStellarUsdc,
 } from '../../lib/cashout-stellar-pay';
@@ -38,10 +39,26 @@ type QuoteSnap = {
 const PROXY = '/api/public';
 const COMMON = ['crypto:BASE:USDC', 'crypto:BASE:ETH', 'crypto:ETHEREUM:USDC', 'crypto:ETHEREUM:USDT'];
 
-function stellarNetworkFromEnv(): 'testnet' | 'mainnet' {
-  const env = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? 'testnet';
-  return String(env).toLowerCase() === 'mainnet' ? 'mainnet' : 'testnet';
+type CashoutSessionSnap = {
+  orderId: string;
+  asset: string;
+  deposit: { address: string; memo: string | null; amount: number; token: string; chain: string };
+  lockedPayout: number | null;
+  accountName: string;
+};
+
+function cashoutSessionKey(linkId: string) {
+  return `weave-cashout:${linkId}`;
 }
+
+function clearCashoutSession(linkId: string) {
+  try { sessionStorage.removeItem(cashoutSessionKey(linkId)); } catch { /* ignore */ }
+}
+
+function saveCashoutSession(linkId: string, snap: CashoutSessionSnap) {
+  try { sessionStorage.setItem(cashoutSessionKey(linkId), JSON.stringify(snap)); } catch { /* ignore */ }
+}
+
 // Nigerians type the short name — match "gtb", "uba", "fbn", "fcmb"… to the full
 // institution name. Keyed by a substring of the official name.
 const BANK_ALIASES: Record<string, string> = {
@@ -120,6 +137,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
   const [deposit, setDeposit] = useState<{ address: string; memo: string | null; amount: number; token: string; chain: string } | null>(null);
   const [payoutAmount, setPayoutAmount] = useState<number | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [stellarNetwork, setStellarNetwork] = useState<'testnet' | 'mainnet'>(getCashoutStellarNetwork());
 
   const key = link.publishableKey;
   const accountRef = useRef<HTMLInputElement>(null);
@@ -137,9 +155,9 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
     return buildCryptoOfframpProgress(liveOrder, {
       merchantName: accountName || t.name || link.merchantName,
       currency: link.payoutCurrency,
-      stellarNetwork: stellarNetworkFromEnv(),
+      stellarNetwork,
     });
-  }, [liveOrder, accountName, t.name, link.merchantName, link.payoutCurrency]);
+  }, [liveOrder, accountName, t.name, link.merchantName, link.payoutCurrency, stellarNetwork]);
 
   const nearStatus = String(liveOrder?.nearStatus ?? '').toLowerCase();
 
@@ -151,10 +169,44 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
 
   useEffect(() => { ensureFontLoaded(t.fontKey); }, [t.fontKey]);
 
+  // Resume in-progress cash-out after refresh / sleep (same browser tab).
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const raw = sessionStorage.getItem(cashoutSessionKey(link.id));
+      if (!raw) return;
+      const snap = JSON.parse(raw) as CashoutSessionSnap;
+      if (!snap?.orderId || !snap.deposit) return;
+      fetch(`${PROXY}/orders/${snap.orderId}`, { headers: { 'x-api-key': key } })
+        .then(r => r.json())
+        .then(j => {
+          if (cancelled || !j?.data) return;
+          const s = String(j.data.status ?? '').toLowerCase();
+          if (['completed', 'failed', 'expired', 'refunded'].includes(s)) {
+            clearCashoutSession(link.id);
+            return;
+          }
+          setAsset(snap.asset);
+          setDeposit(snap.deposit);
+          setOrder(j.data);
+          setLiveOrder(j.data);
+          setLockedPayout(snap.lockedPayout);
+          setPayoutAmount(j.data.destAmount != null ? Number(j.data.destAmount) : snap.lockedPayout);
+          if (snap.accountName) setAccountName(snap.accountName);
+          setMode('send');
+        })
+        .catch(() => {});
+    } catch { /* ignore */ }
+    return () => { cancelled = true; };
+  }, [link.id, key]);
+
   useEffect(() => {
     fetch(`${PROXY}/stellar/config`)
       .then(r => r.ok ? r.json() : null)
-      .then(j => configureCashoutStellarFromApi(j?.data ?? null))
+      .then(j => {
+        configureCashoutStellarFromApi(j?.data ?? null);
+        setStellarNetwork(getCashoutStellarNetwork());
+      })
       .catch(() => {});
   }, []);
 
@@ -249,9 +301,17 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
       const locked = j.data.order?.destAmount != null ? Number(j.data.order.destAmount) : (estimate ?? null);
       setLockedPayout(locked);
       setPayoutAmount(locked);
-      setDeposit({ address: na.depositAddress, memo: na.depositMemo ?? null, amount: Number(na.amount ?? amount), token: na.token ?? tokenLabel, chain: na.chain ?? networkLabel });
+      const dep = { address: na.depositAddress, memo: na.depositMemo ?? null, amount: Number(na.amount ?? amount), token: na.token ?? tokenLabel, chain: na.chain ?? networkLabel };
+      setDeposit(dep);
       setWalletErr(null);
       setMode('send');
+      saveCashoutSession(link.id, {
+        orderId: j.data.order.id,
+        asset,
+        deposit: dep,
+        lockedPayout: locked,
+        accountName,
+      });
     } catch (e: any) { setError(e.message ?? 'Something went wrong.'); }
     finally { setSubmitting(false); }
   }
@@ -274,8 +334,8 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
         if (j?.data) setLiveOrder(j.data);
         const s = String(j?.data?.status ?? '').toLowerCase();
         if (j?.data?.destAmount != null) setPayoutAmount(Number(j.data.destAmount));
-        if (s === 'completed') { stopped = true; setMode('done'); return; }
-        if (['failed', 'expired', 'refunded'].includes(s)) { stopped = true; setError('Your cash-out could not be completed.'); setMode('error'); return; }
+        if (s === 'completed') { stopped = true; clearCashoutSession(link.id); setMode('done'); return; }
+        if (['failed', 'expired', 'refunded'].includes(s)) { stopped = true; clearCashoutSession(link.id); setError('Your cash-out could not be completed.'); setMode('error'); return; }
       } catch {
         failCount++;
       }
@@ -310,6 +370,7 @@ export default function CashoutClient({ link }: { link: PayoutLink }) {
 
   // Reset back to a fresh cash-out (keeps the chosen token — they'll likely repeat it).
   function reset() {
+    clearCashoutSession(link.id);
     setAmount(fixedAmount != null ? String(fixedAmount) : ''); setEstimate(null); setQuoteSnap(null); setLockedPayout(null);
     setBankCode(''); setBankQuery(''); setBankOpen(false);
     setAccountNumber(''); setAccountName(''); setResolveError(null);
