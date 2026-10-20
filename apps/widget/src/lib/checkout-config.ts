@@ -22,8 +22,8 @@ export function stellarPayMethodLabel(mode: PaymentCopyMode): { title: string; s
     };
   }
   return {
-    title: 'Pay with stablecoin wallet',
-    sub: 'Sign in your wallet · USDC · settles in seconds',
+    title: 'Pay with Stellar wallet',
+    sub: 'USDC from Freighter, xBull & more',
   };
 }
 
