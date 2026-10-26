@@ -202,8 +202,11 @@ function StateBalances() {
 
 function KVRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ padding: '10px 13px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
-      <span style={{ color: W.mute }}>{label}</span>
+    <div style={{
+      padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      fontSize: 13, lineHeight: 1.45, gap: 12,
+    }}>
+      <span style={{ color: W.mute, flexShrink: 0 }}>{label}</span>
       {children}
     </div>
   )
@@ -212,21 +215,21 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
 function StateSuccess() {
   return (
     <Chrome>
-      <div style={{ padding: '24px 20px 12px', display: 'flex', flexDirection: 'column', gap: 16, minHeight: 320 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, paddingTop: 6 }}>
+      <div style={{ padding: '24px 20px 14px', display: 'flex', flexDirection: 'column', gap: 18, minHeight: 320 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingTop: 6 }}>
           <div style={{
             width: 56, height: 56, borderRadius: 28, background: W.accent,
             display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 28,
           }}>✓</div>
-          <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>Payment complete</div>
-          <div style={{ fontSize: 12, color: W.mute, textAlign: 'center', maxWidth: 260, lineHeight: 1.5 }}>
-            ₦150,000 is on its way to <span style={{ color: W.ink }}>Afriloom Textiles</span>.
+          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: -0.35, lineHeight: 1.25 }}>Payment complete</div>
+          <div style={{ fontSize: 13, color: W.mute, textAlign: 'center', maxWidth: 280, lineHeight: 1.65 }}>
+            ₦150,000 is on its way to <span style={{ color: W.ink, fontWeight: 500 }}>Afriloom Textiles</span>.
           </div>
         </div>
         <div style={{ background: W.panel, border: `1px solid ${W.hair}`, borderRadius: 12, overflow: 'hidden' }}>
-          <KVRow label="Payment"><span style={{ fontWeight: 500 }}>Stellar wallet · 93.65 USDC</span></KVRow>
+          <KVRow label="Payment"><span style={{ fontWeight: 600, color: W.ink, textAlign: 'right' }}>Stellar wallet · 93.65 USDC</span></KVRow>
           <div style={{ height: 1, background: W.hair }}/>
-          <KVRow label="Settled to"><span style={{ fontWeight: 500 }}>GTBank ••7890</span></KVRow>
+          <KVRow label="Settled to"><span style={{ fontWeight: 600, color: W.ink, textAlign: 'right' }}>GTBank ••7890</span></KVRow>
           <div style={{ height: 1, background: W.hair }}/>
           <KVRow label="Completed in">
             <span style={{
