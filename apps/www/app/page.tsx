@@ -107,7 +107,7 @@ export default function Home() {
           Checkout &amp; payments for merchants
         </p>
         <h1 style={{
-          fontSize: 'clamp(36px, 9vw, 60px)', fontWeight: 500, letterSpacing: -1.2, lineHeight: 1.06,
+          fontSize: 'clamp(36px, 9vw, 60px)', fontWeight: 600, letterSpacing: -1.2, lineHeight: 1.06,
           textAlign: 'center', margin: 0, maxWidth: 860, color: '#0B0F0E',
           fontFamily: 'Georgia, "Times New Roman", serif',
         }} className="px-4">
@@ -118,12 +118,11 @@ export default function Home() {
           your customers pay.
         </h1>
         <p style={{
-          fontSize: 'clamp(14px, 4.5vw, 16px)', color: '#3A4240', textAlign: 'center', maxWidth: 580,
-          lineHeight: 1.55, marginTop: 18, marginBottom: 0,
+          fontSize: 'clamp(14px, 4.5vw, 16px)', color: '#3A4240', textAlign: 'center', maxWidth: 560,
+          lineHeight: 1.5, marginTop: 18, marginBottom: 0,
         }} className="px-4">
-          Drop in checkout on your site, send payment links, or cash-out pages.
-          Customers pay by bank, card, or wallet — you get paid in Naira or stablecoins,
-          with one flow and one reconciliation.
+          Customers pay with their bank or any wallet. You settle in stable
+          dollars or local currency — without seeing the seam.
         </p>
         <div style={{ display: 'flex', gap: 10, marginTop: 24 }} className="flex-col sm:flex-row w-full sm:w-auto px-6 sm:px-0">
           <button 
