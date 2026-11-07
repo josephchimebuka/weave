@@ -1,0 +1,38 @@
+---
+title: NEAR Intents
+description: How Weave uses NEAR Intents for cross-chain pay-ins — deposit addresses, routing, and settlement with fiat and Stellar rails.
+---
+
+Weave is a **multi-rail orchestrator**. Customers can pay with **Stellar USDC** (native wallet checkout) or with **crypto on many other chains**. For the latter, Weave uses **[NEAR Intents](https://docs.near-intents.org/)** to execute the cross-chain leg before local settlement (for example NGN via Paycrest).
+
+<Callout type="info">
+**Two rails, one checkout.** Stellar = `flow: "stellar"` and Circle USDC on Stellar. Cross-chain deposit checkout = `flow: "external"` with a **NEAR Intents** route step. Merchants still get one order id and one webhook.
+</Callout>
+
+## How it works
+
+1. You create an order via the [widget](/widget-playground), [API](/api-reference), or [checkout session](/checkout-sessions).
+2. Weave returns a **deposit address** (and **memo** when required for that chain).
+3. The customer sends the quoted crypto amount from their wallet.
+4. NEAR Intents completes the swap; Weave advances the order and fires **`order.completed`** when settlement finishes ([webhooks](/webhooks)).
+
+## API usage
+
+Pass `flow: "external"` on `POST /orders` (default for many crypto→fiat routes). See [API reference](/api-reference) for the full body shape.
+
+```bash
+curl "https://api.paywithweave.com/api/v1/quotes?from=crypto:ETHEREUM:USDC&to=fiat:NGN&amount=50" \
+  -H "x-api-key: pk_live_..."
+```
+
+The quote `route.steps` may include a provider step for **nearintents** before fiat settlement.
+
+## Sandbox
+
+Use `pk_test_…` keys. Orders complete instantly with no real provider calls; same response shapes as production. See [Introduction](/) · Sandbox mode.
+
+## Further reading
+
+- Live product: [paywithweave.com](https://paywithweave.com)
+- [NEAR HACKATHON](https://nearhackathon.com) — Weave documents judge steps in the GitHub `README`
+- Repository deep dive: `docs/near-intents-in-weave.md` in the monorepo
