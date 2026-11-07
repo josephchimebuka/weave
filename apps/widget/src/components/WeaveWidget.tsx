@@ -795,10 +795,8 @@ function ScreenConnect({ onPick, merchant, currencies, fmtCur, submitting, disab
             <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fff', border: `1px solid ${WEAVE.hair}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden' }}>
               {picked === 'stellar' ? (
                 <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${WEAVE.hair}`, borderTopColor: WEAVE.accent, animation: 'wspin 0.8s linear infinite' }} />
-              ) : copyMode === 'dev' ? (
-                <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/stellar/info/logo.png" alt="" style={{ width: 24, height: 24, borderRadius: 6 }} />
               ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden><circle cx="12" cy="12" r="9" stroke={WEAVE.ink} strokeWidth="1.7" /><path d="M8 12h8M12 8v8" stroke={WEAVE.accent} strokeWidth="1.7" strokeLinecap="round" /></svg>
+                <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/stellar/info/logo.png" alt="" style={{ width: 22, height: 22 }} />
               )}
             </div>
             <Stack gap={2} style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>

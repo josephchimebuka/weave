@@ -57,6 +57,22 @@ function Chrome({ children }: { children: React.ReactNode }) {
   )
 }
 
+const STELLAR_LOGO = 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/stellar/info/logo.png'
+
+function StellarMark({ size, light = false }: { size: number; light?: boolean }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: size / 2, background: light ? '#fff' : '#000',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    }}>
+      <img src={STELLAR_LOGO} alt="" style={{
+        width: size * 0.78, height: size * 0.78,
+        ...(light ? {} : { filter: 'invert(1)', mixBlendMode: 'screen' as const }),
+      }} />
+    </div>
+  )
+}
+
 function StatePicker() {
   return (
     <Chrome>
@@ -83,18 +99,25 @@ function StatePicker() {
                   <path d="M3 21H21M5 21V10M9 21V10M15 21V10M19 21V10M2 10L12 3L22 10H2Z" stroke={W.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               ),
-              label: 'Pay by bank',
-              sub: 'Transfer, card & USSD — familiar checkout',
+              label: 'Pay with Naira',
+              sub: 'Card, bank transfer & USSD',
             },
             {
               icon: (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                  <rect x="3" y="6" width="18" height="13" rx="2" stroke={W.ink} strokeWidth="1.7"/>
-                  <path d="M3 10H21" stroke={W.ink} strokeWidth="1.7"/>
+                  <rect x="3" y="3" width="7" height="7" rx="1.2" stroke={W.ink} strokeWidth="1.7"/>
+                  <rect x="14" y="3" width="7" height="7" rx="1.2" stroke={W.ink} strokeWidth="1.7"/>
+                  <rect x="3" y="14" width="7" height="7" rx="1.2" stroke={W.ink} strokeWidth="1.7"/>
+                  <path d="M14 14h3.5v3.5M21 14v7h-7v-3.5" stroke={W.ink} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               ),
-              label: 'Pay from wallet',
-              sub: 'Stablecoins & global wallets — same checkout',
+              label: 'Pay with crypto',
+              sub: 'Send from any chain, token or exchange',
+            },
+            {
+              icon: <StellarMark size={22} light />,
+              label: 'Pay with Stellar wallet',
+              sub: 'USDC from Freighter, xBull & more',
             },
           ].map((item, i) => (
             <div key={i} style={{
@@ -123,9 +146,9 @@ function StatePicker() {
 
 function StateBalances() {
   const balances = [
-    { token: 'USDC', chain: 'Optimism', amount: '312.40', usd: '312.40', tint: '#FF0420', icon: '$', sel: true },
+    { token: 'USDC', chain: 'Stellar',  amount: '250.00', usd: '250.00', tint: '#000000', icon: '$', stellar: true, sel: true },
+    { token: 'USDC', chain: 'Optimism', amount: '312.40', usd: '312.40', tint: '#FF0420', icon: '$' },
     { token: 'ETH',  chain: 'Base',     amount: '0.0421', usd: '142.18', tint: '#1C4FE0', icon: 'Ξ' },
-    { token: 'USDT', chain: 'Polygon',  amount: '85.00',  usd: '85.00',  tint: '#8247E5', icon: '$' },
   ]
   return (
     <Chrome>
@@ -145,10 +168,14 @@ function StateBalances() {
               display: 'flex', alignItems: 'center', gap: 12,
               cursor: 'pointer',
             }} className="hover:border-forest/30 transition-all active:scale-[0.98]">
-              <div style={{
-                width: 32, height: 32, borderRadius: 16, background: b.tint, color: '#fff',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13,
-              }}>{b.icon}</div>
+              {b.stellar ? (
+                <StellarMark size={32} />
+              ) : (
+                <div style={{
+                  width: 32, height: 32, borderRadius: 16, background: b.tint, color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13,
+                }}>{b.icon}</div>
+              )}
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{b.amount} {b.token}</div>
                 <div style={{ fontSize: 11, color: W.mute }}>on {b.chain} · ≈ ${b.usd}</div>
@@ -175,8 +202,11 @@ function StateBalances() {
 
 function KVRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ padding: '10px 13px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
-      <span style={{ color: W.mute }}>{label}</span>
+    <div style={{
+      padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      fontSize: 13, lineHeight: 1.45, gap: 12,
+    }}>
+      <span style={{ color: W.mute, flexShrink: 0 }}>{label}</span>
       {children}
     </div>
   )
@@ -185,21 +215,21 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
 function StateSuccess() {
   return (
     <Chrome>
-      <div style={{ padding: '24px 20px 12px', display: 'flex', flexDirection: 'column', gap: 16, minHeight: 320 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, paddingTop: 6 }}>
+      <div style={{ padding: '24px 20px 14px', display: 'flex', flexDirection: 'column', gap: 18, minHeight: 320 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingTop: 6 }}>
           <div style={{
             width: 56, height: 56, borderRadius: 28, background: W.accent,
             display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 28,
           }}>✓</div>
-          <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: -0.3 }}>Payment complete</div>
-          <div style={{ fontSize: 12, color: W.mute, textAlign: 'center', maxWidth: 260, lineHeight: 1.5 }}>
-            ₦150,000 is on its way to <span style={{ color: W.ink }}>Afriloom Textiles</span>.
+          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: -0.35, lineHeight: 1.25 }}>Payment complete</div>
+          <div style={{ fontSize: 13, color: W.mute, textAlign: 'center', maxWidth: 280, lineHeight: 1.65 }}>
+            ₦150,000 is on its way to <span style={{ color: W.ink, fontWeight: 500 }}>Afriloom Textiles</span>.
           </div>
         </div>
         <div style={{ background: W.panel, border: `1px solid ${W.hair}`, borderRadius: 12, overflow: 'hidden' }}>
-          <KVRow label="Payment"><span style={{ fontWeight: 500 }}>Wallet · 93.65 USDC</span></KVRow>
+          <KVRow label="Payment"><span style={{ fontWeight: 600, color: W.ink, textAlign: 'right' }}>Stellar wallet · 93.65 USDC</span></KVRow>
           <div style={{ height: 1, background: W.hair }}/>
-          <KVRow label="Settled to"><span style={{ fontWeight: 500 }}>GTBank ••7890</span></KVRow>
+          <KVRow label="Settled to"><span style={{ fontWeight: 600, color: W.ink, textAlign: 'right' }}>GTBank ••7890</span></KVRow>
           <div style={{ height: 1, background: W.hair }}/>
           <KVRow label="Completed in">
             <span style={{
