@@ -4,6 +4,8 @@
 
 Weave is a high-performance payment orchestration platform designed to bridge the gap between traditional fiat rails and the decentralized economy. It allows merchants to accept payments from **any chain, any token, or any bank account** and settle directly into their preferred currency — whether that's USDC on Base or Naira in a local bank.
 
+**Live product:** [paywithweave.com](https://paywithweave.com) · **Docs:** [docs.paywithweave.com](https://docs.paywithweave.com) · **Demo:** [paywithweave.com/demo](https://paywithweave.com/demo)
+
 ---
 
 ## 🚀 Key Value Proposition
@@ -93,6 +95,45 @@ Weave uses a **Non-Custodial Orchestration** model. For cross-chain and fiat-to-
 
 - **[Deployment Guide](DEPLOYMENT.md)**: How to go live on production infrastructure.
 - **[Developer Integration Guide](DEVELOPER_GUIDE.md)**: How to integrate the widget into your application.
+- **[NEAR Intents in Weave](docs/near-intents-in-weave.md)**: Cross-chain checkout via NEAR Intents (`flow: "external"`).
+- **[Stellar integration](docs/stellar-integration.md)**: Stellar USDC wallet checkout (`flow: "stellar"`).
+- **[HACKATHON.md](HACKATHON.md)**: Pointers for [NEAR HACKATHON](https://nearhackathon.com) judges.
+
+---
+
+## NEAR HACKATHON (Nov 2026)
+
+Built for **[NEAR HACKATHON: Build Beyond Boundaries](https://nearhackathon.com)**. Weave is **production software** (merchant dashboard, API, widget, payment links, cash-out). **NEAR Intents** powers cross-chain pay-ins; **Stellar** powers native USDC wallet checkout — both on the same orchestration layer.
+
+### Baseline vs hackathon window
+
+| | Scope |
+| --- | --- |
+| **Baseline (before Nov 2026)** | NEAR Intents client, routing (`nearintents` steps), executor polling, widget/API `flow: "external"`, Stellar treasury checkout, Paycrest fiat settlement. |
+| **Hackathon (Nov 2026)** | Judge-ready README, [HACKATHON.md](HACKATHON.md), [docs/near-intents-in-weave.md](docs/near-intents-in-weave.md), public docs page `/near-intents`, MIT [LICENSE](LICENSE). |
+
+### NEAR technologies used
+
+- **[NEAR Intents](https://docs.near-intents.org/)** — 1Click quotes, deposit addresses, status polling (`apps/api/src/services/nearintents.service.ts`).
+- **Stellar (parallel rail)** — Circle USDC, Horizon, treasury — see [`docs/stellar-integration.md`](docs/stellar-integration.md) (SCF / Stellar track; not superseded by NEAR).
+
+### Judge steps (do X → see Y)
+
+Prerequisites: `pk_test_…` publishable key from the Weave dashboard (Developer → API keys). Base URL: `https://api.paywithweave.com/api/v1` (or local API if self-hosting).
+
+1. **Quote** — Run `GET /quotes?from=crypto:BASE:USDC&to=fiat:NGN&amount=50` with header `x-api-key: pk_test_…`.  
+   **See:** `success: true` and a `route.steps` entry that includes cross-chain providers (e.g. nearintents).
+
+2. **Create order** — `POST /orders` with `flow: "external"`, crypto source, and `refundAddress` (see [docs/near-intents-in-weave.md](docs/near-intents-in-weave.md)).  
+   **See:** `depositInstruction` or `nextAction` with amount and deposit target; order `status` `awaiting_deposit` (live) or quick completion (sandbox).
+
+3. **Poll** — `GET /orders/:id` with the same key.  
+   **See:** For **sandbox**, `status` → `completed` without sending funds. For **live**, step `nearintents` progresses after deposit.
+
+4. **Hosted demo** — Open [paywithweave.com/demo](https://paywithweave.com/demo), complete a checkout flow.  
+   **See:** Payment UI and success state (use test keys on sandbox merchants where applicable).
+
+Detailed curls: [docs/near-intents-in-weave.md](docs/near-intents-in-weave.md).
 
 ---
 
