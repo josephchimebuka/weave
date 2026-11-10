@@ -4,6 +4,19 @@ import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { SUPPORTED_FIAT } from '@weave/shared';
+import {
+  DEMO_AMOUNT_LIMITS,
+  DEMO_PAYOUT_COUNTRIES,
+  demoCountry,
+  type DemoPayoutCountry,
+} from '../../lib/demo-payout-countries';
+
+const BOB_BANKS = [
+  { value: 'BNB', label: 'Banco Nacional de Bolivia' },
+  { value: 'BCP', label: 'Banco de Crédito BCP' },
+  { value: 'BISA', label: 'Banco BISA' },
+  { value: 'MERCANTIL', label: 'Banco Mercantil Santa Cruz' },
+];
 
 // The widget imports @creit.tech/stellar-wallets-kit, which reads
 // globalThis.localStorage at import time and throws during SSR / static
@@ -100,17 +113,16 @@ type StellarPublicConfig = {
   usdcIssuer?: string;
 };
 
-type FiatCode = 'NGN' | 'KES' | 'UGX' | 'TZS';
-
-const DEMO_LIMITS: Record<FiatCode, { min: number; max: number; defaultAmount: number }> = {
-  NGN: { min: 700, max: 1_000, defaultAmount: 800 },
-  KES: { min: 500, max: 5_000, defaultAmount: 1_000 },
-  UGX: { min: 5_000, max: 50_000, defaultAmount: 10_000 },
-  TZS: { min: 5_000, max: 50_000, defaultAmount: 10_000 },
-};
-
 function fiatMeta(code: string) {
   return SUPPORTED_FIAT.find(f => f.key === `fiat:${code}`) ?? SUPPORTED_FIAT[0];
+}
+
+function displayMeta(c: DemoPayoutCountry) {
+  if (c.rail === 'weave') {
+    const f = fiatMeta(c.currency);
+    return { symbol: f.symbol, country: f.country, flag: f.flag };
+  }
+  return { symbol: c.symbol, country: c.name, flag: c.flag };
 }
 
 export default function DemoClient({
@@ -122,13 +134,19 @@ export default function DemoClient({
   apiKey: string;
   stellarPublicConfig?: StellarPublicConfig | null;
 }) {
+  const [payoutCountryId, setPayoutCountryId] = useState('NGN');
+  const payoutCountry = demoCountry(payoutCountryId);
+
   const [merchant, setMerchant] = useState({
     name: 'Afriloom Textiles',
-    amount: DEMO_LIMITS.NGN.defaultAmount,
-    currency: 'NGN' as FiatCode,
+    amount: DEMO_AMOUNT_LIMITS.NGN.defaultAmount,
+    currency: 'NGN',
   });
 
   const [payoutMode, setPayoutMode] = useState<'fiat' | 'crypto'>('fiat');
+  const [boBank, setBoBank] = useState(BOB_BANKS[0].value);
+  const [boAccount, setBoAccount] = useState('');
+  const [boHolder, setBoHolder] = useState('');
 
   const [banks, setBanks] = useState<{ code: string; name: string }[]>([]);
   const [loadingBanks, setLoadingBanks] = useState(true);
@@ -136,12 +154,19 @@ export default function DemoClient({
   const [fiatAccount, setFiatAccount] = useState('');
   const [fiatAccountName, setFiatAccountName] = useState('');
 
-  const limits = DEMO_LIMITS[merchant.currency];
-  const meta = fiatMeta(merchant.currency);
+  const limits = DEMO_AMOUNT_LIMITS[merchant.currency] ?? DEMO_AMOUNT_LIMITS.NGN;
+  const meta = displayMeta(payoutCountry);
+  const weaveRail = payoutCountry.rail === 'weave';
+  const pollarRail = payoutCountry.rail === 'pollar';
+  const soonRail = payoutCountry.rail === 'soon';
   const acctMin = merchant.currency === 'NGN' ? 10 : 8;
   const acctMax = merchant.currency === 'NGN' ? 10 : 20;
   const amountOk = merchant.amount >= limits.min && merchant.amount <= limits.max;
   const accountOk = fiatAccount.length >= acctMin && fiatAccount.length <= acctMax;
+  const weaveBankOk = weaveRail && !!fiatAccountName && accountOk && fiatBank !== 'SELECT AN INSTITUTION';
+  const pollarBankOk = pollarRail && !!boBank && boAccount.length >= 6 && boHolder.trim().length > 2;
+  const fiatDetailsOk = weaveRail ? weaveBankOk : pollarRail ? pollarBankOk : false;
+  const checkoutEnabled = payoutMode === 'crypto' || (payoutCountry.rail === 'weave' && amountOk && fiatDetailsOk);
   const [resolvingName, setResolvingName] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
 
@@ -149,6 +174,11 @@ export default function DemoClient({
   const [cryptoAddress, setCryptoAddress] = useState('');
 
   useEffect(() => {
+    if (!weaveRail) {
+      setBanks([]);
+      setLoadingBanks(false);
+      return;
+    }
     setLoadingBanks(true);
     setFiatBank('SELECT AN INSTITUTION');
     setFiatAccount('');
@@ -165,12 +195,11 @@ export default function DemoClient({
       })
       .catch(err => console.error('Failed to fetch banks:', err))
       .finally(() => setLoadingBanks(false));
-  }, [apiUrl, merchant.currency]);
+  }, [apiUrl, merchant.currency, weaveRail]);
 
-  // Resolve account name
   useEffect(() => {
-    if (accountOk && fiatBank && fiatBank !== 'SELECT AN INSTITUTION') {
-      setResolvingName(true);
+    if (!weaveRail || !accountOk || !fiatBank || fiatBank === 'SELECT AN INSTITUTION') return;
+    setResolvingName(true);
       setResolutionError(null);
 
       fetch(`${apiUrl}/institutions/verify`, {
@@ -204,21 +233,28 @@ export default function DemoClient({
         })
         .finally(() => setResolvingName(false));
     }
-  }, [fiatAccount, fiatBank, accountOk, apiUrl, merchant.currency]);
+  }, [fiatAccount, fiatBank, accountOk, apiUrl, merchant.currency, weaveRail]);
 
-  function onFiatCountry(code: FiatCode) {
-    const next = DEMO_LIMITS[code];
+  function onPayoutCountry(id: string) {
+    const c = demoCountry(id);
+    const next = DEMO_AMOUNT_LIMITS[c.currency] ?? DEMO_AMOUNT_LIMITS.NGN;
+    setPayoutCountryId(id);
     setMerchant(m => ({
       ...m,
-      currency: code,
+      currency: c.currency,
       amount: Math.min(Math.max(m.amount, next.min), next.max) || next.defaultAmount,
     }));
+    setBoAccount('');
+    setBoHolder('');
   }
 
   const fmtAmount = useMemo(
     () => `${meta.symbol}${merchant.amount > 0 ? merchant.amount.toLocaleString() : ''}`,
     [meta.symbol, merchant.amount],
   );
+
+  const africaOptions = DEMO_PAYOUT_COUNTRIES.filter(c => c.region === 'africa');
+  const latamOptions = DEMO_PAYOUT_COUNTRIES.filter(c => c.region === 'latam');
 
   return (
     <div className="min-h-screen bg-[#F5F4EF] flex flex-col font-sans text-[#0B0F0E] overflow-x-hidden w-full relative">
@@ -257,7 +293,7 @@ export default function DemoClient({
           </p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl">
             This is a <strong className="text-[#0B0F0E]">real-life demo</strong>. You can run through the actual checkout experience.
-            Payments are live with capped amounts per country (e.g. Nigeria ₦700–₦1,000) for safety. Pick a payout country in step 2 to preview KES, UGX, or TZS settlement.
+            Payments are live with capped amounts per country for safety. Step 2: Africa settles via Weave; Bolivia (LatAm) previews Pollar bank fields — full BOB payout in Corridor today.
           </p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl hidden lg:block">Changes here update the checkout preview in real time. Press <span className="font-bold text-[#0B0F0E]">Bank transfer</span> or <span className="font-bold text-[#0B0F0E]">Pay with crypto wallet</span> in the widget to walk through checkout.</p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl lg:hidden">Configure your business below, then scroll to the checkout preview and run through payment.</p>
@@ -324,8 +360,8 @@ export default function DemoClient({
                   {payoutMode === 'fiat' && <div className="w-4 h-4 rounded-full bg-[#0F5D4C]" />}
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[13px] font-bold">Bank payout (Africa)</span>
-                  <span className="text-[11px] text-[#6B7572]">NG · KE · UG · TZ via Weave</span>
+                  <span className="text-[13px] font-bold">Bank payout</span>
+                  <span className="text-[11px] text-[#6B7572]">Africa (Weave) · LatAm (Pollar)</span>
                 </div>
               </button>
               <button
@@ -347,19 +383,37 @@ export default function DemoClient({
                 <Field label="Payout country">
                   <select
                     className="w-full h-11 px-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none transition-colors appearance-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM2Qjc1NzIiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNNiA5bDYgNiw2LTYiLz48L3N2Zz4=')] bg-[length:20px] bg-[right_12px_center] bg-no-repeat"
-                    value={merchant.currency}
-                    onChange={(e) => onFiatCountry(e.target.value as FiatCode)}
+                    value={payoutCountryId}
+                    onChange={(e) => onPayoutCountry(e.target.value)}
                   >
-                    {SUPPORTED_FIAT.map(f => {
-                      const code = f.key.split(':')[1] as FiatCode;
-                      return (
-                        <option key={f.key} value={code}>
-                          {f.flag} {f.country} ({code})
+                    <optgroup label="Africa · Weave API">
+                      {africaOptions.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.flag} {c.name} ({c.currency})
                         </option>
-                      );
-                    })}
+                      ))}
+                    </optgroup>
+                    <optgroup label="Latin America">
+                      {latamOptions.map(c => (
+                        <option key={c.id} value={c.id} disabled={c.rail === 'soon'}>
+                          {c.flag} {c.name} ({c.currency}){c.rail === 'soon' ? ' · coming soon' : ' · Pollar'}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </Field>
+                {soonRail && (
+                  <p className="text-[13px] text-[#6B7572] leading-relaxed">
+                    {payoutCountry.name} is on the roadmap. Africa corridors are live on the Weave API today; LatAm bank payout will use partner ramps like Pollar.
+                  </p>
+                )}
+                {pollarRail && (
+                  <p className="text-[13px] text-[#6B7572] leading-relaxed">
+                    Bolivianos settle via <strong className="font-medium text-[#0B0F0E]">Pollar</strong> (USDC → BOB), not the Weave Paycrest rail. Fill the bank below, then open{' '}
+                    <a href="https://corridor.paywithweave.com/app" className="text-[#0F5D4C] underline">Corridor</a> for a live payout.
+                  </p>
+                )}
+                {weaveRail && (<>
                 <Field label="Bank">
                   <select
                     className="w-full h-11 px-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none transition-colors appearance-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM2Qjc1NzIiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNNiA5bDYgNiw2LTYiLz48L3N2Zz4=')] bg-[length:20px] bg-[right_12px_center] bg-no-repeat"
@@ -399,6 +453,38 @@ export default function DemoClient({
                     )}
                   </div>
                 </Field>
+                </>)}
+                {pollarRail && (
+                  <>
+                    <Field label="Bank">
+                      <select
+                        className="w-full h-11 px-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none"
+                        value={boBank}
+                        onChange={(e) => setBoBank(e.target.value)}
+                      >
+                        {BOB_BANKS.map(b => (
+                          <option key={b.value} value={b.value}>{b.label}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Account number">
+                      <input
+                        className="w-full h-11 px-3.5 border border-black/40 rounded-lg text-sm"
+                        value={boAccount}
+                        onChange={(e) => setBoAccount(e.target.value.replace(/\D/g, '').slice(0, 20))}
+                        placeholder="1234567890"
+                      />
+                    </Field>
+                    <Field label="Account holder">
+                      <input
+                        className="w-full h-11 px-3.5 border border-black/40 rounded-lg text-sm"
+                        value={boHolder}
+                        onChange={(e) => setBoHolder(e.target.value)}
+                        placeholder="Full name on the account"
+                      />
+                    </Field>
+                  </>
+                )}
               </div>
             ) : (
               <div className="flex flex-col gap-4 animate-in fade-in duration-300">
@@ -437,10 +523,30 @@ export default function DemoClient({
               </div>
 
               <div className="relative z-10 w-full flex justify-center">
-                <div className={`relative w-full max-w-[400px] transition-opacity duration-300 ${!amountOk ? 'opacity-40 grayscale pointer-events-none' : 'opacity-100'}`}>
+                <div className={`relative w-full max-w-[400px] transition-opacity duration-300 ${!checkoutEnabled && payoutMode === 'fiat' ? 'opacity-40 grayscale pointer-events-none' : (!amountOk && payoutMode === 'fiat' && weaveRail) ? 'opacity-40 grayscale pointer-events-none' : 'opacity-100'}`}>
+                {(soonRail || (pollarRail && payoutMode === 'fiat')) ? (
+                  <div className="w-full border border-[#E8EAE6] rounded-2xl p-6 bg-[#FAFAF7] flex flex-col gap-3 text-center">
+                    <div className="text-[11px] font-bold uppercase tracking-widest text-[#6B7572]">Weave checkout preview</div>
+                    {soonRail ? (
+                      <p className="text-sm text-[#3A4240]">Live widget checkout for {payoutCountry.name} is not enabled yet.</p>
+                    ) : (
+                      <>
+                        <p className="text-sm text-[#3A4240]">
+                          Payer still checks out with crypto via Weave. <strong>BOB</strong> lands in the bank through Pollar after USDC settles — same flow as{' '}
+                          <a href="https://corridor.paywithweave.com/app" className="text-[#0F5D4C] underline">Corridor</a>.
+                        </p>
+                        {pollarBankOk && amountOk && (
+                          <p className="text-xs font-mono text-[#6B7572]">
+                            {meta.symbol}{merchant.amount} → {BOB_BANKS.find(b => b.value === boBank)?.label} · {boAccount}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ) : (
                 <WeaveCheckout
                   key={payoutMode === 'fiat'
-                    ? (fiatBank !== 'SELECT AN INSTITUTION' && accountOk && fiatAccountName.length > 0
+                    ? (fiatDetailsOk
                       ? `fiat-${merchant.currency}-${fiatBank}-${fiatAccount}-${merchant.amount}`
                       : 'fiat-incomplete')
                     : (cryptoAddress.length >= 42
@@ -474,7 +580,8 @@ export default function DemoClient({
                   apiBase={apiUrl}
                   stellarPublicConfig={stellarPublicConfig ?? undefined}
                 />
-                {!amountOk && merchant.amount > 0 && (
+                )}
+                {!amountOk && merchant.amount > 0 && weaveRail && payoutMode === 'fiat' && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="bg-white/90 backdrop-blur-sm border border-red-100 px-6 py-4 rounded-2xl shadow-xl flex flex-col items-center gap-2 text-center">
                       <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
