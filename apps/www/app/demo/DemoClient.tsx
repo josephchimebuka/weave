@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
+import { SUPPORTED_FIAT } from '@weave/shared';
 
 // The widget imports @creit.tech/stellar-wallets-kit, which reads
 // globalThis.localStorage at import time and throws during SSR / static
@@ -99,6 +100,19 @@ type StellarPublicConfig = {
   usdcIssuer?: string;
 };
 
+type FiatCode = 'NGN' | 'KES' | 'UGX' | 'TZS';
+
+const DEMO_LIMITS: Record<FiatCode, { min: number; max: number; defaultAmount: number }> = {
+  NGN: { min: 700, max: 1_000, defaultAmount: 800 },
+  KES: { min: 500, max: 5_000, defaultAmount: 1_000 },
+  UGX: { min: 5_000, max: 50_000, defaultAmount: 10_000 },
+  TZS: { min: 5_000, max: 50_000, defaultAmount: 10_000 },
+};
+
+function fiatMeta(code: string) {
+  return SUPPORTED_FIAT.find(f => f.key === `fiat:${code}`) ?? SUPPORTED_FIAT[0];
+}
+
 export default function DemoClient({
   apiUrl,
   apiKey: demoApiKey,
@@ -110,8 +124,8 @@ export default function DemoClient({
 }) {
   const [merchant, setMerchant] = useState({
     name: 'Afriloom Textiles',
-    amount: 800,
-    currency: 'NGN',
+    amount: DEMO_LIMITS.NGN.defaultAmount,
+    currency: 'NGN' as FiatCode,
   });
 
   const [payoutMode, setPayoutMode] = useState<'fiat' | 'crypto'>('fiat');
@@ -121,6 +135,13 @@ export default function DemoClient({
   const [fiatBank, setFiatBank] = useState('SELECT AN INSTITUTION');
   const [fiatAccount, setFiatAccount] = useState('');
   const [fiatAccountName, setFiatAccountName] = useState('');
+
+  const limits = DEMO_LIMITS[merchant.currency];
+  const meta = fiatMeta(merchant.currency);
+  const acctMin = merchant.currency === 'NGN' ? 10 : 8;
+  const acctMax = merchant.currency === 'NGN' ? 10 : 20;
+  const amountOk = merchant.amount >= limits.min && merchant.amount <= limits.max;
+  const accountOk = fiatAccount.length >= acctMin && fiatAccount.length <= acctMax;
   const [resolvingName, setResolvingName] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
 
@@ -128,23 +149,27 @@ export default function DemoClient({
   const [cryptoAddress, setCryptoAddress] = useState('');
 
   useEffect(() => {
-    fetch(`${apiUrl}/institutions?currency=NGN`)
+    setLoadingBanks(true);
+    setFiatBank('SELECT AN INSTITUTION');
+    setFiatAccount('');
+    setFiatAccountName('');
+    fetch(`${apiUrl}/institutions?currency=${merchant.currency}`)
       .then(r => r.json())
       .then(resp => {
         if (resp.success && Array.isArray(resp.data)) {
           setBanks(resp.data);
-          if (!resp.data.some((b: any) => b.code === fiatBank) && resp.data.length > 0) {
-            setFiatBank(resp.data[0].code);
-          }
+          if (resp.data.length > 0) setFiatBank(resp.data[0].code);
+        } else {
+          setBanks([]);
         }
       })
       .catch(err => console.error('Failed to fetch banks:', err))
       .finally(() => setLoadingBanks(false));
-  }, []);
+  }, [apiUrl, merchant.currency]);
 
   // Resolve account name
   useEffect(() => {
-    if (fiatAccount.length === 10 && fiatBank && fiatBank !== 'SELECT AN INSTITUTION') {
+    if (accountOk && fiatBank && fiatBank !== 'SELECT AN INSTITUTION') {
       setResolvingName(true);
       setResolutionError(null);
 
@@ -154,8 +179,8 @@ export default function DemoClient({
         body: JSON.stringify({
           institution: fiatBank,
           accountIdentifier: fiatAccount,
-          currency: 'NGN'
-        })
+          currency: merchant.currency,
+        }),
       })
         .then(r => {
           if (!r.ok) throw new Error(`Server returned ${r.status}`);
@@ -179,7 +204,21 @@ export default function DemoClient({
         })
         .finally(() => setResolvingName(false));
     }
-  }, [fiatAccount, fiatBank]);
+  }, [fiatAccount, fiatBank, accountOk, apiUrl, merchant.currency]);
+
+  function onFiatCountry(code: FiatCode) {
+    const next = DEMO_LIMITS[code];
+    setMerchant(m => ({
+      ...m,
+      currency: code,
+      amount: Math.min(Math.max(m.amount, next.min), next.max) || next.defaultAmount,
+    }));
+  }
+
+  const fmtAmount = useMemo(
+    () => `${meta.symbol}${merchant.amount > 0 ? merchant.amount.toLocaleString() : ''}`,
+    [meta.symbol, merchant.amount],
+  );
 
   return (
     <div className="min-h-screen bg-[#F5F4EF] flex flex-col font-sans text-[#0B0F0E] overflow-x-hidden w-full relative">
@@ -218,7 +257,7 @@ export default function DemoClient({
           </p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl">
             This is a <strong className="text-[#0B0F0E]">real-life demo</strong>. You can run through the actual checkout experience.
-            Payments are live but limited to <span className="font-semibold text-[#0B0F0E]">₦700 - ₦1,000</span> for safety.
+            Payments are live with capped amounts per country (e.g. Nigeria ₦700–₦1,000) for safety. Pick a payout country in step 2 to preview KES, UGX, or TZS settlement.
           </p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl hidden lg:block">Changes here update the checkout preview in real time. Press <span className="font-bold text-[#0B0F0E]">Bank transfer</span> or <span className="font-bold text-[#0B0F0E]">Pay with crypto wallet</span> in the widget to walk through checkout.</p>
           <p className="text-[#3A4240] leading-relaxed max-w-xl lg:hidden">Configure your business below, then scroll to the checkout preview and run through payment.</p>
@@ -246,23 +285,25 @@ export default function DemoClient({
                 />
               </Field>
 
-              <Field label="Amount to charge" hint="₦700 - ₦1,000">
+              <Field label="Amount to charge" hint={`${meta.symbol}${limits.min.toLocaleString()} – ${meta.symbol}${limits.max.toLocaleString()}`}>
                 <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#6B7572] text-sm">₦</span>
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#6B7572] text-sm">{meta.symbol}</span>
                   <input
                     type="text"
-                    className={`w-full h-11 pl-8 pr-3.5 bg-transparent border rounded-lg text-sm outline-none transition-colors ${merchant.amount < 700 ? 'border-red-500 focus:border-red-600' : 'border-black/40 focus:border-[#0F5D4C]'}`}
+                    className={`w-full h-11 pl-10 pr-3.5 bg-transparent border rounded-lg text-sm outline-none transition-colors ${!amountOk && merchant.amount > 0 ? 'border-red-500 focus:border-red-600' : 'border-black/40 focus:border-[#0F5D4C]'}`}
                     value={merchant.amount}
                     onChange={(e) => {
                       const cleaned = e.target.value.replace(/[^0-9]/g, '');
                       let val = Number(cleaned) || 0;
-                      if (val > 1000) val = 1000;
+                      if (val > limits.max) val = limits.max;
                       setMerchant({ ...merchant, amount: val });
                     }}
                   />
                 </div>
-                {merchant.amount > 0 && merchant.amount < 700 && (
-                  <span className="text-[10px] text-red-500 font-bold uppercase tracking-tight mt-1">Minimum amount is ₦700</span>
+                {merchant.amount > 0 && merchant.amount < limits.min && (
+                  <span className="text-[10px] text-red-500 font-bold uppercase tracking-tight mt-1">
+                    Minimum amount is {meta.symbol}{limits.min.toLocaleString()}
+                  </span>
                 )}
               </Field>
             </div>
@@ -271,7 +312,7 @@ export default function DemoClient({
 
             <div className="flex flex-col gap-1">
               <span className="text-[10px] text-[#6B7572] uppercase tracking-widest font-bold">Step 2</span>
-              <h2 className="text-lg font-semibold tracking-tight">How would you like to receive {merchant.amount > 0 ? `₦${merchant.amount.toLocaleString()}` : 'payment'}?</h2>
+              <h2 className="text-lg font-semibold tracking-tight">How would you like to receive {merchant.amount > 0 ? fmtAmount : 'payment'}?</h2>
             </div>
 
             <div className="grid grid-cols lg:grid-cols-2 gap-3">
@@ -283,8 +324,8 @@ export default function DemoClient({
                   {payoutMode === 'fiat' && <div className="w-4 h-4 rounded-full bg-[#0F5D4C]" />}
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[13px] font-bold">Naira to bank</span>
-                  <span className="text-[11px] text-[#6B7572]">Receive ₦ instantly</span>
+                  <span className="text-[13px] font-bold">Bank payout (Africa)</span>
+                  <span className="text-[11px] text-[#6B7572]">NG · KE · UG · TZ via Weave</span>
                 </div>
               </button>
               <button
@@ -303,6 +344,22 @@ export default function DemoClient({
 
             {payoutMode === 'fiat' ? (
               <div className="flex flex-col gap-4 animate-in fade-in duration-300">
+                <Field label="Payout country">
+                  <select
+                    className="w-full h-11 px-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none transition-colors appearance-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM2Qjc1NzIiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNNiA5bDYgNiw2LTYiLz48L3N2Zz4=')] bg-[length:20px] bg-[right_12px_center] bg-no-repeat"
+                    value={merchant.currency}
+                    onChange={(e) => onFiatCountry(e.target.value as FiatCode)}
+                  >
+                    {SUPPORTED_FIAT.map(f => {
+                      const code = f.key.split(':')[1] as FiatCode;
+                      return (
+                        <option key={f.key} value={code}>
+                          {f.flag} {f.country} ({code})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </Field>
                 <Field label="Bank">
                   <select
                     className="w-full h-11 px-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none transition-colors appearance-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM2Qjc1NzIiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNNiA5bDYgNiw2LTYiLz48L3N2Zz4=')] bg-[length:20px] bg-[right_12px_center] bg-no-repeat"
@@ -321,7 +378,7 @@ export default function DemoClient({
                   <input
                     className="w-full h-11 px-3.5 bg-transparent border border-black/40 rounded-lg text-sm focus:border-[#0F5D4C] outline-none transition-colors"
                     value={fiatAccount}
-                    onChange={(e) => setFiatAccount(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    onChange={(e) => setFiatAccount(e.target.value.replace(/\D/g, '').slice(0, acctMax))}
                     placeholder="1234567890"
                   />
                 </Field>
@@ -332,9 +389,9 @@ export default function DemoClient({
                       value={fiatAccountName}
                       onChange={(e) => setFiatAccountName(e.target.value)}
                       placeholder="e.g. ACME Corp"
-                      readOnly={fiatAccountName.length > 0 && !resolvingName && fiatAccount.length === 10 && !resolutionError}
+                      readOnly={fiatAccountName.length > 0 && !resolvingName && accountOk && !resolutionError}
                     />
-                    {fiatAccountName.length > 0 && !resolvingName && fiatAccount.length === 10 && !resolutionError && (
+                    {fiatAccountName.length > 0 && !resolvingName && accountOk && !resolutionError && (
                       <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] font-bold text-[#0F5D4C] uppercase tracking-tight">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                         Verified
@@ -380,11 +437,11 @@ export default function DemoClient({
               </div>
 
               <div className="relative z-10 w-full flex justify-center">
-                <div className={`relative w-full max-w-[400px] transition-opacity duration-300 ${merchant.amount < 700 ? 'opacity-40 grayscale pointer-events-none' : 'opacity-100'}`}>
+                <div className={`relative w-full max-w-[400px] transition-opacity duration-300 ${!amountOk ? 'opacity-40 grayscale pointer-events-none' : 'opacity-100'}`}>
                 <WeaveCheckout
                   key={payoutMode === 'fiat'
-                    ? (fiatBank !== 'SELECT AN INSTITUTION' && fiatAccount.length === 10 && fiatAccountName.length > 0
-                      ? `fiat-${fiatBank}-${fiatAccount}-${merchant.amount}`
+                    ? (fiatBank !== 'SELECT AN INSTITUTION' && accountOk && fiatAccountName.length > 0
+                      ? `fiat-${merchant.currency}-${fiatBank}-${fiatAccount}-${merchant.amount}`
                       : 'fiat-incomplete')
                     : (cryptoAddress.length >= 42
                       ? `crypto-${cryptoAddress}-${merchant.amount}`
@@ -409,7 +466,7 @@ export default function DemoClient({
                     }
                   }}
                   disabledMethods={payoutMode === 'fiat' ? {
-                    fiat: 'Naira-to-Naira bridge is disabled in demo.Please pay with crypto to test settlement.'
+                    fiat: 'Local-currency pay is disabled in this demo. Pay with crypto or Stellar to test settlement to your bank.',
                   } : undefined}
                   theme="organic"
                   onSuccess={(txn) => console.log('Payment Success:', txn)}
@@ -417,14 +474,16 @@ export default function DemoClient({
                   apiBase={apiUrl}
                   stellarPublicConfig={stellarPublicConfig ?? undefined}
                 />
-                {merchant.amount < 700 && (
+                {!amountOk && merchant.amount > 0 && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="bg-white/90 backdrop-blur-sm border border-red-100 px-6 py-4 rounded-2xl shadow-xl flex flex-col items-center gap-2 text-center">
                       <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5"><path d="M12 9v4m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 17c-.77 1.333.192 3 1.732 3z" /></svg>
                       </div>
                       <div className="text-sm font-bold text-ink uppercase tracking-wider">Invalid Amount</div>
-                      <div className="text-[12px] text-ink-muted leading-tight">Please enter an amount of ₦700 or more to enable the checkout.</div>
+                      <div className="text-[12px] text-ink-muted leading-tight">
+                        Enter between {meta.symbol}{limits.min.toLocaleString()} and {meta.symbol}{limits.max.toLocaleString()} for {meta.country}.
+                      </div>
                     </div>
                   </div>
                 )}
