@@ -20,7 +20,10 @@ export interface CryptoMeta {
 }
 
 export const SUPPORTED_FIAT: FiatMeta[] = [
-  { key: 'fiat:NGN', name: 'Nigerian Naira', symbol: '₦', flag: '🇳🇬', rate: 1515, min: 5000, country: 'Nigeria' },
+  { key: 'fiat:NGN', name: 'Nigerian Naira',   symbol: '₦',    flag: '🇳🇬', rate: 1515, min: 5000,   country: 'Nigeria' },
+  { key: 'fiat:KES', name: 'Kenyan Shilling',  symbol: 'KSh',  flag: '🇰🇪', rate: 130,  min: 500,    country: 'Kenya' },
+  { key: 'fiat:UGX', name: 'Ugandan Shilling', symbol: 'USh',  flag: '🇺🇬', rate: 3700, min: 5000,   country: 'Uganda' },
+  { key: 'fiat:TZS', name: 'Tanzanian Shilling', symbol: 'TSh', flag: '🇹🇿', rate: 2600, min: 5000, country: 'Tanzania' },
 ];
 
 export const SUPPORTED_CRYPTO: CryptoMeta[] = [

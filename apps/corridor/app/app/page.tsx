@@ -4,12 +4,12 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePollar } from '@pollar/react';
 import { Chrome } from '../../components/Chrome';
-import { weave, verifyAccount, bankMatches, STELLAR_USDC, NGN, shortG, isGAddress, fmtExactNgn, type Bank } from '../../lib/weave';
+import { weave, verifyAccount, bankMatches, STELLAR_USDC, NGN, fiatKey, shortG, isGAddress, fmtExactNgn, type Bank } from '../../lib/weave';
 import { useNetwork, explorerTx } from '../../lib/network';
 import { bestQuote, bobFromUsdcOfframp, usdcFromBobOnramp, type RampQuote } from '../../lib/pollar-ramps';
-import { runFlow, type To, type From, type FlowEvent, type FlowResult } from '../../lib/flows';
+import { runFlow, bankDestFromForm, isAfricaSlug, africaBySlug, type To, type From, type FlowEvent, type FlowResult } from '../../lib/flows';
 import { Tour, TOUR_EVENT, tourPending, markTourDone } from '../../components/Tour';
-import { NEXT_AFRICA } from '../../lib/countries';
+import { LIVE_AFRICA } from '../../lib/countries';
 
 // Dashboard (design handoff "Dashboard v3"): balance, three secondary actions,
 // and a conversational Send flow that reveals one sentence at a time:
@@ -19,8 +19,10 @@ import { NEXT_AFRICA } from '../../lib/countries';
 //   and the amount is [ $ 25 ]
 //   [ Send ₦34,000 ]  Start over
 
-const fmt = (n: number, c: 'NGN' | 'BOB' | 'USD') =>
-  ({ NGN: '₦', BOB: 'Bs ', USD: '$' })[c] + new Intl.NumberFormat('en', { maximumFractionDigits: c === 'NGN' ? 0 : 2, minimumFractionDigits: c === 'NGN' ? 0 : 2 }).format(n);
+type DisplayCcy = 'NGN' | 'BOB' | 'USD' | 'KES' | 'UGX' | 'TZS';
+const CCY_SYM: Record<DisplayCcy, string> = { NGN: '₦', BOB: 'Bs ', USD: '$', KES: 'KSh ', UGX: 'USh ', TZS: 'TSh ' };
+const fmt = (n: number, c: DisplayCcy) =>
+  CCY_SYM[c] + new Intl.NumberFormat('en', { maximumFractionDigits: ['NGN', 'UGX', 'TZS'].includes(c) ? 0 : 2, minimumFractionDigits: ['NGN', 'UGX', 'TZS'].includes(c) ? 0 : 2 }).format(n);
 
 type Stage = { label: string; done: boolean };
 
@@ -97,7 +99,8 @@ export default function Dashboard() {
   const [from, setFrom] = useState<From | null>(null);
   const [amount, setAmount] = useState('');
   // recipient details
-  const [banks, setBanks] = useState<Bank[]>([]);
+  const [recipientBanks, setRecipientBanks] = useState<Bank[]>([]);
+  const [payerBanksList, setPayerBanksList] = useState<Bank[]>([]);
   const [ngBankQ, setNgBankQ] = useState(''); const [ngBank, setNgBank] = useState<Bank | null>(null); const [ngAcct, setNgAcct] = useState(''); const [ngName, setNgName] = useState(''); const [ngErr, setNgErr] = useState<string | null>(null); const [ngResolving, setNgResolving] = useState(false);
   const [boQuote, setBoQuote] = useState<RampQuote | null>(null); const [boFields, setBoFields] = useState<Record<string, string>>({});
   const [frInput, setFrInput] = useState(''); const [frAddr, setFrAddr] = useState<string | null>(null); const [frHandle, setFrHandle] = useState<string | null>(null); const [frErr, setFrErr] = useState<string | null>(null);
@@ -114,20 +117,26 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const amountRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { weave('institutions?currency=NGN').then(r => r.ok && setBanks(r.data ?? [])); }, []);
+  const africaTarget = to && isAfricaSlug(to) ? africaBySlug(to) : null;
+  useEffect(() => { weave('institutions?currency=NGN').then(r => r.ok && setPayerBanksList(r.data ?? [])); }, []);
+  useEffect(() => {
+    if (!africaTarget) return;
+    weave(`institutions?currency=${africaTarget.currency}`).then(r => r.ok && setRecipientBanks(r.data ?? []));
+  }, [africaTarget?.currency]);
   useEffect(() => { if (to === 'bo' && !boQuote) bestQuote(getClient(), 'offramp', 100).then(setBoQuote).catch(e => setError(e.message)); }, [to, boQuote, getClient]);
 
-  // NG account name resolution
+  const acctMin = africaTarget?.code === 'NG' ? 10 : 8;
+  const verifyCurrency = africaTarget?.currency ?? 'NGN';
   useEffect(() => {
     setNgName(''); setNgErr(null);
-    if (!ngBank || ngAcct.length < 10) return;
+    if (!ngBank || ngAcct.length < acctMin) return;
     let live = true; setNgResolving(true);
-    verifyAccount(ngBank.code, ngAcct)
+    verifyAccount(ngBank.code, ngAcct, verifyCurrency)
       .then(name => { if (!live) return; if (name) setNgName(name); else setNgErr('We couldn’t find that account.'); })
       .catch(e => live && setNgErr(e.message))
       .finally(() => live && setNgResolving(false));
     return () => { live = false; };
-  }, [ngBank, ngAcct]);
+  }, [ngBank, ngAcct, acctMin, verifyCurrency]);
   // payer account resolution
   useEffect(() => {
     setPName(''); setPErr(null);
@@ -150,12 +159,12 @@ export default function Dashboard() {
     return () => { live = false; };
   }, [frInput]);
 
-  const ngBanks = useMemo(() => ngBankQ && !ngBank ? banks.filter(b => bankMatches(b.name, ngBankQ)).slice(0, 6) : [], [banks, ngBankQ, ngBank]);
-  const pBanks = useMemo(() => pBankQ && !pBank ? banks.filter(b => bankMatches(b.name, pBankQ)).slice(0, 6) : [], [banks, pBankQ, pBank]);
+  const ngBanks = useMemo(() => ngBankQ && !ngBank ? recipientBanks.filter(b => bankMatches(b.name, ngBankQ)).slice(0, 6) : [], [recipientBanks, ngBankQ, ngBank]);
+  const pBanks = useMemo(() => pBankQ && !pBank ? payerBanksList.filter(b => bankMatches(b.name, pBankQ)).slice(0, 6) : [], [payerBanksList, pBankQ, pBank]);
 
   // ── derived ────────────────────────────────────────────────────────────
-  const detailsOk = to === 'ng' ? !!ngName : to === 'bo' ? !!boQuote && (boQuote.requiredFields ?? []).every((f: any) => f.optional || (boFields[f.key] ?? '').trim()) : to === 'fr' ? !!frAddr : false;
-  const blocked: From | null = to === 'ng' ? 'ngn' : to === 'bo' ? 'bob' : null;
+  const detailsOk = to && isAfricaSlug(to) ? !!ngName : to === 'bo' ? !!boQuote && (boQuote.requiredFields ?? []).every((f: any) => f.optional || (boFields[f.key] ?? '').trim()) : to === 'fr' ? !!frAddr : false;
+  const blocked: From | null = to && isAfricaSlug(to) && to === 'ng' ? 'ngn' : to === 'bo' ? 'bob' : null;
   const a = parseFloat(amount) || 0;
   // Rough USD value from the cached rates — only for the balance check.
   const usd = !from ? 0 : from === 'ngn' ? a / ngnPerUsd : from === 'bob' ? a / bobPerUsd : a;
@@ -177,24 +186,26 @@ export default function Dashboard() {
         // 1) source → USDC in the wallet
         const usdc = from === 'bal' ? a : from === 'ngn' ? await q(NGN, STELLAR_USDC, a) : (await usdcFromBobOnramp(client, a)).usdc;
         // 2) USDC → destination
-        const value = to === 'fr' ? usdc : to === 'ng' ? await q(STELLAR_USDC, NGN, usdc) : (await bobFromUsdcOfframp(client, usdc)).bob;
+        const destFiat = to && isAfricaSlug(to) ? fiatKey(africaBySlug(to)!.currency) : null;
+        const value = to === 'fr' ? usdc : destFiat ? await q(STELLAR_USDC, destFiat, usdc) : (await bobFromUsdcOfframp(client, usdc)).bob;
         if (live) setEst({ key: estKey, value });
       } catch (e: any) { if (live) setEst({ key: estKey, value: null, error: e?.message }); }
     }, 400);
     return () => { live = false; clearTimeout(t); };
   }, [estKey, to, from, a, getClient]);
   const estReady = !!est && est.key === estKey;
-  const outCcy = to === 'ng' ? 'NGN' : to === 'bo' ? 'BOB' : 'USD';
-  const out = estReady && est!.value != null ? fmt(est!.value, outCcy) : fmt(to === 'ng' ? usd * ngnPerUsd : to === 'bo' ? usd * bobPerUsd : usd, outCcy);
+  const outCcy: DisplayCcy = to && isAfricaSlug(to) ? (africaBySlug(to)!.currency as DisplayCcy) : to === 'bo' ? 'BOB' : 'USD';
+  const fallbackOut = to && isAfricaSlug(to) && to !== 'ng' ? usd * ngnPerUsd : to === 'ng' ? usd * ngnPerUsd : to === 'bo' ? usd * bobPerUsd : usd;
+  const out = estReady && est!.value != null ? fmt(est!.value, outCcy) : fmt(fallbackOut, outCcy);
   const over = from === 'bal' && bal != null && usd > bal;
-  const tooSmall = !IS_TESTNET && a > 0 && to === 'ng' && from === 'bal' && a < 2;  // LI.FI bridge minimum (mainnet only)
+  const tooSmall = !IS_TESTNET && a > 0 && to && isAfricaSlug(to) && from === 'bal' && a < 2;
   const payerOk = from !== 'ngn' || !!pName;
   const step2 = !!to && detailsOk;
   const step3 = step2 && !!from && payerOk;
   const step4 = step3 && a > 0 && !over && !tooSmall && estReady && est!.value != null;
   const sym = from === 'ngn' ? '₦' : from === 'bob' ? 'Bs' : '$';
   const self = to === 'fr' && !!frAddr && frAddr === wallet?.address;
-  const eta = to === 'fr' && from === 'bal' ? 'in seconds' : to === 'ng' ? 'in about 3 minutes' : 'in a few minutes';
+  const eta = to === 'fr' && from === 'bal' ? 'in seconds' : to && isAfricaSlug(to) ? 'in about 3 minutes' : 'in a few minutes';
   const summary = !a ? 'Type an amount to see what arrives.'
     : over ? `That's more than your ${fmt(bal ?? 0, 'USD')}. Add money first, or pay from a bank.`
     : tooSmall ? 'The bridge minimum is $2.'
@@ -208,7 +219,10 @@ export default function Dashboard() {
     setTo(null); setFrom(null); setAmount(''); setNgBank(null); setNgBankQ(''); setNgAcct(''); setNgName(''); setBoFields({}); setFrInput(''); setFrAddr(null);
     setPBank(null); setPBankQ(''); setPAcct(''); setPName(''); setRunning(false); setStages([]); setBankDetails(null); setQr(null); setKyc(null); setHash(null); setResult(null); setError(null);
   }
-  function pickTo(t: To) { setTo(t); setFrom(null); setAmount(''); setError(null); }
+  function pickTo(t: To) {
+    setTo(t); setFrom(null); setAmount(''); setError(null);
+    setNgBank(null); setNgBankQ(''); setNgAcct(''); setNgName('');
+  }
   function pickFrom(f: From) { if (f !== from) setAmount(''); setFrom(f); }  // the currency changes with the source
   function startAdd() { reset(); setTo('fr'); if (wallet) { setFrInput(wallet.address); } setFrom('ngn'); }
   function startWithdraw() { reset(); setTo('ng'); setFrom('bal'); }
@@ -224,9 +238,10 @@ export default function Dashboard() {
       if (e.kind === 'tx') setHash(e.hash);
     };
     try {
+      const country = to && isAfricaSlug(to) ? africaBySlug(to) : undefined;
       const res = await runFlow({
         to, from, amount: a, wallet: wallet.address,
-        ng: to === 'ng' && ngBank ? { bankCode: ngBank.code, bankName: ngBank.name, accountNumber: ngAcct, accountName: ngName } : undefined,
+        bank: country && ngBank ? bankDestFromForm(to as any, { bankCode: ngBank.code, bankName: ngBank.name, accountNumber: ngAcct, accountName: ngName }, country) : undefined,
         bo: to === 'bo' && boQuote ? { fields: boFields, quote: boQuote } : undefined,
         fr: to === 'fr' && frAddr ? { address: frAddr, handle: frHandle } : undefined,
         payerBank: from === 'ngn' && pBank ? { bankCode: pBank.code, accountNumber: pAcct, accountName: pName } : undefined,
@@ -238,11 +253,11 @@ export default function Dashboard() {
 
   const detailsRow = (
     <div className="rise" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {to === 'ng' && (
+      {to && isAfricaSlug(to) && africaTarget && (
         <>
           <div className="prose-step" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '8px 16px' }}>
-            <span>at</span><Typeahead q={ngBankQ} setQ={v => { setNgBankQ(v); setNgBank(null); }} pick={b => { setNgBank(b); setNgBankQ(b.name); }} picked={ngBank} options={ngBanks} placeholder="GTBank, OPay, PalmPay…" />
-            {ngBank && <><span>account</span><Inline value={ngAcct} onChange={v => setNgAcct(v.replace(/\D/g, '').slice(0, 10))} placeholder="0123456789" width={220} mono inputMode="numeric" /></>}
+            <span>at</span><Typeahead q={ngBankQ} setQ={v => { setNgBankQ(v); setNgBank(null); }} pick={b => { setNgBank(b); setNgBankQ(b.name); }} picked={ngBank} options={ngBanks} placeholder={africaTarget.code === 'NG' ? 'GTBank, OPay, PalmPay…' : 'Bank name…'} />
+            {ngBank && <><span>account</span><Inline value={ngAcct} onChange={v => setNgAcct(v.replace(/\D/g, '').slice(0, africaTarget.code === 'NG' ? 10 : 20))} placeholder="account number" width={220} mono inputMode="numeric" /></>}
           </div>
           <div style={{ font: '14px var(--font-body)', color: ngErr ? '#A8321E' : '#4F7A5C', minHeight: 20 }}>{ngResolving ? 'Checking the account…' : ngName ? `→ ${ngName}` : ngErr ?? ''}</div>
         </>
@@ -312,17 +327,16 @@ export default function Dashboard() {
             <div data-tour="to" style={{ display: 'flex', flexDirection: 'column', gap: 18, width: 'fit-content' }}>
               <div className="prose-step">I want to send money to</div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <Pill on={to === 'ng'} dot="#4F7A5C" onClick={() => pickTo('ng')}>a bank in Nigeria</Pill>
+                {LIVE_AFRICA.map(c => {
+                  const slug = c.code.toLowerCase() as To;
+                  return (
+                    <Pill key={c.code} on={to === slug} dot={c.dot} onClick={() => pickTo(slug)}>
+                      a bank in {c.name}
+                    </Pill>
+                  );
+                })}
                 <Pill on={to === 'bo'} dot="#B8C7BA" disabled={boAvailable === false} title={boAvailable === false ? 'Pollar has not enabled the Bolivian ramp on this mainnet app yet.' : undefined} onClick={() => pickTo('bo')}>a bank in Bolivia</Pill>
                 <Pill on={to === 'fr'} dot="#2F4A3B" onClick={() => pickTo('fr')}>a friend on Corridor</Pill>
-              </div>
-              {/* The rest of the African side: on Weave's rail already, waiting on a switch. */}
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                {NEXT_AFRICA.map(c => (
-                  <Pill key={c.code} on={false} dot={c.dot} disabled title={`${c.currency} payouts run on the same Weave rail as naira — switching on soon.`} onClick={() => {}}>
-                    a bank in {c.name}<span style={{ font: '11px var(--font-mono)', letterSpacing: '.06em', color: '#8A8A80', marginLeft: 4 }}>SOON</span>
-                  </Pill>
-                ))}
               </div>
             </div>
 

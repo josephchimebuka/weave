@@ -1,10 +1,19 @@
 import type { RoutePlanStep } from './router.service';
 import { parseAsset } from '../lib/assets';
 
-// Fixed NGN-per-USD(C) rate for sandbox. Single source of truth so order
+// Fixed fiat-per-USD(C) rates for sandbox. Single source of truth so order
 // creation, quotes, and mock execution all price sandbox flows identically
 // without touching live Paycrest.
 export const SANDBOX_NGN_RATE = 1400;
+export const SANDBOX_FIAT_RATES: Record<string, number> = {
+  NGN: SANDBOX_NGN_RATE,
+  KES: 130,
+  UGX: 3700,
+  TZS: 2600,
+};
+export function sandboxFiatRate(currency: string): number {
+  return SANDBOX_FIAT_RATES[currency.toUpperCase()] ?? SANDBOX_NGN_RATE;
+}
 
 export interface SandboxExecution {
   externalId: string;
@@ -53,29 +62,33 @@ export function sandboxDispatch(
         },
       };
 
-    case 'paycrest':
+    case 'paycrest': {
+      const to = parseAsset(step.toAsset);
+      const fiatRate = sandboxFiatRate(
+        from.kind === 'fiat' ? from.currency : to.kind === 'fiat' ? to.currency : 'NGN',
+      );
       if (from.kind === 'crypto') {
         return {
           externalId, amountIn,
-          amountOut: amountIn * SANDBOX_NGN_RATE,
+          amountOut: amountIn * fiatRate,
           depositAddress: '0xSa000000000000000000000000000000000001nd',
           depositMemo: null, expiresAt,
           feeUsd: amountIn * 0.0085,
         };
-      } else {
-        return {
-          externalId, amountIn,
-          amountOut: amountIn / SANDBOX_NGN_RATE,
-          depositAddress: null, depositMemo: null, expiresAt, feeUsd: 0,
-          bankDetails: {
-            institution: 'Sandbox Test Bank',
-            accountIdentifier: '0000000000',
-            accountName: 'Weave Sandbox',
-            amountToTransfer: String(amountIn),
-            currency: from.kind === 'fiat' ? from.currency : 'NGN',
-          },
-        };
       }
+      return {
+        externalId, amountIn,
+        amountOut: amountIn / fiatRate,
+        depositAddress: null, depositMemo: null, expiresAt, feeUsd: 0,
+        bankDetails: {
+          institution: 'Sandbox Test Bank',
+          accountIdentifier: '0000000000',
+          accountName: 'Weave Sandbox',
+          amountToTransfer: String(amountIn),
+          currency: from.kind === 'fiat' ? from.currency : 'NGN',
+        },
+      };
+    }
 
     case 'nearintents':
       return {

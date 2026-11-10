@@ -68,7 +68,17 @@ const OTHER: Array<{ leg: string; via: string; status: 'live' | 'switch' | 'paus
   { leg: 'Bolivianos in and out', via: 'Pollar · Stereum (QR in, ACH out)', status: 'live', note: 'Enabled on the mainnet app on 18 Sep; two ACH payouts done (proofs above). Mocked on testnet at the Pollar team\'s request — same SDK calls.' },
   { leg: 'Friend → friend', via: 'Stellar payment, sponsored', status: 'live', note: 'USDC to an @handle or G-address. No fee.' },
   { leg: 'Any Stellar wallet (SEP-24)', via: 'Weave anchor · stellar.toml', status: 'switch', note: 'Weave is a SEP-10/24 anchor for NGN, live at api.paywithweave.com. Pollar lists it by home domain.' },
-  { leg: `${NEXT_AFRICA.map(c => c.name).join(' · ')} (${NEXT_CURRENCIES})`, via: 'Weave', status: 'switch', note: 'The same payout rail that delivers naira already carries these currencies. Enabling a country is a switch on Weave\'s side, not a new integration — and Corridor is country-agnostic (one row in lib/countries.ts).' },
+  ...(NEXT_AFRICA.length > 0 ? [{
+    leg: `${NEXT_AFRICA.map(c => c.name).join(' · ')} (${NEXT_CURRENCIES})`,
+    via: 'Weave',
+    status: 'switch' as const,
+    note: 'Same Paycrest payout rail as naira — enable in lib/countries.ts when Weave switches the currency on.',
+  }] : [{
+    leg: 'Kenya · Uganda · Tanzania (KES · UGX · TZS)',
+    via: 'Weave',
+    status: 'live' as const,
+    note: 'Same order shape as naira (`fiat:KES` etc.) — selectable in the Corridor send flow alongside Nigeria.',
+  }]),
 ];
 const StatusPill = ({ s }: { s: 'live' | 'switch' | 'paused' }) => {
   const m = { live: ['Live', ACCENT], switch: ['Waiting on a switch', INK], paused: ['Provider paused', '#A8321E'] }[s];

@@ -40,6 +40,7 @@ export async function verifyAccount(institution: string, accountIdentifier: stri
 
 export const STELLAR_USDC = 'crypto:STELLAR:USDC';
 export const NGN = 'fiat:NGN';
+export const fiatKey = (currency: string) => `fiat:${currency.toUpperCase()}`;
 
 export const fmtNgn = (n: number | null | undefined) => n == null ? '—' : `₦${Math.round(n).toLocaleString()}`;
 /** Exact amount to transfer, as the provider stated it — thousands separators only, never rounded. */

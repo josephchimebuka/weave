@@ -1,34 +1,37 @@
 'use client';
 
 import type { PollarClient } from '@pollar/core';
-import { weave, pollOrder, STELLAR_USDC, NGN } from './weave';
+import { weave, pollOrder, STELLAR_USDC, NGN, fiatKey } from './weave';
 import { usdcIssuer } from './network';
-import { createNigeriaSend, executeNigeriaSend, type PollarSigner, type NigeriaRecipient } from './nigeria-send';
+import { createBankSend, executeNigeriaSend, type PollarSigner, type NigeriaRecipient } from './nigeria-send';
 import { bestQuote, usdcFromBobOnramp, bobFromUsdcOfframp, startOnRamp, startOffRamp, isKycBlocked, describeBankFields, type RampQuote } from './pollar-ramps';
+import { isAfricaSlug, type AfricaSlug, type AfricanCountry, africaBySlug } from './countries';
 
 // The conversational dashboard reduces every transfer to (recipient, source,
 // amount). This module turns that triple into the concrete sequence of Weave
-// orders / Pollar calls, reporting progress as it goes. Seven valid pairs:
-//
-//   to      \ from   my balance          naira transfer            Bolivian QR
-//   NG bank          USDC→₦ (Weave)      —                         BOB→USDC→₦
-//   BO bank          USDC→Bs (Pollar)    ₦→USDC→Bs                 —
-//   friend           USDC payment        ₦→USDC into their wallet  BOB→USDC into their wallet
+// orders / Pollar calls, reporting progress as it goes.
 
-export type To = 'ng' | 'bo' | 'fr';
+export type To = AfricaSlug | 'bo' | 'fr';
 export type From = 'bal' | 'ngn' | 'bob';
 
-export type NgDetails = NigeriaRecipient;
+export interface BankDestDetails extends NigeriaRecipient {
+  fiatKey: string;
+  currency: string;
+  symbol: string;
+  countryName: string;
+}
+
 export interface BoDetails { fields: Record<string, string>; quote: RampQuote }
 export interface FrDetails { address: string; handle: string | null }
-export interface PayerBank { bankCode: string; accountNumber: string; accountName: string }  // refund account for naira transfers
+export interface PayerBank { bankCode: string; accountNumber: string; accountName: string }
 
 export interface FlowInput {
   to: To; from: From;
-  amount: number;                // in the SOURCE currency (USD / NGN / BOB)
-  wallet: string;                // the signed-in Pollar wallet
-  ng?: NgDetails; bo?: BoDetails; fr?: FrDetails;
-  payerBank?: PayerBank;         // required when from === 'ngn'
+  amount: number;
+  wallet: string;
+  bank?: BankDestDetails;
+  bo?: BoDetails; fr?: FrDetails;
+  payerBank?: PayerBank;
 }
 
 export type FlowEvent =
@@ -41,29 +44,34 @@ export type FlowEvent =
 
 export interface FlowResult { headline: string; detail: string; hash?: string | null; mocked?: boolean }
 
+function fmtDestAmount(n: number, currency: string, symbol: string): string {
+  const digits = ['NGN', 'UGX', 'TZS'].includes(currency) ? 0 : currency === 'KES' ? 2 : 0;
+  return `${symbol}${Number(n).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits })}`;
+}
+
 export async function runFlow(input: FlowInput, client: PollarClient, signer: PollarSigner, emit: (e: FlowEvent) => void): Promise<FlowResult> {
   const { to, from, amount, wallet } = input;
 
-  // ── helpers ──────────────────────────────────────────────────────────────
   const usdcBalance = async () => { const { balances } = await client.getWalletBalance(wallet); return Number((balances as any[]).find(b => b.code === 'USDC' || b.asset === 'USDC')?.balance ?? 0); };
   const waitForUsdc = async (before: number, target: number) => {
     let landed = before;
     for (let i = 0; i < 40; i++) { landed = await usdcBalance(); if (landed - before >= target * 0.97) break; await new Promise(r => setTimeout(r, 6000)); }
     return Math.floor((landed - before) * 100) / 100;
   };
-  // Nigerian payout from `usd` USDC in the signed-in wallet (Weave plans + Pollar signs).
-  const payoutNigeria = async (usd: number, ng: NgDetails) => {
-    emit({ kind: 'stage', label: 'Opening the naira payout' });
-    const created = await createNigeriaSend(wallet, usd, ng);
+
+  const payoutAfrica = async (usd: number, dest: BankDestDetails) => {
+    const label = dest.countryName;
+    emit({ kind: 'stage', label: `Opening the ${label} payout` });
+    const created = await createBankSend(wallet, usd, dest, dest.fiatKey);
     emit({ kind: 'order', order: created.order });
     const { order, hash } = await executeNigeriaSend(created, signer, (s, d) => {
       emit({ kind: 'stage', label: s === 'pay' ? 'Paying from your wallet (sponsored)' : s === 'approve' ? 'Sign 1 of 2 — allow USDC to move' : s === 'bridge' ? 'Sign 2 of 2 — bridge' : s === 'submitting' ? 'Submitting' : 'Bridging to the payout' });
       if (s === 'done' && d) emit({ kind: 'tx', hash: d });
     }, (o) => emit({ kind: 'order', order: o }));
-    if (order.status !== 'completed') throw new Error(order.status === 'refunded' ? 'The transfer was refunded to your wallet.' : 'The naira payout could not be completed.');
+    if (order.status !== 'completed') throw new Error(order.status === 'refunded' ? 'The transfer was refunded to your wallet.' : `The ${label} payout could not be completed.`);
     return { order, hash };
   };
-  // Naira bank transfer into `dest` wallet (Weave deposit order); resolves when USDC lands.
+
   const depositNaira = async (ngn: number, dest: string) => {
     if (!input.payerBank) throw new Error('Tell us which bank you will pay from (for refunds).');
     emit({ kind: 'stage', label: 'Getting your transfer details' });
@@ -80,8 +88,7 @@ export async function runFlow(input: FlowInput, client: PollarClient, signer: Po
     if (final.status !== 'completed') throw new Error('The deposit could not be completed.');
     return final;
   };
-  // BOB on-ramp into `dest` wallet (Pollar; mocked on testnet). `bob` is what
-  // the user pays; the USDC that lands is the quote's net amount.
+
   const onrampBob = async (bob: number, dest: string) => {
     const { usdc, quote } = await usdcFromBobOnramp(client, bob);
     const before = await usdcBalance();
@@ -100,7 +107,7 @@ export async function runFlow(input: FlowInput, client: PollarClient, signer: Po
     emit({ kind: 'stage', label: 'Waiting for USDC to land in the wallet' });
     return { usdc, landed: dest === wallet ? await waitForUsdc(before, usdc) : usdc };
   };
-  // BOB off-ramp from the signed-in wallet (Pollar; mocked on testnet).
+
   const offrampBob = async (bob: number, bo: BoDetails) => {
     emit({ kind: 'stage', label: 'Sending bolivianos to your bank' });
     const q = await bestQuote(client, 'offramp', bob);
@@ -109,7 +116,6 @@ export async function runFlow(input: FlowInput, client: PollarClient, signer: Po
     if (out.stellarTxHash) emit({ kind: 'tx', hash: out.stellarTxHash });
     let status = out.status;
     if (!out.mocked && out.txId && status !== 'completed' && status !== 'failed') {
-      // Follow the provider for a bit; ACH can take longer than we want to hold the screen.
       emit({ kind: 'stage', label: `${out.provider} is processing the payout` });
       try { status = await client.pollRampTransaction(out.txId, { intervalMs: 8000, timeoutMs: 90_000 }); } catch { status = 'processing'; }
     }
@@ -118,18 +124,18 @@ export async function runFlow(input: FlowInput, client: PollarClient, signer: Po
     return { ...out, status, where };
   };
 
-  // ── the seven pairs ──────────────────────────────────────────────────────
-  if (to === 'ng') {
-    if (!input.ng) throw new Error('Add the recipient bank account.');
+  if (isAfricaSlug(to)) {
+    if (!input.bank) throw new Error('Add the recipient bank account.');
+    const dest = input.bank;
     if (from === 'bal') {
-      const { order, hash } = await payoutNigeria(amount, input.ng);
-      return { headline: 'Naira delivered', detail: `₦${Math.round(order.destAmount).toLocaleString()} to ${input.ng.accountName} · ${input.ng.bankName}`, hash };
+      const { order, hash } = await payoutAfrica(amount, dest);
+      return { headline: `${dest.currency} delivered`, detail: `${fmtDestAmount(order.destAmount, dest.currency, dest.symbol)} to ${dest.accountName} · ${dest.bankName}`, hash };
     }
     if (from === 'bob') {
       const { usdc, landed } = await onrampBob(amount, wallet);
       if (landed <= 0) throw new Error('The USDC from your BOB payment has not arrived yet.');
-      const { order, hash } = await payoutNigeria(Math.min(landed, usdc), input.ng);
-      return { headline: 'Naira delivered', detail: `Bs ${amount.toFixed(2)} → ₦${Math.round(order.destAmount).toLocaleString()} to ${input.ng.accountName}`, hash, mocked: true };
+      const { order, hash } = await payoutAfrica(Math.min(landed, usdc), dest);
+      return { headline: `${dest.currency} delivered`, detail: `Bs ${amount.toFixed(2)} → ${fmtDestAmount(order.destAmount, dest.currency, dest.symbol)} to ${dest.accountName}`, hash, mocked: true };
     }
   }
   if (to === 'bo') {
@@ -172,3 +178,20 @@ export async function runFlow(input: FlowInput, client: PollarClient, signer: Po
   }
   throw new Error('That combination is just a local transfer — no corridor needed.');
 }
+
+/** Build flow bank details from the countries list + form fields. */
+export function bankDestFromForm(
+  to: AfricaSlug,
+  bank: NigeriaRecipient,
+  country: AfricanCountry,
+): BankDestDetails {
+  return {
+    ...bank,
+    fiatKey: fiatKey(country.currency),
+    currency: country.currency,
+    symbol: country.symbol,
+    countryName: country.name,
+  };
+}
+
+export { isAfricaSlug, africaBySlug };

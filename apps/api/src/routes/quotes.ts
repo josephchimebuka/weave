@@ -7,7 +7,7 @@ import { requireAuth } from '../middleware/auth';
 import { Decimal } from 'decimal.js';
 import { parseAsset } from '../lib/assets';
 import { planRoute } from '../services/router.service';
-import { SANDBOX_NGN_RATE } from '../services/sandbox-executor';
+import { sandboxFiatRate } from '../services/sandbox-executor';
 import { fetchCryptoUsdPrice } from '../lib/crypto-usd-price';
 import { estimateFiatFromUsdOfframp } from '../lib/offramp-estimate';
 
@@ -64,8 +64,8 @@ router.get('/', requireAuth, async (req, res) => {
     async function fetchFiatRate(): Promise<{ sellRate: number; buyRate: number; sellQuoted: boolean; buyQuoted: boolean }> {
       if (!fiatCurrency) return { sellRate: 1, buyRate: 1, sellQuoted: false, buyQuoted: false };
       if (req.sandboxMode) {
-        // Sandbox quotes use the fixed rate so display matches sandbox execution.
-        return { sellRate: SANDBOX_NGN_RATE, buyRate: SANDBOX_NGN_RATE, sellQuoted: true, buyQuoted: true };
+        const rate = sandboxFiatRate(fiatCurrency);
+        return { sellRate: rate, buyRate: rate, sellQuoted: true, buyQuoted: true };
       }
       let rate: Awaited<ReturnType<typeof paycrest.getRate>>;
       try {

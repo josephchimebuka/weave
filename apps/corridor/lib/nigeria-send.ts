@@ -9,15 +9,24 @@ import { runBridge, type Stage } from './stellar-bridge';
 
 export interface NigeriaRecipient { bankCode: string; bankName: string; accountNumber: string; accountName: string }
 
-export async function createNigeriaSend(walletAddress: string, amountUsdc: number, r: NigeriaRecipient) {
+export async function createBankSend(
+  walletAddress: string,
+  amountUsdc: number,
+  r: NigeriaRecipient,
+  assetKey: string = NGN,
+) {
   const res = await weave('orders', { body: {
     source: { inline: { kind: 'crypto_wallet', assetKey: STELLAR_USDC, walletAddress } },
-    dest:   { inline: { kind: 'bank_account', assetKey: NGN, bankInstitution: r.bankCode, bankAccountIdentifier: r.accountNumber, bankAccountName: r.accountName } },
+    dest:   { inline: { kind: 'bank_account', assetKey, bankInstitution: r.bankCode, bankAccountIdentifier: r.accountNumber, bankAccountName: r.accountName } },
     amount: amountUsdc, amountIn: 'source', refundAddress: walletAddress,
   } });
   if (!res.ok) throw new Error(res.error || 'Could not start the transfer');
   return { order: res.data.order as any, nextAction: res.data.nextAction as any, amountUsdc };
 }
+
+/** @deprecated Use `createBankSend` with the target `fiat:*` key. */
+export const createNigeriaSend = (wallet: string, usdc: number, r: NigeriaRecipient) =>
+  createBankSend(wallet, usdc, r, NGN);
 
 export interface PollarSigner {
   // Mainnet (LI.FI/CCTP): sign Weave-built Soroban XDRs.

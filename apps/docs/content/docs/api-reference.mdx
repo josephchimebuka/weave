@@ -265,7 +265,7 @@ List supported bank institutions for a currency — use to populate bank pickers
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `currency` | `string` | required | ISO 4217 currency code, e.g. NGN |
+| `currency` | `string` | required | ISO 4217 currency code — `NGN`, `KES`, `UGX`, `TZS` for supported Paycrest corridors |
 
 **Request**
 
@@ -286,6 +286,33 @@ curl "https://api.paywithweave.com/api/v1/institutions?currency=NGN" \
 }
 ```
 
+### GET `/ramp/countries`
+
+List African fiat corridors exposed on the Paycrest off-ramp rail. Use the `currency` field with `/institutions` and in order `dest` (`assetKey: fiat:KES`, etc.).
+
+**Request**
+
+```bash
+curl https://api.paywithweave.com/api/v1/ramp/countries \
+  -H "x-api-key: pk_live_..."
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "code": "NG", "name": "Nigeria",  "currency": "NGN", "paymentMethods": ["bank_transfer", "mobile_money"] },
+    { "code": "KE", "name": "Kenya",    "currency": "KES", "paymentMethods": ["bank_transfer", "mobile_money"] },
+    { "code": "UG", "name": "Uganda",   "currency": "UGX", "paymentMethods": ["bank_transfer", "mobile_money"] },
+    { "code": "TZ", "name": "Tanzania", "currency": "TZS", "paymentMethods": ["bank_transfer", "mobile_money"] }
+  ]
+}
+```
+
+Payouts require Paycrest to quote the corridor in your environment. If `GET /quotes` returns a provider-unavailable error, the currency is listed but not open on the sender account yet.
+
 ### GET `/assets`
 
 List every supported fiat and crypto asset. Use the `key` field as the canonical asset identifier in other endpoints.
@@ -303,7 +330,10 @@ curl https://api.paywithweave.com/api/v1/assets
   "success": true,
   "data": {
     "fiat": [
-      { "key": "fiat:NGN", "name": "Nigerian Naira", "symbol": "₦", "country": "Nigeria" }
+      { "key": "fiat:NGN", "name": "Nigerian Naira",   "symbol": "₦",   "country": "Nigeria" },
+      { "key": "fiat:KES", "name": "Kenyan Shilling",  "symbol": "KSh", "country": "Kenya" },
+      { "key": "fiat:UGX", "name": "Ugandan Shilling", "symbol": "USh", "country": "Uganda" },
+      { "key": "fiat:TZS", "name": "Tanzanian Shilling","symbol": "TSh", "country": "Tanzania" }
     ],
     "crypto": [
       { "key": "crypto:BASE:USDC",  "id": "BASE",  "token": "USDC", "name": "Base" },
