@@ -166,7 +166,8 @@ export default function DemoClient({
   const weaveBankOk = weaveRail && !!fiatAccountName && accountOk && fiatBank !== 'SELECT AN INSTITUTION';
   const pollarBankOk = pollarRail && !!boBank && boAccount.length >= 6 && boHolder.trim().length > 2;
   const fiatDetailsOk = weaveRail ? weaveBankOk : pollarRail ? pollarBankOk : false;
-  const checkoutEnabled = payoutMode === 'crypto' || (payoutCountry.rail === 'weave' && amountOk && fiatDetailsOk);
+  // Greyscale only for invalid amount — same as pre-LatAm demo. Incomplete bank
+  // details still show the live widget (key stays "fiat-incomplete").
   const [resolvingName, setResolvingName] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
 
@@ -522,32 +523,34 @@ export default function DemoClient({
               </div>
 
               <div className="relative z-10 w-full flex justify-center">
-                <div className={`relative w-full max-w-[400px] transition-opacity duration-300 ${!checkoutEnabled && payoutMode === 'fiat' ? 'opacity-40 grayscale pointer-events-none' : (!amountOk && payoutMode === 'fiat' && weaveRail) ? 'opacity-40 grayscale pointer-events-none' : 'opacity-100'}`}>
-                {(soonRail || (pollarRail && payoutMode === 'fiat')) ? (
+                <div className={`relative w-full max-w-[400px] transition-opacity duration-300 ${!amountOk && payoutMode === 'fiat' ? 'opacity-40 grayscale pointer-events-none' : 'opacity-100'}`}>
+                {soonRail && payoutMode === 'fiat' ? (
                   <div className="w-full border border-[#E8EAE6] rounded-2xl p-6 bg-[#FAFAF7] flex flex-col gap-3 text-center">
-                    <div className="text-[11px] font-bold uppercase tracking-widest text-[#6B7572]">Weave checkout preview</div>
-                    {soonRail ? (
-                      <p className="text-sm text-[#3A4240]">Live widget checkout for {payoutCountry.name} is not enabled yet.</p>
-                    ) : (
-                      <>
-                        <p className="text-sm text-[#3A4240]">
-                          Payer still checks out with crypto via Weave. <strong>BOB</strong> lands in the bank through Pollar after USDC settles — same flow as{' '}
-                          <a href="https://corridor.paywithweave.com/app" className="text-[#0F5D4C] underline">Corridor</a>.
+                    <div className="text-[11px] font-bold uppercase tracking-widest text-[#6B7572]">Coming soon</div>
+                    <p className="text-sm text-[#3A4240]">Live bank payout for {payoutCountry.name} is not enabled yet. Pick an African country or USDC to wallet to try checkout.</p>
+                  </div>
+                ) : pollarRail && payoutMode === 'fiat' ? (
+                  <div className="w-full flex flex-col gap-4">
+                    <div className="w-full border border-[#E8EAE6] rounded-2xl p-5 bg-[#FAFAF7] flex flex-col gap-2 text-left">
+                      <div className="text-[11px] font-bold uppercase tracking-widest text-[#6B7572]">Bolivia · Pollar (not Weave checkout)</div>
+                      <p className="text-sm text-[#3A4240] leading-relaxed">
+                        BOB bank settlement runs through Pollar in{' '}
+                        <a href="https://corridor.paywithweave.com/app" className="text-[#0F5D4C] underline">Corridor</a>
+                        — same USDC → bolivianos path. To use the live Weave widget here, switch to <strong>USDC to wallet</strong>, or pick Nigeria / Kenya for African bank payout.
+                      </p>
+                      {pollarBankOk && amountOk && (
+                        <p className="text-xs font-mono text-[#6B7572]">
+                          {meta.symbol}{merchant.amount} → {BOB_BANKS.find(b => b.value === boBank)?.label} · {boAccount}
                         </p>
-                        {pollarBankOk && amountOk && (
-                          <p className="text-xs font-mono text-[#6B7572]">
-                            {meta.symbol}{merchant.amount} → {BOB_BANKS.find(b => b.value === boBank)?.label} · {boAccount}
-                          </p>
-                        )}
-                      </>
-                    )}
+                      )}
+                    </div>
                   </div>
                 ) : (
                 <WeaveCheckout
                   key={payoutMode === 'fiat'
                     ? (fiatDetailsOk
                       ? `fiat-${merchant.currency}-${fiatBank}-${fiatAccount}-${merchant.amount}`
-                      : 'fiat-incomplete')
+                      : `fiat-${merchant.currency}-incomplete-${merchant.amount}`)
                     : (cryptoAddress.length >= 42
                       ? `crypto-${cryptoAddress}-${merchant.amount}`
                       : 'crypto-incomplete')
@@ -558,13 +561,13 @@ export default function DemoClient({
                     destAssetKey: payoutMode === 'fiat'
                       ? `fiat:${merchant.currency}`
                       : `crypto:BASE:USDC`,
-                    destInstrument: payoutMode === 'fiat' ? {
+                    destInstrument: payoutMode === 'fiat' && fiatDetailsOk ? {
                       kind: 'bank_account',
                       assetKey: `fiat:${merchant.currency}`,
                       bankAccountName: fiatAccountName,
                       bankAccountIdentifier: fiatAccount,
                       bankInstitution: fiatBank,
-                    } : {
+                    } : payoutMode === 'fiat' ? undefined : {
                       kind: 'crypto_wallet',
                       assetKey: 'crypto:BASE:USDC',
                       walletAddress: cryptoAddress,
@@ -580,7 +583,7 @@ export default function DemoClient({
                   stellarPublicConfig={stellarPublicConfig ?? undefined}
                 />
                 )}
-                {!amountOk && merchant.amount > 0 && weaveRail && payoutMode === 'fiat' && (
+                {!amountOk && merchant.amount > 0 && payoutMode === 'fiat' && !soonRail && !pollarRail && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="bg-white/90 backdrop-blur-sm border border-red-100 px-6 py-4 rounded-2xl shadow-xl flex flex-col items-center gap-2 text-center">
                       <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
