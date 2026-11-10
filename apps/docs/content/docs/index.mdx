@@ -80,6 +80,9 @@ Every asset uses a canonical `crypto:CHAIN:TOKEN` or `fiat:CCY` identifier. Chai
 | Asset key | Meaning |
 | --- | --- |
 | `fiat:NGN` | Nigerian Naira |
+| `fiat:KES` | Kenyan Shilling |
+| `fiat:UGX` | Ugandan Shilling |
+| `fiat:TZS` | Tanzanian Shilling |
 | `crypto:BASE:USDC` | USDC on Base |
 | `crypto:ETHEREUM:ETH` | ETH on Ethereum |
 | `crypto:ETHEREUM:USDC` | USDC on Ethereum |
@@ -179,12 +182,16 @@ Weave routes automatically. Pass `flow` on `POST /orders` to control the bridge 
 | **Bachs** | `fiat:NGN → fiat:NGN` | `external` | 30 s – 2 min |
 | **NEAR Intents** | any chain → `crypto:BASE:USDC` | `external` | 30 – 90 s |
 | **ChainRails** | EVM → `crypto:BASE:USDC` | `self` | ~60 s |
-| **Paycrest** | `crypto:BASE:USDC ↔ fiat:NGN` | `automatic` | 30 s – 2 min |
+| **Paycrest** | `crypto:BASE:USDC ↔ fiat:NGN,KES,UGX,TZS` | `automatic` | 30 s – 2 min |
 
 - **Bachs** — direct naira collection: card & bank transfer through a hosted checkout, settled straight to the merchant bank.
 - **NEAR Intents** — cross-chain swap from 30+ chains. A deposit address is generated; the customer sends from any wallet.
 - **ChainRails** — EVM connected-wallet flow. The customer signs from their wallet — no deposit-address copy-paste. Lower fee than NEAR Intents.
-- **Paycrest** — automatic terminal settlement hop whenever a route touches NGN. Also handles onramps (NGN → USDC).
+- **Paycrest** — automatic terminal settlement hop whenever a route touches fiat (Africa: NGN, KES, UGX, TZS via bank transfer / mobile money). Also handles onramps where Paycrest quotes a buy leg (today primarily NGN → USDC). List live countries with `GET /ramp/countries`; confirm quotes before production (`GET /quotes?to=fiat:KES&…`).
+
+<Callout type="info">
+Latin America (e.g. Bolivia / BOB) is **not** on the Weave API Paycrest rail — it is available through **[Corridor](https://corridor.paywithweave.com)** via [Pollar](https://pollar.xyz) ramps.
+</Callout>
 
 ## Security model
 

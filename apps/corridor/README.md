@@ -63,7 +63,7 @@ Around that:
   Pollar for the BOB legs).
 - **A first-run tour** that walks a brand-new user through their first top-up.
 - **A test-mode switch** in the header (see below).
-- **Kenya, Uganda, Tanzania** shown as coming-soon recipients — same Weave rail as naira, not switched on yet.
+- **Kenya, Uganda, Tanzania** — same Weave off-ramp as naira (`fiat:KES` / `UGX` / `TZS`), selectable in the send flow.
 - **`/mainnet`** — the real mainnet transactions, re-checked against Horizon on
   every load, plus a hop-by-hop walkthrough of the mainnet path.
 
@@ -77,12 +77,10 @@ any new integration. Corridor is built country-agnostic to match:
 - `lib/countries.ts` is the single list of African countries — code, currency,
   symbol, pill colour and a `live` flag. The recipient pills, the landing and
   `/mainnet` all read from it.
-- Countries that are not live yet show as **"a bank in Kenya · SOON"** in the
-  send flow, with the reason on hover, so the scope is honest about what runs
-  today and what is one switch away.
-- Turning a country on is: Weave enables the currency → set `live: true` →
-  the pill becomes selectable. The order shape is the same
-  (`dest: { kind: 'bank_account', assetKey: 'fiat:KES', … }`).
+- Countries with `live: false` show as disabled **"· SOON"** pills; live rows
+  appear alongside Nigeria. Turning one on is: Paycrest quotes the currency →
+  set `live: true` in `lib/countries.ts` → add the fiat to `SUPPORTED_FIAT` in
+  `packages/shared` if the main Weave API should advertise it.
 
 ## Who does what
 

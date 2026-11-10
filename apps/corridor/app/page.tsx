@@ -7,7 +7,7 @@ import { usePollar } from '@pollar/react';
 import { GoogleButton } from '../components/GoogleButton';
 import { Coins, LandingShapes, Logo, useBoardScale } from '../components/Brand';
 import { useNetwork, MAINNET_LIVE } from '../lib/network';
-import { NEXT_AFRICA, NEXT_CURRENCIES } from '../lib/countries';
+import { LIVE_AFRICA, NEXT_AFRICA, NEXT_CURRENCIES } from '../lib/countries';
 import { DemoVideoLink } from '../components/DemoVideo';
 
 // Landing / sign-in (design handoff "Corridor Landing"). A fixed 1200×900 art
@@ -117,10 +117,12 @@ export default function Landing() {
             <h1 className="headline">Naira in Lagos.<br />Bolivianos in La Paz.<br /><span style={{ color: '#4F7A5C', fontStyle: 'italic' }}>Minutes, not days.</span></h1>
             <div className="bullets">
               {[
-                ['Send to Nigeria', 'USDC leaves your wallet, naira lands in any Nigerian bank in ~3 minutes.'],
+                ['Send across Africa', `USDC → ${LIVE_AFRICA.map(c => c.currency).join(', ')} to any bank (Weave off-ramp).`],
                 ['Add naira', 'pay by bank transfer, USDC arrives in your wallet.'],
                 ['Cash out in Bolivia', "BOB to your bank via Pollar's ramp."],
-                ['Next: ' + NEXT_AFRICA.map(c => c.name).join(', '), `${NEXT_CURRENCIES} on the same Weave rail — a switch away.`],
+                ...(NEXT_AFRICA.length > 0
+                  ? [['Next: ' + NEXT_AFRICA.map(c => c.name).join(', '), `${NEXT_CURRENCIES} on the same Weave rail — a switch away.`] as const]
+                  : [['Africa ↔ LatAm', 'Nigeria, Kenya, Uganda, Tanzania ↔ Bolivia on Stellar.'] as const]),
               ].map(([lead, rest]) => (
                 <div key={lead} style={{ font: '14px/1.5 var(--font-body)', color: '#2F4A3B' }}><strong style={{ fontWeight: 500 }}>{lead}</strong> — {rest}</div>
               ))}
