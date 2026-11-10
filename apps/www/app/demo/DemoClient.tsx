@@ -200,39 +200,38 @@ export default function DemoClient({
   useEffect(() => {
     if (!weaveRail || !accountOk || !fiatBank || fiatBank === 'SELECT AN INSTITUTION') return;
     setResolvingName(true);
-      setResolutionError(null);
+    setResolutionError(null);
 
-      fetch(`${apiUrl}/institutions/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          institution: fiatBank,
-          accountIdentifier: fiatAccount,
-          currency: merchant.currency,
-        }),
+    fetch(`${apiUrl}/institutions/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        institution: fiatBank,
+        accountIdentifier: fiatAccount,
+        currency: merchant.currency,
+      }),
+    })
+      .then(r => {
+        if (!r.ok) throw new Error(`Server returned ${r.status}`);
+        return r.json();
       })
-        .then(r => {
-          if (!r.ok) throw new Error(`Server returned ${r.status}`);
-          return r.json();
-        })
-        .then(resp => {
-          if (resp.success && resp.data) {
-            const resolvedName = resp.data === 'OK' ? '' : resp.data;
-            if (resolvedName) {
-              setFiatAccountName(resolvedName);
-            } else {
-              setResolutionError('Name lookup not available for this bank');
-            }
+      .then(resp => {
+        if (resp.success && resp.data) {
+          const resolvedName = resp.data === 'OK' ? '' : resp.data;
+          if (resolvedName) {
+            setFiatAccountName(resolvedName);
           } else {
-            setResolutionError('Could not resolve account name');
+            setResolutionError('Name lookup not available for this bank');
           }
-        })
-        .catch(err => {
-          console.error('Failed to resolve account name:', err);
-          setResolutionError('Resolution service timed out. Please enter name manually.');
-        })
-        .finally(() => setResolvingName(false));
-    }
+        } else {
+          setResolutionError('Could not resolve account name');
+        }
+      })
+      .catch(err => {
+        console.error('Failed to resolve account name:', err);
+        setResolutionError('Resolution service timed out. Please enter name manually.');
+      })
+      .finally(() => setResolvingName(false));
   }, [fiatAccount, fiatBank, accountOk, apiUrl, merchant.currency, weaveRail]);
 
   function onPayoutCountry(id: string) {
