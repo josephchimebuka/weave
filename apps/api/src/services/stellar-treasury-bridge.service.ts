@@ -206,13 +206,16 @@ export async function bridgeTreasuryUsdcToPaycrest(orderId: string, opts: { forc
     include: { steps: { orderBy: { sequence: 'asc' } } },
   });
   if (!order) throw new Error('Order not found');
-  const paycrestStep = order.steps.find(s => s.provider === 'paycrest' && s.status !== 'done');
-  if (!paycrestStep) throw new Error('No pending Paycrest step on this order');
+  const paycrestStep = order.steps.find(s => s.provider === 'paycrest');
+  if (!paycrestStep) throw new Error('No Paycrest step on this order');
 
   const prior = (paycrestStep.providerData as { treasuryBridge?: { bridgeTxHash?: string; ambiguous?: boolean } } | null)?.treasuryBridge;
   if (prior) {
     return { bridgeTxHash: prior.bridgeTxHash ?? null, skipped: prior.ambiguous ? 'needs_review' : 'already_bridged' };
   }
+  // A finished order is not an error: QStash retries a job after a late failure, and by then the
+  // order may have completed. Answering 200 stops the retries; throwing would keep them going.
+  if (paycrestStep.status === 'done') return { bridgeTxHash: null, skipped: 'already_bridged' };
 
   const originalStatus = paycrestStep.status;
   const claim = await prisma.routeStep.updateMany({

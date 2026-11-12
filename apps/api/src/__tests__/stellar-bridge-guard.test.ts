@@ -105,6 +105,16 @@ describe('bridgeTreasuryUsdcToPaycrest — runs at most once', () => {
     expect(m.sendTransaction).not.toHaveBeenCalled();
   });
 
+  it('a retry that arrives after the order completed is a clean skip, not an error (so QStash stops retrying)', async () => {
+    m.prisma.order.findUnique.mockResolvedValue(order({ status: 'done', providerData: { treasuryBridge: { bridgeTxHash: 'hash-1' } } }));
+    expect(await bridge()).toEqual({ bridgeTxHash: 'hash-1', skipped: 'already_bridged' });
+    // …even if the bridge was never recorded on a step that finished by another route:
+    m.prisma.order.findUnique.mockResolvedValue(order({ status: 'done', providerData: null }));
+    expect(await bridge()).toEqual({ bridgeTxHash: null, skipped: 'already_bridged' });
+    expect(m.prisma.routeStep.updateMany).not.toHaveBeenCalled();
+    expect(m.sendTransaction).not.toHaveBeenCalled();
+  });
+
   it('loses the claim → backs off without touching LI.FI or the treasury (concurrent run in progress)', async () => {
     m.prisma.routeStep.updateMany.mockResolvedValue({ count: 0 });
     expect(await bridge()).toEqual({ bridgeTxHash: null, skipped: 'in_progress' });
