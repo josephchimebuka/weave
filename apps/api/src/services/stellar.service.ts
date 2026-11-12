@@ -287,6 +287,44 @@ export async function publicConfigWithTreasuryStatus() {
 const STELLAR_POLL_DELAY_S = Math.max(1, Math.round(Number(process.env.STELLAR_POLL_INTERVAL_MS ?? 10_000) / 1000));
 
 /**
+ * Every poll is one QStash message, and the free plan allows 1,000 a day. Payers who are
+ * going to pay usually do so within a couple of minutes, so poll fast at first and back off:
+ * the base interval for the first 2 min, then 30 s until 10 min, then 60 s. A deposit that
+ * shows up late is still caught within a minute, but an order nobody pays costs ~50
+ * messages over a 30 min window instead of ~186.
+ */
+const POLL_STAGES: Array<{ untilSec: number; minDelaySec: number }> = [
+  { untilSec: 120, minDelaySec: 0 },
+  { untilSec: 600, minDelaySec: 30 },
+  { untilSec: Infinity, minDelaySec: 60 },
+];
+
+/** Seconds to wait before running poll number `attempt` (attempt 1 is scheduled at order creation). */
+export function stellarPollDelaySeconds(attempt: number, baseSec = STELLAR_POLL_DELAY_S): number {
+  const elapsed = stellarPollElapsedSeconds(attempt, baseSec);
+  const stage = POLL_STAGES.find(st => elapsed < st.untilSec)!;
+  return Math.max(baseSec, stage.minDelaySec);
+}
+
+/** Seconds from order creation until poll number `attempt` runs. */
+function stellarPollElapsedSeconds(attempt: number, baseSec: number): number {
+  let t = 0;
+  for (let n = 1; n < attempt; n++) {
+    const stage = POLL_STAGES.find(st => t < st.untilSec)!;
+    t += Math.max(baseSec, stage.minDelaySec);
+  }
+  return t;
+}
+
+/** Number of polls needed to keep watching for `ttlMinutes`, plus a small grace tail. */
+export function stellarPollMaxAttempts(ttlMinutes: number, baseSec = STELLAR_POLL_DELAY_S): number {
+  const windowSec = ttlMinutes * 60;
+  let n = 1;
+  while (stellarPollElapsedSeconds(n, baseSec) < windowSec) n++;
+  return n + 6;
+}
+
+/**
  * How long a treasury deposit address stays open for payment. 30 min suits a
  * wallet; an exchange withdrawal can take longer, so it is configurable
  * (5 min – 24 h). The poll window below is derived from it so the order never
@@ -296,7 +334,7 @@ export function stellarDepositTtlMinutes(): number {
   const n = Number(process.env.STELLAR_DEPOSIT_TTL_MINUTES ?? 30);
   return Number.isFinite(n) && n >= 5 && n <= 24 * 60 ? n : 30;
 }
-const STELLAR_POLL_MAX_ATTEMPTS = Math.ceil((stellarDepositTtlMinutes() * 60) / STELLAR_POLL_DELAY_S) + 6;
+const STELLAR_POLL_MAX_ATTEMPTS = stellarPollMaxAttempts(stellarDepositTtlMinutes());
 
 export async function scheduleStellarPoll(params: {
   orderId: string;
@@ -317,7 +355,7 @@ export async function scheduleStellarPoll(params: {
     await qstash.publishJSON({
       url: `${apiBase}/jobs/poll-stellar-step`,
       body: params,
-      delay: STELLAR_POLL_DELAY_S,
+      delay: stellarPollDelaySeconds(params.attempt),
     });
   } catch (err: any) {
     console.warn('[stellar] failed to schedule poll:', err.message);

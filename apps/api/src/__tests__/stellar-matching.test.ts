@@ -34,6 +34,7 @@ vi.mock('@stellar/stellar-sdk', async (orig) => {
 
 import {
   inspectMemoPayments, findMatchingPayment, stellarDepositTtlMinutes,
+  stellarPollDelaySeconds, stellarPollMaxAttempts,
 } from '../services/stellar.service';
 import { classifyDepositShape } from '../services/order-event.service';
 
@@ -186,5 +187,36 @@ describe('stellarDepositTtlMinutes', () => {
       process.env.STELLAR_DEPOSIT_TTL_MINUTES = v;
       expect(stellarDepositTtlMinutes()).toBe(30);
     }
+  });
+});
+
+describe('stellar poll backoff', () => {
+  const total = (ttlMin: number) => {
+    const max = stellarPollMaxAttempts(ttlMin, 10) - 6;
+    let t = 0;
+    for (let n = 1; n <= max; n++) t += stellarPollDelaySeconds(n, 10);
+    return t;
+  };
+
+  it('polls at the base interval first, then 30 s, then 60 s', () => {
+    expect(stellarPollDelaySeconds(1, 10)).toBe(10);
+    expect(stellarPollDelaySeconds(12, 10)).toBe(10);   // still inside the first 2 min
+    expect(stellarPollDelaySeconds(14, 10)).toBe(30);   // past 2 min
+    expect(stellarPollDelaySeconds(40, 10)).toBe(60);   // past 10 min
+  });
+
+  it('never goes faster than a base interval slower than the stage', () => {
+    expect(stellarPollDelaySeconds(1, 90)).toBe(90);
+    expect(stellarPollDelaySeconds(30, 90)).toBe(90);
+  });
+
+  it('uses far fewer messages than the flat 10 s poll for a 30 min window', () => {
+    const attempts = stellarPollMaxAttempts(30, 10);
+    expect(attempts).toBeLessThan(70);                  // was 186
+    expect(attempts).toBeGreaterThan(40);
+  });
+
+  it('still covers the whole deposit window', () => {
+    for (const ttl of [5, 30, 120, 1440]) expect(total(ttl)).toBeGreaterThanOrEqual(ttl * 60);
   });
 });

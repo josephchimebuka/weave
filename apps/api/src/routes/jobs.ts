@@ -489,6 +489,9 @@ router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
       provider: 'stellar',
       depositMemo: memo,
       status: { notIn: ['done', 'failed'] },
+      // A finished order has nothing left to watch for: stop the chain instead of
+      // spending a message per poll until max attempts.
+      order: { status: { notIn: ['completed', 'failed', 'refunded', 'expired'] } },
     },
     select: { id: true, amountIn: true, externalId: true, createdAt: true },
   });
