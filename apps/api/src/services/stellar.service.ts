@@ -334,7 +334,16 @@ export function stellarDepositTtlMinutes(): number {
   const n = Number(process.env.STELLAR_DEPOSIT_TTL_MINUTES ?? 30);
   return Number.isFinite(n) && n >= 5 && n <= 24 * 60 ? n : 30;
 }
-const STELLAR_POLL_MAX_ATTEMPTS = stellarPollMaxAttempts(stellarDepositTtlMinutes());
+/**
+ * How long the per-order QStash poll chain runs (default 5 min). After that the treasury
+ * sweep keeps watching for the rest of the deposit window, in one pass for every open
+ * order, so an abandoned order stops costing a message per poll.
+ */
+export function stellarPollChainMinutes(): number {
+  const n = Number(process.env.STELLAR_POLL_CHAIN_MINUTES ?? 5);
+  return Number.isFinite(n) && n >= 1 && n <= stellarDepositTtlMinutes() ? n : Math.min(5, stellarDepositTtlMinutes());
+}
+const STELLAR_POLL_MAX_ATTEMPTS = stellarPollMaxAttempts(stellarPollChainMinutes());
 
 export async function scheduleStellarPoll(params: {
   orderId: string;

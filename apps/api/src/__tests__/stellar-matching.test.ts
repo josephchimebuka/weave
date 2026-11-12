@@ -34,7 +34,7 @@ vi.mock('@stellar/stellar-sdk', async (orig) => {
 
 import {
   inspectMemoPayments, findMatchingPayment, stellarDepositTtlMinutes,
-  stellarPollDelaySeconds, stellarPollMaxAttempts,
+  stellarPollDelaySeconds, stellarPollMaxAttempts, stellarPollChainMinutes,
 } from '../services/stellar.service';
 import { classifyDepositShape } from '../services/order-event.service';
 
@@ -218,5 +218,26 @@ describe('stellar poll backoff', () => {
 
   it('still covers the whole deposit window', () => {
     for (const ttl of [5, 30, 120, 1440]) expect(total(ttl)).toBeGreaterThanOrEqual(ttl * 60);
+  });
+});
+
+describe('stellarPollChainMinutes', () => {
+  afterEach(() => { delete process.env.STELLAR_POLL_CHAIN_MINUTES; delete process.env.STELLAR_DEPOSIT_TTL_MINUTES; });
+
+  it('defaults to 5 minutes', () => {
+    expect(stellarPollChainMinutes()).toBe(5);
+  });
+  it('honours an override inside the deposit window', () => {
+    process.env.STELLAR_POLL_CHAIN_MINUTES = '10';
+    expect(stellarPollChainMinutes()).toBe(10);
+  });
+  it('ignores junk or a value longer than the deposit window', () => {
+    for (const v of ['abc', '0', '-1', '999']) {
+      process.env.STELLAR_POLL_CHAIN_MINUTES = v;
+      expect(stellarPollChainMinutes()).toBe(5);
+    }
+  });
+  it('an unpaid order costs few messages once the chain is short', () => {
+    expect(stellarPollMaxAttempts(5, 10)).toBeLessThan(30);   // was 186 for a 30 min window
   });
 });
