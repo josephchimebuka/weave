@@ -7,7 +7,7 @@ import { webhookService } from '../services/webhook.service';
 import { sendMerchantPaymentNotification, sendCustomerReceiptEmail, sendAdminKYBNotification } from '../services/email.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
-import { inspectMemoPayments, scheduleStellarPoll, STELLAR_POLL_MAX_ATTEMPTS } from '../services/stellar.service';
+import { inspectMemoPayments, scheduleStellarPoll, STELLAR_POLL_MAX_ATTEMPTS, stellarDepositTtlMinutes, stellarPollChainMinutes } from '../services/stellar.service';
 import { reportStellarDepositShape } from '../services/order-event.service';
 
 const router = Router();
@@ -471,6 +471,38 @@ router.post('/poll-near', verifyQStash, async (req, res) => {
 
 // ── Stellar per-step poll (Horizon payment detection) ───────────────────────
 
+type OpenStellarStep = { id: string; orderId: string; amountIn: unknown; externalId: string | null; createdAt: Date; depositMemo: string | null };
+
+/**
+ * One Horizon check of an open Stellar deposit step; marks it done when the payment is there.
+ * Shared by the per-order poll and the sweep so both advance the order identically.
+ */
+async function checkStellarDeposit(
+  step: OpenStellarStep,
+  memo: string,
+  expectedAmount?: number,
+): Promise<{ done: boolean; txHash?: string }> {
+  const insp = await inspectMemoPayments({
+    memo,
+    expectedAmount: expectedAmount ?? Number(step.amountIn),
+    since: step.createdAt,
+  });
+  await reportStellarDepositShape(step.orderId, insp);
+  if (insp.status !== 'matched') return { done: false };
+
+  const txHash = insp.payments[0].txHash;
+  await markStepDone({
+    provider: 'stellar',
+    externalId: step.externalId ?? memo,
+    depositMemo: memo,
+    amountOut: insp.total,
+  });
+  await prisma.routeStep.update({ where: { id: step.id }, data: { externalId: txHash } });
+  return { done: true, txHash };
+}
+
+const ORDER_TERMINAL = ['completed', 'failed', 'refunded', 'expired'];
+
 router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
   const { orderId, memo, expectedAmount, attempt } = req.body as {
     orderId: string;
@@ -489,8 +521,11 @@ router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
       provider: 'stellar',
       depositMemo: memo,
       status: { notIn: ['done', 'failed'] },
+      // A finished order has nothing left to watch for: stop the chain instead of
+      // spending a message per poll until max attempts.
+      order: { status: { notIn: ORDER_TERMINAL } },
     },
-    select: { id: true, amountIn: true, externalId: true, createdAt: true },
+    select: { id: true, orderId: true, amountIn: true, externalId: true, createdAt: true, depositMemo: true },
   });
 
   if (!step) {
@@ -498,30 +533,11 @@ router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
   }
 
   try {
-    const insp = await inspectMemoPayments({
-      memo,
-      expectedAmount: expectedAmount ?? Number(step.amountIn),
-      since: step.createdAt,
-    });
-    await reportStellarDepositShape(orderId, insp);
-
-    if (insp.status === 'matched') {
-      const txHash = insp.payments[0].txHash;
-      await markStepDone({
-        provider: 'stellar',
-        externalId: step.externalId ?? memo,
-        depositMemo: memo,
-        amountOut: insp.total,
-      });
-      await prisma.routeStep.update({
-        where: { id: step.id },
-        data: { externalId: txHash },
-      });
-      return res.json({ success: true, outcome: 'done', txHash });
-    }
+    const r = await checkStellarDeposit(step, memo, expectedAmount);
+    if (r.done) return res.json({ success: true, outcome: 'done', txHash: r.txHash });
 
     if (attempt >= STELLAR_POLL_MAX_ATTEMPTS) {
-      return res.json({ success: true, stopped: true, reason: 'max attempts reached' });
+      return res.json({ success: true, stopped: true, reason: 'chain window over; the sweep keeps watching' });
     }
 
     await scheduleStellarPoll({ orderId, memo, expectedAmount: expectedAmount ?? Number(step.amountIn), attempt: attempt + 1 });
@@ -565,12 +581,58 @@ router.post('/bridge-stellar-treasury', verifyQStash, async (req, res) => {
 
 const BRIDGE_SWEEP_BATCH = 2;
 
+const DEPOSIT_SWEEP_BATCH = 15;
+
+/**
+ * Long-tail deposit watcher. The per-order poll chain only runs for the first few minutes
+ * (each poll is a QStash message), so an order paid later than that, or one nobody pays,
+ * costs no more messages. This sweep checks all of them in one pass instead.
+ */
+async function sweepOpenStellarDeposits(): Promise<{ checked: number; matched: number; failed: number }> {
+  const now = Date.now();
+  // Skip what the chain still covers, and what is past its deposit window (+10 min slack).
+  const newest = new Date(now - stellarPollChainMinutes() * 60_000);
+  const oldest = new Date(now - (stellarDepositTtlMinutes() + 10) * 60_000);
+  const steps = await prisma.routeStep.findMany({
+    where: {
+      provider: 'stellar',
+      status: { notIn: ['done', 'failed'] },
+      depositMemo: { not: null },
+      createdAt: { gte: oldest, lte: newest },
+      order: { sandboxMode: false, status: { notIn: ORDER_TERMINAL } },
+    },
+    select: { id: true, orderId: true, amountIn: true, externalId: true, createdAt: true, depositMemo: true },
+    orderBy: { createdAt: 'asc' },
+    take: DEPOSIT_SWEEP_BATCH,
+  });
+  let matched = 0, failed = 0;
+  for (const step of steps) {
+    try {
+      const r = await checkStellarDeposit(step, step.depositMemo!);
+      if (r.done) matched++;
+    } catch (err: any) {
+      failed++;
+      console.warn(`[jobs] stellar deposit sweep failed for ${step.orderId}:`, err.message);
+    }
+  }
+  return { checked: steps.length, matched, failed };
+}
+
 router.post('/bridge-stellar-treasury-sweep', verifyQStash, async (_req, res) => {
   const { bridgeTreasuryUsdcToPaycrest, selectStuckBridgeOrders, isTreasuryBridgeEnabled } =
     await import('../services/stellar-treasury-bridge.service');
+
+  // Deposits first, so a payment found now can be bridged in the same run once it ages in.
+  let deposits = { checked: 0, matched: 0, failed: 0 };
+  try {
+    deposits = await sweepOpenStellarDeposits();
+    if (deposits.checked) console.log(`[jobs] stellar deposit sweep: checked ${deposits.checked}, matched ${deposits.matched}, failed ${deposits.failed}`);
+  } catch (err: any) {
+    console.warn('[jobs] stellar deposit sweep failed:', err.message);
+  }
   if (!isTreasuryBridgeEnabled()) {
     console.warn('[jobs] bridge-stellar-treasury-sweep: treasury bridge disabled (no WEAVE_STELLAR_SECRET_KEY or STELLAR_TREASURY_BRIDGE_ENABLED=false)');
-    return res.json({ success: true, disabled: true });
+    return res.json({ success: true, disabled: true, deposits });
   }
 
   const candidates = await prisma.order.findMany({
@@ -607,7 +669,7 @@ router.post('/bridge-stellar-treasury-sweep', verifyQStash, async (_req, res) =>
     }
   }
   // Always 200: one bad order must not make QStash retry-storm the whole sweep.
-  res.json({ success: true, stuck: stuck.length, attempted: results.length, results });
+  res.json({ success: true, deposits, stuck: stuck.length, attempted: results.length, results });
 });
 
 // ── Paystack subaccount re-sync (background retry) ──────────────────────────
