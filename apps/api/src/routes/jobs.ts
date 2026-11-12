@@ -568,20 +568,30 @@ const BRIDGE_SWEEP_BATCH = 2;
 router.post('/bridge-stellar-treasury-sweep', verifyQStash, async (_req, res) => {
   const { bridgeTreasuryUsdcToPaycrest, selectStuckBridgeOrders, isTreasuryBridgeEnabled } =
     await import('../services/stellar-treasury-bridge.service');
-  if (!isTreasuryBridgeEnabled()) return res.json({ success: true, disabled: true });
+  if (!isTreasuryBridgeEnabled()) {
+    console.warn('[jobs] bridge-stellar-treasury-sweep: treasury bridge disabled (no WEAVE_STELLAR_SECRET_KEY or STELLAR_TREASURY_BRIDGE_ENABLED=false)');
+    return res.json({ success: true, disabled: true });
+  }
 
   const candidates = await prisma.order.findMany({
     where: {
       sandboxMode: false,
       status: 'processing',
-      steps: { some: { provider: 'stellar', status: 'done' } },
+      // Filter on both legs in the database. Selecting only on the Stellar leg and taking the
+      // oldest 50 let old orders that will never bridge (Stellar done, Paycrest not claimable)
+      // crowd newer, genuinely stuck ones out of the batch.
+      AND: [
+        { steps: { some: { provider: 'stellar', status: 'done' } } },
+        { steps: { some: { provider: 'paycrest', status: { in: ['pending', 'awaiting_deposit'] } } } },
+      ],
     },
     select: { id: true, steps: { select: { sequence: true, provider: true, status: true, updatedAt: true, providerData: true } } },
-    orderBy: { createdAt: 'asc' },
-    take: 50,
+    orderBy: { createdAt: 'desc' },
+    take: 100,
   });
 
   const stuck = selectStuckBridgeOrders(candidates);
+  console.log(`[jobs] bridge-stellar-treasury-sweep: ${candidates.length} candidate(s), ${stuck.length} stuck`);
   const results: Array<{ orderId: string; outcome: string; error?: string }> = [];
   for (const orderId of stuck.slice(0, BRIDGE_SWEEP_BATCH)) {
     try {
