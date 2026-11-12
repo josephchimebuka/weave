@@ -5,6 +5,11 @@
  *   ORDER_ID=f9a38669-5066-48ac-b164-ec851601fb3b pnpm stellar:retry-bridge
  *
  * Local dev: ORDER_ID=... from a local test checkout, API on mainnet Stellar vars if bridging live.
+ *
+ * The bridge is guarded against running twice (the treasury is shared, so a duplicate
+ * spends another order's USDC). If it reports `already_bridged`, `in_progress` or
+ * `needs_review`, do NOT force it until you have confirmed on Stellar / LI.FI that no
+ * bridge transaction for this order landed, then:  FORCE=1 ORDER_ID=... pnpm stellar:retry-bridge
  */
 import 'dotenv/config';
 import { bridgeTreasuryUsdcToPaycrest } from '../src/services/stellar-treasury-bridge.service';
@@ -23,7 +28,7 @@ async function main() {
     console.error('Set ORDER_ID to the stuck order uuid');
     process.exit(1);
   }
-  const result = await bridgeTreasuryUsdcToPaycrest(orderId);
+  const result = await bridgeTreasuryUsdcToPaycrest(orderId, { force: process.env.FORCE === '1' });
   console.log('Bridge result:', result);
 }
 

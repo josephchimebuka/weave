@@ -556,6 +556,50 @@ router.post('/bridge-stellar-treasury', verifyQStash, async (req, res) => {
   }
 });
 
+// ── Treasury bridge sweep ───────────────────────────────────────────────────
+// Safety net for `bridge-stellar-treasury`. That job is published (to QStash) when the
+// Stellar deposit is confirmed; if the publish itself fails, nothing retries it and the
+// USDC sits in the treasury while the order stays `processing`. Schedule this in QStash
+// (every few minutes) to catch those. It uses the same guarded bridge call as the job,
+// so it can never bridge an order twice. Bounded per run: each bridge takes ~30s.
+
+const BRIDGE_SWEEP_BATCH = 2;
+
+router.post('/bridge-stellar-treasury-sweep', verifyQStash, async (_req, res) => {
+  const { bridgeTreasuryUsdcToPaycrest, selectStuckBridgeOrders, isTreasuryBridgeEnabled } =
+    await import('../services/stellar-treasury-bridge.service');
+  if (!isTreasuryBridgeEnabled()) return res.json({ success: true, disabled: true });
+
+  const candidates = await prisma.order.findMany({
+    where: {
+      sandboxMode: false,
+      status: 'processing',
+      steps: { some: { provider: 'stellar', status: 'done' } },
+    },
+    select: { id: true, steps: { select: { sequence: true, provider: true, status: true, updatedAt: true, providerData: true } } },
+    orderBy: { createdAt: 'asc' },
+    take: 50,
+  });
+
+  const stuck = selectStuckBridgeOrders(candidates);
+  const results: Array<{ orderId: string; outcome: string; error?: string }> = [];
+  for (const orderId of stuck.slice(0, BRIDGE_SWEEP_BATCH)) {
+    try {
+      const r = await bridgeTreasuryUsdcToPaycrest(orderId);
+      results.push({ orderId, outcome: r.skipped ?? 'bridged' });
+    } catch (err: any) {
+      console.warn(`[jobs] bridge-stellar-treasury-sweep failed for ${orderId}:`, err.message);
+      try {
+        const { recordServerEvent } = await import('../services/order-event.service');
+        recordServerEvent(orderId, 'treasury.bridge.failed', 'Treasury bridge failed (sweep)', { error: String(err?.message ?? err) });
+      } catch { /* ignore */ }
+      results.push({ orderId, outcome: 'failed', error: err.message });
+    }
+  }
+  // Always 200: one bad order must not make QStash retry-storm the whole sweep.
+  res.json({ success: true, stuck: stuck.length, attempted: results.length, results });
+});
+
 // ── Paystack subaccount re-sync (background retry) ──────────────────────────
 // Scheduled by schedulePaystackSyncRetry when a setup-time sync fails, so a
 // transient Paystack blip self-heals before any customer reaches checkout.
