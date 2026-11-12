@@ -24,11 +24,13 @@ import {
   isStellarEnabled,
   paymentMemoForOrder,
   scheduleStellarPoll,
+  stellarDepositTtlMinutes,
+  isTreasuryBridgeEnabled,
 } from './stellar.service';
 import { lifi, lifiAsset, fromBaseUnits, LIFI_STELLAR_CHAIN_ID, type LifiStep } from './lifi.service';
 import { stellarSimulator, simulatorMemoFor, STELLAR_SIMULATOR_PROVIDER } from './stellar-simulator.service';
 import * as Sentry from '@sentry/node';
-import { recordServerEvent } from './order-event.service';
+import { recordServerEvent, reportStellarDepositShape } from './order-event.service';
 import { recordAudit } from './audit.service';
 
 export interface ExecutorInput {
@@ -1187,6 +1189,8 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   const providerOverrides: Record<number, string> = {};
   let downstreamRecipient: string | null = null;
   let exactTargetUsdc: number | null = null;
+  // Expected LI.FI cost of the treasury bridge, recorded on the order's bridgeFeeUsd.
+  let treasuryBridgeFeeUsd = 0;
 
   console.log(`[executor] executing order ${orderId}: sourceAmount=${input.sourceAmount}, usdEquivalent=${input.usdEquivalent}`);
 
@@ -1337,6 +1341,18 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
           paycrestAmountIn = input.usdEquivalent * (1 - input.appFeeBps / 10000);
           exactTargetUsdc = paycrestAmountIn;
         }
+        // Behind the treasury bridge, Paycrest receives what LI.FI delivers, not what
+        // we collected: order it for the worst-case arrival. Ordering the full amount
+        // left a 7.8% shortfall on a $0.80 order, which Paycrest paid out pro rata and
+        // also charged a $0.02 transaction fee on.
+        if (!input.sandboxMode && plan.steps[i - 1]?.provider === 'stellar' && isTreasuryBridgeEnabled()) {
+          const arrival = await lifi.estimateStellarBridge(paycrestAmountIn);
+          if (arrival.arrivalMinUsd > 0 && arrival.arrivalMinUsd < paycrestAmountIn) {
+            console.log(`[executor] sizing paycrest order for bridge arrival: ${paycrestAmountIn} -> ${arrival.arrivalMinUsd} (${arrival.source})`);
+            treasuryBridgeFeeUsd = arrival.feeUsd;
+            paycrestAmountIn = arrival.arrivalMinUsd;
+          }
+        }
         exec = await runPaycrestOfframp(step, paycrestAmountIn, stepRef, input.merchantMemo, WEAVE_EVM_REFUND_ADDRESS, input.destBank);
       } else {
         if (!input.refundAccount) throw new Error('paycrest onramp requires refundAccount');
@@ -1384,7 +1400,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
         amountOut: amountIn - feeUsd,
         depositAddress: treasury,
         depositMemo: memo,
-        expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        expiresAt: new Date(Date.now() + stellarDepositTtlMinutes() * 60 * 1000).toISOString(),
         feeUsd,
       };
     } else if (step.provider === 'lifi') {
@@ -1523,7 +1539,7 @@ export async function executeOrder(input: ExecutorInput): Promise<ExecuteResult>
   const totalBridgeFee = executions.reduce((s, e, i) => {
     const p = plan.steps[i].provider;
     return s + ((p === 'chainrails' || p === 'nearintents' || p === 'lifi') ? e.feeUsd : 0);
-  }, 0);
+  }, 0) + treasuryBridgeFeeUsd;
   const senderFeeUsd = input.usdEquivalent * (SENDER_FEE_BPS / 10000);
   const appFeeUsd = input.usdEquivalent * (APP_FEE_BPS / 10000);
 
@@ -1972,23 +1988,26 @@ export async function syncOrder(
         }
       } else if (step.provider === 'stellar' && step.depositMemo) {
         console.log(`[sync] checking Stellar Horizon for step ${step.id} memo ${step.depositMemo}`);
-        const { findMatchingPayment } = await import('./stellar.service');
-        const match = await findMatchingPayment({
+        const { inspectMemoPayments } = await import('./stellar.service');
+        const insp = await inspectMemoPayments({
           memo: step.depositMemo,
           expectedAmount: Number(step.amountIn),
+          since: step.createdAt,
         });
-        if (match) {
-          console.log(`[sync] Stellar payment confirmed: ${match.txHash}`);
+        await reportStellarDepositShape(step.orderId, insp);
+        if (insp.status === 'matched') {
+          const txHash = insp.payments[0].txHash;
+          console.log(`[sync] Stellar payment confirmed: ${txHash}`);
           await markStepDone({
             provider: 'stellar',
             externalId: step.externalId ?? step.depositMemo,
             depositMemo: step.depositMemo,
-            amountOut: match.amount,
+            amountOut: insp.total,
           });
           // Persist tx hash on the step for merchant dashboard visibility.
           await prisma.routeStep.update({
             where: { id: step.id },
-            data: { externalId: match.txHash },
+            data: { externalId: txHash },
           });
         }
       }

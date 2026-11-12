@@ -43,3 +43,14 @@ export function isWeaveDemoPublishableKey(key: string | undefined): boolean {
     .filter(Boolean);
   return allowed.includes(k);
 }
+
+// Anonymous Stellar deposits. 1Click refuses every Stellar-ORIGIN quote, so a
+// Stellar USDC payer we can't ask for a signature (an exchange, a phone wallet,
+// a payment link) has no NEAR route. With this on, `planRoute` collects their
+// USDC on the Weave treasury (address + per-order memo) and settles it through
+// the treasury bridge instead. Off by default: it must not be enabled before the
+// matching/recovery hardening is in place. Fiat payouts only for now — the
+// treasury bridge forwards to Paycrest, nothing else. Read at call time.
+export function stellarAnonymousDepositsEnabled(): boolean {
+  return process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED === 'true';
+}

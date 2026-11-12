@@ -6,10 +6,12 @@ import { paystack } from '../services/paystack.service';
 import { requireAuth } from '../middleware/auth';
 import { Decimal } from 'decimal.js';
 import { parseAsset } from '../lib/assets';
-import { planRoute } from '../services/router.service';
+import { planRoute, type RoutePlan } from '../services/router.service';
 import { sandboxFiatRate } from '../services/sandbox-executor';
 import { fetchCryptoUsdPrice } from '../lib/crypto-usd-price';
 import { estimateFiatFromUsdOfframp } from '../lib/offramp-estimate';
+import { lifi } from '../services/lifi.service';
+import { resolveDestAnchoredUsd } from '../services/offramp-pricing';
 
 const router = Router();
 
@@ -97,20 +99,19 @@ router.get('/', requireAuth, async (req, res) => {
       src.kind === 'crypto' ? fetchCryptoUsdPrice(from) : Promise.resolve(1),
     ]);
 
-    const usdEquivalent = (() => {
+    const flow = (String(req.query.flow ?? 'external')) as 'self' | 'external' | 'stellar';
+    // Dest-anchored offramps need the route BEFORE they can be priced (the fee
+    // depends on which hops are in it), so plan early and reuse it below.
+    let earlyPlan: RoutePlan | undefined;
+
+    const usdEquivalent = await (async () => {
       if (src.kind === 'crypto' && dst.kind === 'fiat') {
         if (amountIn === 'source') return amount * srcPrice;
-        
-        // Dest-anchored: `amount` is the exact fiat the merchant MUST receive.
-        const targetFiat = new Decimal(amount);
-        const sr = new Decimal(sellRate);
-        
-        // Match the linear subtraction in line 115: netUsd = usdEquivalent * (1 - fees)
-        // So usdEquivalent = netUsd / (1 - fees)
-        const totalFeeRate = new Decimal(SENDER_FEE_BPS + APP_FEE_BPS + SLIPPAGE_BUFFER_BPS).div(10000);
-        const netUsdc = targetFiat.div(sr);
-        
-        return netUsdc.div(new Decimal(1).minus(totalFeeRate)).toNumber();
+
+        // Dest-anchored: `amount` is the exact fiat the merchant MUST receive. Priced
+        // by the same function `/orders` uses, so the amount quoted is the amount charged.
+        earlyPlan = planRoute({ sourceAsset: from, destAsset: to, amount, flow });
+        return resolveDestAnchoredUsd({ targetFiat: amount, sellRate, plan: earlyPlan, sandbox: req.sandboxMode });
       }
       if (src.kind === 'fiat' && dst.kind === 'crypto') {
         // Onramp: source is fiat; dest is USDC-equivalent.
@@ -127,8 +128,7 @@ router.get('/', requireAuth, async (req, res) => {
       });
     }
 
-    const flow = (String(req.query.flow ?? 'external')) as 'self' | 'external' | 'stellar';
-    const plan = planRoute({ sourceAsset: from, destAsset: to, amount: usdEquivalent, flow });
+    const plan = earlyPlan ?? planRoute({ sourceAsset: from, destAsset: to, amount: usdEquivalent, flow });
 
     // Bridge-fee snapshot. ChainRails gives us a live figure; for NEAR Intents
     // we book the slippage buffer as bridge fee so the breakdown reflects the
@@ -158,14 +158,27 @@ router.get('/', requireAuth, async (req, res) => {
 
     const isPurePaystack = plan.steps.length === 1 && plan.steps[0].provider === 'paystack';
 
+    let paycrestFeeUsd = 0; // Paycrest's per-order fee (protocol-set, read live); only for crypto → fiat
+    let paycrestFeeKnown: boolean | null = null; // false = Paycrest hasn't shown us its fee yet
     let senderFeeUsd = usdEquivalent * (SENDER_FEE_BPS / 10000);
     let appFeeUsd    = usdEquivalent * (APP_FEE_BPS    / 10000);
     let netUsd       = usdEquivalent - senderFeeUsd - appFeeUsd - bridgeFeeUsd;
     let finalSourceAmount = usdEquivalent;
 
     if (src.kind === 'crypto' && dst.kind === 'fiat' && !isPurePaystack) {
-      const est = estimateFiatFromUsdOfframp(usdEquivalent, sellRate, plan);
+      // Stellar-origin hops cost a live, size-dependent amount (0.25% via CCTP from
+      // ~$2, ~7.9% over Layerswap at $0.80) — price the real route, not a guess.
+      const stellarBridgeFeeUsd = await lifi.stellarBridgeFeeForPlan(plan, usdEquivalent, { sandbox: req.sandboxMode });
+      // Source-anchored NEAR hops are priced live too. (Dest-anchored keeps the flat
+      // buffer: for exact-output orders it is partly an appFee paid to Weave.)
+      const nearCostBps = amountIn === 'source'
+        ? await nearIntents.costBpsForPlan(plan, usdEquivalent, { sandbox: req.sandboxMode })
+        : undefined;
+      const paycrestFee = await paycrest.feeForPlan(plan, { sandbox: req.sandboxMode });
+      paycrestFeeKnown = paycrestFee ? paycrestFee.known : null;
+      const est = estimateFiatFromUsdOfframp(usdEquivalent, sellRate, plan, { stellarBridgeFeeUsd, nearCostBps, paycrestFeeUsd: paycrestFee?.feeUsd });
       bridgeFeeUsd = est.bridgeFeeUsd;
+      paycrestFeeUsd = est.paycrestFeeUsd;
       senderFeeUsd = est.senderFeeUsd;
       appFeeUsd = est.appFeeUsd;
       netUsd = est.netUsd;
@@ -207,6 +220,8 @@ router.get('/', requireAuth, async (req, res) => {
           senderFeeUsd,
           appFeeUsd,
           bridgeFeeUsd,
+          paycrestFeeUsd,
+          paycrestFeeKnown,
           netUsd,
           sellRate: sellQuoted ? sellRate : null,
           buyRate:  buyQuoted  ? buyRate  : null,

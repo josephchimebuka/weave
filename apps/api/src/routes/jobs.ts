@@ -7,7 +7,8 @@ import { webhookService } from '../services/webhook.service';
 import { sendMerchantPaymentNotification, sendCustomerReceiptEmail, sendAdminKYBNotification } from '../services/email.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { syncPaystackSubaccount, schedulePaystackSyncRetry } from '../lib/merchant';
-import { findMatchingPayment, scheduleStellarPoll, STELLAR_POLL_MAX_ATTEMPTS } from '../services/stellar.service';
+import { inspectMemoPayments, scheduleStellarPoll, STELLAR_POLL_MAX_ATTEMPTS } from '../services/stellar.service';
+import { reportStellarDepositShape } from '../services/order-event.service';
 
 const router = Router();
 
@@ -489,7 +490,7 @@ router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
       depositMemo: memo,
       status: { notIn: ['done', 'failed'] },
     },
-    select: { id: true, amountIn: true, externalId: true },
+    select: { id: true, amountIn: true, externalId: true, createdAt: true },
   });
 
   if (!step) {
@@ -497,23 +498,26 @@ router.post('/poll-stellar-step', verifyQStash, async (req, res) => {
   }
 
   try {
-    const match = await findMatchingPayment({
+    const insp = await inspectMemoPayments({
       memo,
       expectedAmount: expectedAmount ?? Number(step.amountIn),
+      since: step.createdAt,
     });
+    await reportStellarDepositShape(orderId, insp);
 
-    if (match) {
+    if (insp.status === 'matched') {
+      const txHash = insp.payments[0].txHash;
       await markStepDone({
         provider: 'stellar',
         externalId: step.externalId ?? memo,
         depositMemo: memo,
-        amountOut: match.amount,
+        amountOut: insp.total,
       });
       await prisma.routeStep.update({
         where: { id: step.id },
-        data: { externalId: match.txHash },
+        data: { externalId: txHash },
       });
-      return res.json({ success: true, outcome: 'done', txHash: match.txHash });
+      return res.json({ success: true, outcome: 'done', txHash });
     }
 
     if (attempt >= STELLAR_POLL_MAX_ATTEMPTS) {

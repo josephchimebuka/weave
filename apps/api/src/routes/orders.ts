@@ -12,6 +12,8 @@ import { paycrest, rateUnavailable } from '../services/paycrest.service';
 import { nearIntents, classifyNearStatus } from '../services/nearintents.service';
 import { fetchCryptoUsdPrice } from '../lib/crypto-usd-price';
 import { estimateFiatFromUsdOfframp } from '../lib/offramp-estimate';
+import { lifi } from '../services/lifi.service';
+import { resolveDestAnchoredUsd } from '../services/offramp-pricing';
 import { Decimal } from 'decimal.js';
 import { basicMonthlyOrderLimit, isWeaveDemoPublishableKey } from '../lib/flags';
 
@@ -248,18 +250,13 @@ router.post('/', requireAuth, async (req, res) => {
           // Offramp: User pays crypto (sourceAmount), Merchant gets target fiat (body.amount)
           destAmountFiat = body.amount;
           const targetFiat = new Decimal(body.amount);
-          const sr = new Decimal(sellRate);
-          const senderFeePct = new Decimal(SENDER_FEE_BPS).div(10000);
-
-          const netUsdc = targetFiat.div(sr);
-          const targetUsdc = netUsdc.div(new Decimal(1).minus(senderFeePct));
-
           const hasSwap = plan.steps.some(s => s.provider === 'nearintents');
-          const appFeePct = new Decimal(APP_FEE_BPS).div(10000);
-          const slippagePct = hasSwap ? new Decimal(SLIPPAGE_BUFFER_BPS).div(10000) : new Decimal(0);
-          const totalUsdc = targetUsdc.div(new Decimal(1).minus(appFeePct).minus(slippagePct));
 
-          usdEquivalent = totalUsdc.toNumber();
+          // Same function `/quotes` prices with — includes the live Stellar bridge cost.
+          usdEquivalent = await resolveDestAnchoredUsd({
+            targetFiat: body.amount, sellRate, plan, sandbox: req.sandboxMode,
+          });
+          // Sizes the exact-output Paycrest order (and NEAR's appFee): unchanged.
           appFeeBps = APP_FEE_BPS + (hasSwap ? SLIPPAGE_BUFFER_BPS : 0);
         } else if (srcP.kind === 'fiat' && dstP.kind === 'crypto') {
           // Onramp: User pays fiat (sourceAmount), Merchant gets target crypto value (body.amount in fiat)
@@ -323,7 +320,10 @@ router.post('/', requireAuth, async (req, res) => {
           const srcPrice = await fetchCryptoUsdPrice(sourceInstrument.assetKey);
           usdEquivalent = body.amount * srcPrice;
           if (dstP.kind === 'fiat') {
-            const est = estimateFiatFromUsdOfframp(usdEquivalent, sellRate, plan);
+            const stellarBridgeFeeUsd = await lifi.stellarBridgeFeeForPlan(plan, usdEquivalent, { sandbox: req.sandboxMode });
+            const nearCostBps = await nearIntents.costBpsForPlan(plan, usdEquivalent, { sandbox: req.sandboxMode });
+            const paycrestFee = await paycrest.feeForPlan(plan, { sandbox: req.sandboxMode });
+            const est = estimateFiatFromUsdOfframp(usdEquivalent, sellRate, plan, { stellarBridgeFeeUsd, nearCostBps, paycrestFeeUsd: paycrestFee?.feeUsd });
             destAmountFiat = est.estimatedDest;
             appFeeBps = est.appFeeBps;
           }
@@ -334,19 +334,12 @@ router.post('/', requireAuth, async (req, res) => {
       }
 
       if (srcP.kind === 'crypto' && body.amountIn === 'dest' && (!sourceAmount || sourceAmount === 0)) {
-        try {
-          const token = await nearIntents.resolveToken(sourceInstrument.assetKey);
-          if (token.price > 0) {
-            sourceAmount = usdEquivalent / token.price;
-          } else if (sourceInstrument.assetKey.toUpperCase().includes('USD')) {
-            sourceAmount = usdEquivalent;
-          }
-        } catch (err: any) {
-          console.warn(`[orders] failed to resolve price for ${sourceInstrument.assetKey}, using fallback:`, err.message);
-          if (sourceInstrument.assetKey.toUpperCase().includes('USD')) {
-            sourceAmount = usdEquivalent;
-          }
-        }
+        // Convert USD → the payer's token with the SAME price source `/quotes` uses
+        // (fetchCryptoUsdPrice). This branch used NEAR's own token price, so the order
+        // asked for a slightly different amount than the quote showed (0.05% on USDC,
+        // more on volatile tokens).
+        const srcPrice = await fetchCryptoUsdPrice(sourceInstrument.assetKey);
+        sourceAmount = srcPrice > 0 ? usdEquivalent / srcPrice : usdEquivalent;
       }
     } catch (err: any) {
       if (!closedCorridor) console.error(`[orders] calculation error:`, err.message);

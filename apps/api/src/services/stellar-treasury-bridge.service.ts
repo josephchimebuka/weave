@@ -9,17 +9,14 @@
 
 import { Keypair, TransactionBuilder, rpc } from '@stellar/stellar-sdk';
 import { prisma } from '../lib/prisma';
-import { getNetworkPassphrase, getTreasuryPublicKey } from './stellar.service';
+import { getNetworkPassphrase, getTreasuryPublicKey, isTreasuryBridgeEnabled } from './stellar.service';
 import { lifi, lifiAsset, LIFI_STELLAR_CHAIN_ID, type LifiStep } from './lifi.service';
 import { syncOrder } from './executor.service';
 import { recordServerEvent } from './order-event.service';
 
 const SOROBAN_RPC_URL = process.env.STELLAR_SOROBAN_RPC_URL || 'https://mainnet.sorobanrpc.com';
 
-export function isTreasuryBridgeEnabled(): boolean {
-  if (process.env.STELLAR_TREASURY_BRIDGE_ENABLED === 'false') return false;
-  return Boolean(process.env.WEAVE_STELLAR_SECRET_KEY);
-}
+export { isTreasuryBridgeEnabled };
 
 async function signAndSubmitSorobanXdr(unsignedXdr: string, secret: string): Promise<string> {
   const kp = Keypair.fromSecret(secret);
