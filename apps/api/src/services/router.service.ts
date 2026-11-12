@@ -44,6 +44,18 @@ export interface RoutePlan {
   summary: string;
 }
 
+// ── Origins NEAR Intents currently can't take ──────────────────────────────
+// 1Click lists Stellar in /tokens but answers every Stellar-ORIGIN quote with
+// "Quoting for this pair is not available" (SIMPLE: "Incorrect depositMode").
+// Planning a route through it would pass /quotes and then fail at order
+// creation with no deposit address, so we refuse up front instead. Stellar as a
+// destination is unaffected. Comma-separated chains; set to an empty string to
+// re-enable once 1Click supports it again.
+const NEAR_UNAVAILABLE_ORIGINS = new Set(
+  (process.env.NEAR_INTENTS_DISABLED_ORIGINS ?? 'STELLAR')
+    .split(',').map(c => c.trim().toUpperCase()).filter(Boolean),
+);
+
 // ── Edges ───────────────────────────────────────────────────────────────────
 
 type Edge = {
@@ -131,7 +143,7 @@ const EDGES: Edge[] = [
   // allowlist. Same-chain USDC→USDC is rejected below (no swap needed).
   {
     provider: 'nearintents',
-    from: (a) => a.kind === 'crypto' && nearIntents.chainIsKnown(a.chain),
+    from: (a) => a.kind === 'crypto' && nearIntents.chainIsKnown(a.chain) && !NEAR_UNAVAILABLE_ORIGINS.has(a.chain.toUpperCase()),
     to: (a) => a.kind === 'crypto' && a.token === 'USDC' && (a.chain === 'BASE' || a.chain === 'STELLAR'),
     expectedFeeBps: 25,
     expectedSecs: 90,
@@ -247,6 +259,14 @@ export function planRoute(req: RouteRequest): RoutePlan {
         queue.push({ asset: nextAsset, key: nextKey, path: nextPath });
       }
     }
+  }
+
+  if (src.kind === 'crypto' && NEAR_UNAVAILABLE_ORIGINS.has(src.chain.toUpperCase()) && flow === 'external') {
+    console.log(`[router] ${src.chain} origin unavailable via NEAR Intents: ${req.sourceAsset} -> ${req.destAsset}`);
+    throw new Error(
+      `Paying from ${src.chain[0] + src.chain.slice(1).toLowerCase()} without a connected wallet isn't available right now. ` +
+      `Connect a ${src.chain[0] + src.chain.slice(1).toLowerCase()} wallet, or pay from another network.`,
+    );
   }
 
   console.log(`[router] NO ROUTE FOUND for ${req.sourceAsset} -> ${req.destAsset}`);

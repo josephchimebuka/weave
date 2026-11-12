@@ -40,10 +40,13 @@ describe('planRoute', () => {
   // wallet we cannot ask for a signature, so LI.FI (which has no deposit
   // address, only an XDR to sign) must not be planned. NEAR Intents issues a
   // Stellar address + memo, which is what those screens render.
-  it('USDC(Stellar) → NGN with an anonymous payer: nearintents, not lifi', () => {
-    const plan = planRoute({ sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50 });
-    expect(plan.steps.map(s => s.provider)).toEqual(['nearintents', 'paycrest']);
-    expect(plan.steps[0].toAsset).toBe('crypto:BASE:USDC');
+  // 1Click currently refuses every Stellar-ORIGIN quote ("pair not available"),
+  // so an anonymous Stellar payer must be refused at quote time rather than
+  // quoted and then failed at order creation with no deposit address.
+  it('USDC(Stellar) → NGN with an anonymous payer: refused up front, never lifi or nearintents', () => {
+    expect(() =>
+      planRoute({ sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50 }),
+    ).toThrow(/without a connected wallet isn't available/);
   });
 
   it('USDC(Stellar) → NGN with flow stellar: treasury collect then paycrest offramp', () => {
@@ -58,8 +61,14 @@ describe('planRoute', () => {
     expect(plan.steps[1].toAsset).toBe('fiat:NGN');
   });
 
-  it('XLM(Stellar) → NGN: still nearintents (lifi edge is USDC-only)', () => {
-    const plan = planRoute({ sourceAsset: 'crypto:STELLAR:XLM', destAsset: 'fiat:NGN', amount: 500 });
+  it('XLM(Stellar) → NGN: refused (lifi edge is USDC-only, nearintents has no Stellar origin)', () => {
+    expect(() =>
+      planRoute({ sourceAsset: 'crypto:STELLAR:XLM', destAsset: 'fiat:NGN', amount: 500 }),
+    ).toThrow(/isn't available/);
+  });
+
+  it('other origins still route through nearintents (Solana → NGN)', () => {
+    const plan = planRoute({ sourceAsset: 'crypto:SOLANA:USDC', destAsset: 'fiat:NGN', amount: 50 });
     expect(plan.steps.map(s => s.provider)).toEqual(['nearintents', 'paycrest']);
   });
 

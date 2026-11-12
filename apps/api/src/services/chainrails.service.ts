@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 
 import { CHAIN_ENUM, TOKENS, TokenInfo } from '../lib/registry';
+import { toSmallestUnit } from '../lib/units';
 
 export function resolveChain(symbol: string): string {
   const e = CHAIN_ENUM[symbol.toUpperCase()];
@@ -14,17 +15,7 @@ export function resolveToken(chainEnum: string, symbol: string): TokenInfo {
   return t;
 }
 
-/** Human amount → smallest-unit integer string (e.g., 100 USDC @ 6 dec → "100000000"). */
-export function toSmallestUnit(amount: number | string, decimals: number): string {
-  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  if (!Number.isFinite(num)) return '0';
-  
-  // Use toFixed to avoid scientific notation (1e-7 -> 0.0000001)
-  const fixed = num.toFixed(decimals);
-  const [whole, frac = ''] = fixed.split('.');
-  const combined = (whole + frac).replace(/^0+/, '');
-  return combined || '0';
-}
+export { toSmallestUnit };
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

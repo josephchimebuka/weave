@@ -10,6 +10,7 @@
 
 import { parseAsset } from '../lib/assets';
 import { CHAIN_ENUM, TOKENS } from '../lib/registry';
+import { toSmallestUnit } from '../lib/units';
 
 // ── Chain mapping ───────────────────────────────────────────────────────────
 // Our canonical chain name (uppercase) → NEAR Intents `blockchain` enum.
@@ -17,7 +18,15 @@ import { CHAIN_ENUM, TOKENS } from '../lib/registry';
 
 // Chains that route via memo rather than a plain deposit address. NEAR Intents
 // requires depositMode:'MEMO' for these; all others use 'SIMPLE'.
-const MEMO_CHAINS = new Set(['STELLAR', 'XRP', 'TON', 'NEAR']);
+// NEAR itself is NOT here: 1Click rejects MEMO for near-origin assets with
+// "Incorrect depositMode" (verified against USDC + wNEAR from NEAR).
+const MEMO_CHAINS = new Set(['STELLAR', 'XRP', 'TON']);
+
+// Native assets 1Click lists under their wrapped symbol, keyed `CHAIN:SYMBOL`.
+// (NEAR → nep141:wrap.near, listed as wNEAR.)
+const NATIVE_SYMBOL_ALIASES: Record<string, string> = {
+  'NEAR:NEAR': 'WNEAR',
+};
 
 const CHAIN_TO_NEAR: Record<string, string> = {
   NEAR:      'near',
@@ -157,17 +166,7 @@ export interface NearStatusResponse {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Human amount → smallest-unit integer string. Handles scientific notation. */
-export function toSmallestUnit(amount: number | string, decimals: number): string {
-  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  if (!Number.isFinite(num)) return '0';
-  
-  // Use toFixed to avoid scientific notation (1e-7 -> 0.0000001)
-  const fixed = num.toFixed(decimals);
-  const [whole, frac = ''] = fixed.split('.');
-  const combined = (whole + frac).replace(/^0+/, '');
-  return combined || '0';
-}
+export { toSmallestUnit };
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
@@ -223,7 +222,8 @@ export class NearIntentsService {
     const a = parseAsset(key);
     if (a.kind !== 'crypto') throw new Error(`NEAR Intents: fiat asset ${key} not supported`);
     const blockchain = chainToNear(a.chain);
-    const symbol     = a.token.toUpperCase();
+    const requested  = a.token.toUpperCase();
+    const symbol     = NATIVE_SYMBOL_ALIASES[`${a.chain.toUpperCase()}:${requested}`] ?? requested;
     const tokens = await this.listTokens();
     const chainEnum = CHAIN_ENUM[a.chain.toUpperCase()];
     const ourToken = chainEnum ? TOKENS[chainEnum]?.[symbol] : null;
