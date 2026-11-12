@@ -5,7 +5,7 @@
 
 import { parseAsset, type AssetKey, type ParsedAsset } from '../lib/assets';
 import { nearIntents } from './nearintents.service';
-import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE } from '../lib/flags';
+import { PAYSTACK_ENABLED, BACHS_ENABLED, NAIRA_ENABLED, NAIRA_DISABLED_MESSAGE, stellarAnonymousDepositsEnabled } from '../lib/flags';
 
 export type Provider = 'paycrest' | 'chainrails' | 'nearintents' | 'lifi' | 'stellar_simulator' | 'stellar_anchor' | 'stellar' | 'direct' | 'paystack' | 'bachs';
 
@@ -181,7 +181,21 @@ const EDGES: Edge[] = [
 export function planRoute(req: RouteRequest): RoutePlan {
   const src = parseAsset(req.sourceAsset);
   const dst = parseAsset(req.destAsset);
-  const flow: Flow = req.flow ?? 'external';
+  const declaredFlow: Flow = req.flow ?? 'external';
+
+  // Anonymous Stellar USDC payer → fiat: NEAR can't take Stellar as an origin and
+  // LI.FI needs a named signer, so collect on the Weave treasury (address + memo)
+  // and let the treasury bridge settle onward. Crypto destinations are excluded:
+  // the bridge only forwards to Paycrest today, so planning one would collect
+  // money and never deliver it.
+  const flow: Flow =
+    declaredFlow === 'external' &&
+    stellarAnonymousDepositsEnabled() &&
+    !req.sourceWallet &&
+    src.kind === 'crypto' && src.chain === 'STELLAR' && src.token === 'USDC' &&
+    dst.kind === 'fiat'
+      ? 'stellar'
+      : declaredFlow;
 
   // Naira kill switch. A pure NGN→NGN collection is the "pay with naira" path
   // (Bachs today, Paystack historically). If EVERY naira corridor is disabled we

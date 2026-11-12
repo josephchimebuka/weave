@@ -17,6 +17,9 @@ import {
   Address, Contract, Keypair, TransactionBuilder, nativeToScVal, scValToNative, rpc, BASE_FEE,
 } from '@stellar/stellar-sdk';
 import { parseAsset } from '../lib/assets';
+import { getTreasuryPublicKey, isTreasuryBridgeEnabled } from './stellar.service';
+import { stellarBridgeHopCount } from '../lib/offramp-estimate';
+import type { RoutePlan } from './router.service';
 import { Networks } from '@stellar/stellar-sdk';
 
 const LIFI_API_URL = (process.env.LIFI_API_URL || 'https://li.quest/v1').replace(/\/$/, '');
@@ -95,6 +98,31 @@ function humanizeLifiReason(reason: string): string {
 }
 
 // ── Client ──────────────────────────────────────────────────────────────────
+
+// ── Stellar → Base cost estimate (for quotes and order sizing) ───────────────
+// The cost of the Stellar USDC → Base USDC hop is NOT a constant: from about $2 up
+// LI.FI routes over Circle CCTP at a flat 0.25%, but a sub-$2 amount goes over
+// Layerswap, which is fast and costs ~7.9% at $0.80. A flat figure is right for one
+// and wrong for the other, so we ask LI.FI for the actual route estimate.
+
+export interface StellarBridgeEstimate {
+  /** USD lost to the hop (amount in − amount that arrives). */
+  feeUsd: number;
+  /** Expected USDC arriving on Base. */
+  arrivalUsd: number;
+  /** Worst case after LI.FI's slippage — what an order should be sized to. */
+  arrivalMinUsd: number;
+  source: 'live' | 'fallback';
+}
+
+const BRIDGE_EST_TTL_MS = 60_000;
+
+/** Conservative fallback if LI.FI can't be reached: CCTP's 0.25%, plus a fixed cost for tiny sizes. */
+export function fallbackStellarBridgeEstimate(amountUsd: number): StellarBridgeEstimate {
+  const feeUsd = amountUsd * 0.0025 + (amountUsd < 2 ? 0.07 : 0);
+  const arrivalUsd = Math.max(0, amountUsd - feeUsd);
+  return { feeUsd, arrivalUsd, arrivalMinUsd: arrivalUsd * 0.995, source: 'fallback' };
+}
 
 export class LifiService {
   private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
@@ -222,6 +250,61 @@ export class LifiService {
   /** Hash of a signed/unsigned Stellar tx envelope (for correlating a wallet's submission). */
   static txHashFromXdr(envelopeXdr: string): string {
     return Buffer.from(TransactionBuilder.fromXDR(envelopeXdr, Networks.PUBLIC).hash()).toString('hex');
+  }
+
+  private bridgeEstCache    = new Map<string, { at: number; est: StellarBridgeEstimate }>();
+  private bridgeEstInflight = new Map<string, Promise<StellarBridgeEstimate>>();
+
+  private async fetchStellarBridgeEstimate(amountUsd: number): Promise<StellarBridgeEstimate> {
+    const to = lifiAsset('crypto:BASE:USDC');
+    const route = await this.getRoute({
+      fromAssetKey: 'crypto:STELLAR:USDC',
+      toAssetKey: 'crypto:BASE:USDC',
+      amount: amountUsd,
+      fromAddress: getTreasuryPublicKey(),
+      toAddress: process.env.WEAVE_EVM_REFUND_ADDRESS || '0x742d35cc6634c0532925a3b844bc454e4438f44e',
+    });
+    const est = route.steps[0]?.estimate as { toAmount?: string; toAmountMin?: string } | undefined;
+    if (!est?.toAmount) throw new Error('LI.FI route has no estimate');
+    const scale = 10 ** to.decimals;
+    const arrivalUsd = Number(est.toAmount) / scale;
+    const arrivalMinUsd = Number(est.toAmountMin ?? est.toAmount) / scale;
+    return { feeUsd: Math.max(0, amountUsd - arrivalUsd), arrivalUsd, arrivalMinUsd, source: 'live' };
+  }
+
+  /** Live estimate of the Stellar → Base hop. Cached 60s per amount (cents). Never throws. */
+  async estimateStellarBridge(amountUsd: number): Promise<StellarBridgeEstimate> {
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) return fallbackStellarBridgeEstimate(0);
+    const key = amountUsd.toFixed(2);
+    const hit = this.bridgeEstCache.get(key);
+    if (hit && Date.now() - hit.at < BRIDGE_EST_TTL_MS) return hit.est;
+    const pending = this.bridgeEstInflight.get(key);
+    if (pending) return pending;
+
+    const p = this.fetchStellarBridgeEstimate(amountUsd)
+      .catch((err: Error) => {
+        console.warn(`[lifi] Stellar bridge estimate failed (${err.message}); using fallback`);
+        return fallbackStellarBridgeEstimate(amountUsd);
+      })
+      .then(est => {
+        // Don't cache a fallback: retry LI.FI on the next call.
+        if (est.source === 'live') this.bridgeEstCache.set(key, { at: Date.now(), est });
+        return est;
+      })
+      .finally(() => this.bridgeEstInflight.delete(key));
+    this.bridgeEstInflight.set(key, p);
+    return p;
+  }
+
+  /**
+   * The Stellar-bridge fee to price into a plan's quote, or undefined when the plan has
+   * no such hop (or it's a sandbox / bridge-off order, where nothing is bridged for real
+   * and the estimator's default applies).
+   */
+  async stellarBridgeFeeForPlan(plan: RoutePlan, usdEquivalent: number, opts: { sandbox?: boolean } = {}): Promise<number | undefined> {
+    if (opts.sandbox || stellarBridgeHopCount(plan) === 0) return undefined;
+    if (!isTreasuryBridgeEnabled() && !plan.steps.some(s => s.provider === 'lifi')) return undefined;
+    return (await this.estimateStellarBridge(usdEquivalent)).feeUsd;
   }
 
   /** Utility for tests: a throwaway keypair. */

@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { parseAsset } from '../lib/assets';
+import type { RoutePlan } from './router.service';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,6 +85,33 @@ interface RateCacheEntry { data: PCRate; fetchedAt: number; revalidating: Promis
 const rateCache = new Map<string, RateCacheEntry>();
 const RATE_FRESH_MS     = Number(process.env.PAYCREST_RATE_FRESH_MS     ?? 10_000);
 const RATE_MAX_STALE_MS = Number(process.env.PAYCREST_RATE_MAX_STALE_MS ?? 60_000);
+
+// ── Protocol transaction fee ─────────────────────────────────────────────────
+//
+// Paycrest's per-order `transactionFee` is set by the Paycrest PROTOCOL, not by us: a
+// response-only field that "covers all network costs", differing per token and
+// network (USDC on Base: 0.02; cNGN on BNB Chain: ₦55; Paycrest's docs show 0.1 for
+// USDC on Solana). Nothing publishes it ahead of an order — not /rates, /currencies,
+// /tokens or /markets — so it can't be configured, and a hard-coded figure would
+// silently go stale the day the protocol changes it. What we CAN read is what Paycrest
+// actually charged on our most recent orders for the same token and network, so
+// quotes follow it. Cached briefly, stale value served if Paycrest can't be reached,
+// `known: false` (never a guess) when no matching order has been seen.
+
+export interface PaycrestFee {
+  /** In USD. 0 when unknown. */
+  feeUsd: number;
+  known: boolean;
+  /** createdAt of the Paycrest order the figure was read from. */
+  observedAt?: string;
+}
+
+// The fee is in the order's token units; only USD stablecoins convert 1:1 to USD.
+const USD_STABLES = new Set(['USDC', 'USDT']);
+const FEE_FRESH_MS = 5 * 60_000;
+const FEE_MAX_STALE_MS = 24 * 60 * 60_000;
+const FEE_PAGE_SIZE = 50;
+const UNKNOWN_FEE: PaycrestFee = { feeUsd: 0, known: false };
 
 // ── Service ──────────────────────────────────────────────────────────────────
 
@@ -219,6 +248,73 @@ export class PaycrestService {
   /** GET /v2/sender/orders/{id} */
   async getOrder(orderId: string): Promise<PCOrder> {
     return this.request<PCOrder>('GET', `/sender/orders/${orderId}`);
+  }
+
+  /** GET /v2/sender/orders — our own orders, as Paycrest recorded them (fees included). */
+  async listOrders(params: { page?: number; pageSize?: number } = {}): Promise<{ total: number; orders: PCOrder[] }> {
+    const qs = new URLSearchParams({ page: String(params.page ?? 1), pageSize: String(params.pageSize ?? 50) });
+    return this.request<{ total: number; orders: PCOrder[] }>('GET', `/sender/orders?${qs}`);
+  }
+
+  private feeCache = new Map<string, { at: number; fee: PaycrestFee }>();
+  private feeInflight = new Map<string, Promise<PaycrestFee>>();
+
+  private async readTransactionFee(network: string, token: string, direction: 'offramp' | 'onramp'): Promise<PaycrestFee> {
+    const { orders } = await this.listOrders({ pageSize: FEE_PAGE_SIZE });
+    let best: { createdAt: string; fee: number } | null = null;
+    for (const o of (orders ?? []) as any[]) {
+      if (o?.direction !== direction) continue;
+      // Offramp orders are sourced from the crypto; onramp orders pay out to it.
+      const side = direction === 'offramp' ? o.source : o.destination?.recipient ?? o.destination;
+      const tokenOk = String(side?.currency ?? o.token ?? '').toUpperCase() === token.toUpperCase();
+      const netOk = String(side?.network ?? o.network ?? '').toLowerCase() === network.toLowerCase();
+      if (!tokenOk || !netOk) continue;
+      const fee = Number(o.transactionFee);
+      if (!Number.isFinite(fee) || fee < 0 || !o.createdAt) continue;
+      if (!best || new Date(o.createdAt).getTime() > new Date(best.createdAt).getTime()) best = { createdAt: o.createdAt, fee };
+    }
+    return best ? { feeUsd: best.fee, known: true, observedAt: best.createdAt } : UNKNOWN_FEE;
+  }
+
+  /** Latest transactionFee Paycrest charged for this token + network + direction, in USD. Never throws. */
+  async transactionFee(opts: { network?: string; token?: string; direction?: 'offramp' | 'onramp' } = {}): Promise<PaycrestFee> {
+    const network = (opts.network ?? 'base').toLowerCase();
+    const token = (opts.token ?? 'USDC').toUpperCase();
+    const direction = opts.direction ?? 'offramp';
+    if (!USD_STABLES.has(token)) return UNKNOWN_FEE; // fee units aren't USD
+
+    const key = `${direction}:${network}:${token}`;
+    const hit = this.feeCache.get(key);
+    if (hit && Date.now() - hit.at < FEE_FRESH_MS) return hit.fee;
+    const pending = this.feeInflight.get(key);
+    if (pending) return pending;
+
+    const p = this.readTransactionFee(network, token, direction)
+      .then(fee => {
+        if (fee.known) this.feeCache.set(key, { at: Date.now(), fee });
+        return fee.known || !hit ? fee : hit.fee; // nothing new seen: keep what we had
+      })
+      .catch((err: Error) => {
+        console.warn(`[paycrest] could not read the transaction fee (${err.message})`);
+        return hit && Date.now() - hit.at < FEE_MAX_STALE_MS ? hit.fee : UNKNOWN_FEE;
+      })
+      .finally(() => this.feeInflight.delete(key));
+    this.feeInflight.set(key, p);
+    return p;
+  }
+
+  /**
+   * The Paycrest fee to price into a plan's quote: that of the plan's crypto → fiat
+   * Paycrest hop, or undefined when it has none (or it's a sandbox order, which never
+   * reaches Paycrest).
+   */
+  async feeForPlan(plan: RoutePlan, opts: { sandbox?: boolean } = {}): Promise<PaycrestFee | undefined> {
+    if (opts.sandbox) return undefined;
+    const step = plan.steps.find(s => s.provider === 'paycrest' && s.fromAsset.startsWith('crypto:') && s.toAsset.startsWith('fiat:'));
+    if (!step) return undefined;
+    const from = parseAsset(step.fromAsset);
+    if (from.kind !== 'crypto') return undefined;
+    return this.transactionFee({ network: from.chain, token: from.token, direction: 'offramp' });
   }
   
   /** POST /v2/verify-account */

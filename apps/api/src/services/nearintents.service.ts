@@ -10,6 +10,7 @@
 
 import { parseAsset } from '../lib/assets';
 import { CHAIN_ENUM, TOKENS } from '../lib/registry';
+import type { RoutePlan } from './router.service';
 import { toSmallestUnit } from '../lib/units';
 
 // ── Chain mapping ───────────────────────────────────────────────────────────
@@ -168,6 +169,26 @@ export interface NearStatusResponse {
 
 export { toSmallestUnit };
 
+// ── Live hop cost (for quotes) ───────────────────────────────────────────────
+// The quote used to assume a flat 2% (SLIPPAGE_BUFFER_BPS) for the NEAR hop. Real
+// settlements disagree in both directions, so source-anchored quotes — where the
+// merchant is paid on what actually arrives — price the hop from a dry 1Click quote.
+// Where that isn't possible (no sample address for the chain, 1Click declines the
+// amount) the caller keeps the flat buffer, so nothing gets less safe.
+//
+// A dry quote still validates address formats. These are well-formed public addresses
+// used only as placeholders on dry quotes — nothing is ever sent to them.
+const EVM_SAMPLE = '0x742d35cc6634c0532925a3b844bc454e4438f44e';
+const SAMPLE_ADDRESS: Record<string, string> = {
+  ETHEREUM: EVM_SAMPLE, BASE: EVM_SAMPLE, ARBITRUM: EVM_SAMPLE, OPTIMISM: EVM_SAMPLE,
+  POLYGON: EVM_SAMPLE, BSC: EVM_SAMPLE, AVALANCHE: EVM_SAMPLE, GNOSIS: EVM_SAMPLE,
+  SCROLL: EVM_SAMPLE, BERA: EVM_SAMPLE, MONAD: EVM_SAMPLE, XLAYER: EVM_SAMPLE,
+  SOLANA: 'So11111111111111111111111111111111111111112',
+  NEAR: 'wrap.near',
+};
+const HOP_COST_TTL_MS = 60_000;
+const HOP_COST_NEGATIVE_TTL_MS = 15_000;
+
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class NearIntentsService {
@@ -305,6 +326,61 @@ export class NearIntentsService {
     nearSenderAccount?: string;
   }) {
     return this.request<NearStatusResponse>('POST', '/deposit/submit', params);
+  }
+
+  private hopCostCache    = new Map<string, { at: number; bps: number | undefined }>();
+  private hopCostInflight = new Map<string, Promise<number | undefined>>();
+
+  /** Cost of the hop (origin → USDC on Base) in bps of the input, or undefined if it can't be priced live. Never throws. */
+  async estimateHopCostBps(sourceAssetKey: string, usd: number): Promise<number | undefined> {
+    const a = parseAsset(sourceAssetKey);
+    if (a.kind !== 'crypto' || !Number.isFinite(usd) || usd <= 0) return undefined;
+    const refundTo = SAMPLE_ADDRESS[a.chain.toUpperCase()];
+    if (!refundTo) return undefined;
+
+    const key = `${sourceAssetKey}:${usd.toFixed(2)}`;
+    const hit = this.hopCostCache.get(key);
+    if (hit && Date.now() - hit.at < (hit.bps === undefined ? HOP_COST_NEGATIVE_TTL_MS : HOP_COST_TTL_MS)) return hit.bps;
+    const pending = this.hopCostInflight.get(key);
+    if (pending) return pending;
+
+    const p = (async () => {
+      try {
+        const token = await this.resolveToken(sourceAssetKey);
+        if (!(token.price > 0)) return undefined;
+        const resp = await this.createQuote({
+          sourceAssetKey,
+          destAssetKey: 'crypto:BASE:USDC',
+          amount: usd / token.price,
+          swapType: 'EXACT_INPUT',
+          refundTo,
+          recipient: EVM_SAMPLE,
+          dry: true,
+        });
+        const inUsd = Number(resp.quote.amountInUsd);
+        const outUsd = Number(resp.quote.amountOutUsd);
+        if (!(inUsd > 0) || !Number.isFinite(outUsd)) return undefined;
+        return Math.max(0, ((inUsd - outUsd) / inUsd) * 10000);
+      } catch (err: any) {
+        console.warn(`[nearintents] hop cost ${sourceAssetKey} @ $${usd.toFixed(2)}: ${String(err.message).slice(0, 120)}; keeping flat buffer`);
+        return undefined;
+      }
+    })()
+      .then(bps => { this.hopCostCache.set(key, { at: Date.now(), bps }); return bps; })
+      .finally(() => this.hopCostInflight.delete(key));
+    this.hopCostInflight.set(key, p);
+    return p;
+  }
+
+  /**
+   * Live hop cost (bps) for a crypto → Base-USDC NEAR step in this plan, or undefined
+   * when the plan has none / it's sandbox / it can't be priced live.
+   */
+  async costBpsForPlan(plan: RoutePlan, usd: number, opts: { sandbox?: boolean } = {}): Promise<number | undefined> {
+    if (opts.sandbox) return undefined;
+    const step = plan.steps.find(s => s.provider === 'nearintents' && s.toAsset === 'crypto:BASE:USDC');
+    if (!step) return undefined;
+    return this.estimateHopCostBps(step.fromAsset, usd);
   }
 
   /** Does NEAR Intents support this asset (chain + token)? */

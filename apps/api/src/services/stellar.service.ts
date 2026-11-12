@@ -32,6 +32,12 @@ export function getStellarNetwork(): StellarNetwork {
   return n === 'mainnet' ? 'mainnet' : 'testnet';
 }
 
+/** The treasury → Base bridge runs only with a signing key and the kill switch not thrown. */
+export function isTreasuryBridgeEnabled(): boolean {
+  if (process.env.STELLAR_TREASURY_BRIDGE_ENABLED === 'false') return false;
+  return Boolean(process.env.WEAVE_STELLAR_SECRET_KEY);
+}
+
 export function isStellarEnabled(): boolean {
   return Boolean(process.env.WEAVE_STELLAR_PUBLIC_KEY);
 }
@@ -84,47 +90,111 @@ export interface StellarPaymentMatch {
   memo: string;
 }
 
-/** Poll Horizon for an incoming USDC payment to treasury matching memo + amount. */
-export async function findMatchingPayment(params: {
+/** One USDC payment into the treasury that carried an order's memo. */
+export interface StellarPaymentPart {
+  txHash: string;
+  opId: string;
+  amount: number;
+  from: string;
+  createdAt: string;
+}
+
+export interface MemoInspection {
+  /** none: nothing seen · underpaid: some, but below the threshold · matched: at/above it. */
+  status: 'none' | 'underpaid' | 'matched';
+  /** Sum of every distinct USDC payment carrying the memo (top-ups accumulate). */
+  total: number;
+  expected: number;
+  /** Threshold `total` must reach (expected × minFraction). */
+  minAmount: number;
+  /** Newest first. */
+  payments: StellarPaymentPart[];
+  /** The page cap was hit before the scan reached `since`: older payments may be unseen. */
+  truncated: boolean;
+}
+
+const TX_PAGE_SIZE = 200;
+// Treasury history is scanned back to the order's creation (minus slack for clock
+// skew between us and Horizon). The page cap bounds work on a very busy treasury.
+const SINCE_SLACK_MS = 10 * 60 * 1000;
+const DEFAULT_MAX_PAGES = 5;
+
+/**
+ * Everything the treasury has received for one order memo.
+ *
+ * Unlike the old "latest 30 transactions" scan this walks back to `since`, so a
+ * payment cannot be missed just because the treasury got busy; and it SUMS
+ * payments with the memo, so a payer who tops up a short transfer (or an
+ * exchange that splits one) is credited for the total instead of being ignored.
+ */
+export async function inspectMemoPayments(params: {
   memo: string;
   expectedAmount: number;
-  /** Accept payments at least this fraction of expected (default 99.5%). */
+  /** Accept a total of at least this fraction of expected (default 99.5%). */
   minFraction?: number;
-  lookbackTxs?: number;
-}): Promise<StellarPaymentMatch | null> {
+  /** Stop scanning at transactions older than this (order creation time). */
+  since?: Date | string | null;
+  maxPages?: number;
+}): Promise<MemoInspection> {
   const treasury = getTreasuryPublicKey();
   const server = getServer();
   const issuer = getUsdcIssuer();
-  const minFraction = params.minFraction ?? 0.995;
-  const minAmount = params.expectedAmount * minFraction;
+  const minAmount = params.expectedAmount * (params.minFraction ?? 0.995);
+  const maxPages = params.maxPages ?? DEFAULT_MAX_PAGES;
+  const sinceMs = params.since ? new Date(params.since).getTime() - SINCE_SLACK_MS : null;
 
-  const txs = await server
-    .transactions()
-    .forAccount(treasury)
-    .order('desc')
-    .limit(params.lookbackTxs ?? 30)
-    .call();
+  const payments: StellarPaymentPart[] = [];
+  const seen = new Set<string>();
+  let truncated = false;
 
-  for (const tx of txs.records) {
-    const memo = txMemo(tx);
-    if (memo !== params.memo) continue;
+  let page = await server.transactions().forAccount(treasury).order('desc').limit(TX_PAGE_SIZE).call();
+  for (let pageNo = 1; ; pageNo++) {
+    let reachedSince = false;
+    for (const tx of page.records) {
+      // Newest first, so the first transaction older than the window ends the scan.
+      if (sinceMs != null && new Date(tx.created_at).getTime() < sinceMs) { reachedSince = true; break; }
+      if (txMemo(tx) !== params.memo) continue;
 
-    const ops = await server.operations().forTransaction(tx.hash).call();
-    for (const op of ops.records) {
-      if (op.type !== 'payment') continue;
-      const p = op as Horizon.ServerApi.PaymentOperationRecord;
-      if (p.asset_type !== 'credit_alphanum4' && p.asset_type !== 'credit_alphanum12') continue;
-      if (p.asset_code !== 'USDC' || p.asset_issuer !== issuer) continue;
-      if (p.to !== treasury) continue;
-
-      const amount = Number(p.amount);
-      if (!Number.isFinite(amount) || amount < minAmount) continue;
-
-      return { txHash: tx.hash, amount, from: p.from, memo };
+      const ops = await server.operations().forTransaction(tx.hash).limit(200).call();
+      for (const op of ops.records) {
+        if (op.type !== 'payment') continue;
+        const p = op as Horizon.ServerApi.PaymentOperationRecord;
+        if (p.asset_type !== 'credit_alphanum4' && p.asset_type !== 'credit_alphanum12') continue;
+        if (p.asset_code !== 'USDC' || p.asset_issuer !== issuer) continue;
+        if (p.to !== treasury) continue;
+        const amount = Number(p.amount);
+        if (!Number.isFinite(amount) || amount <= 0) continue;
+        const key = `${tx.hash}:${p.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        payments.push({ txHash: tx.hash, opId: String(p.id), amount, from: p.from, createdAt: tx.created_at });
+      }
     }
+    if (reachedSince || page.records.length < TX_PAGE_SIZE) break;
+    if (pageNo >= maxPages) { truncated = true; break; }
+    page = await page.next();
   }
 
-  return null;
+  const total = payments.reduce((sum, p) => sum + p.amount, 0);
+  const status: MemoInspection['status'] =
+    total >= minAmount && total > 0 ? 'matched' : total > 0 ? 'underpaid' : 'none';
+  return { status, total, expected: params.expectedAmount, minAmount, payments, truncated };
+}
+
+/**
+ * The payment that satisfies an order, or null. `amount` is the total received
+ * for the memo; `txHash` is the newest payment (the one that completed it).
+ */
+export async function findMatchingPayment(params: {
+  memo: string;
+  expectedAmount: number;
+  minFraction?: number;
+  since?: Date | string | null;
+}): Promise<StellarPaymentMatch | null> {
+  const r = await inspectMemoPayments(params);
+  if (r.status !== 'matched') return null;
+  const latest = r.payments[0];
+  return { txHash: latest.txHash, amount: r.total, from: latest.from, memo: params.memo };
 }
 
 function txMemo(tx: Horizon.ServerApi.TransactionRecord): string | null {
@@ -214,8 +284,19 @@ export async function publicConfigWithTreasuryStatus() {
   };
 }
 
-const STELLAR_POLL_DELAY_S = Math.round(Number(process.env.STELLAR_POLL_INTERVAL_MS ?? 10_000) / 1000);
-const STELLAR_POLL_MAX_ATTEMPTS = 180; // ~30 min at 10s
+const STELLAR_POLL_DELAY_S = Math.max(1, Math.round(Number(process.env.STELLAR_POLL_INTERVAL_MS ?? 10_000) / 1000));
+
+/**
+ * How long a treasury deposit address stays open for payment. 30 min suits a
+ * wallet; an exchange withdrawal can take longer, so it is configurable
+ * (5 min – 24 h). The poll window below is derived from it so the order never
+ * expires while nothing is still watching for the payment.
+ */
+export function stellarDepositTtlMinutes(): number {
+  const n = Number(process.env.STELLAR_DEPOSIT_TTL_MINUTES ?? 30);
+  return Number.isFinite(n) && n >= 5 && n <= 24 * 60 ? n : 30;
+}
+const STELLAR_POLL_MAX_ATTEMPTS = Math.ceil((stellarDepositTtlMinutes() * 60) / STELLAR_POLL_DELAY_S) + 6;
 
 export async function scheduleStellarPoll(params: {
   orderId: string;

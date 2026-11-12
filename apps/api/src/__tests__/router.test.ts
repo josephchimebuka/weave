@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('../services/nearintents.service', () => ({
   nearIntents: {
@@ -70,6 +70,60 @@ describe('planRoute', () => {
   it('other origins still route through nearintents (Solana → NGN)', () => {
     const plan = planRoute({ sourceAsset: 'crypto:SOLANA:USDC', destAsset: 'fiat:NGN', amount: 50 });
     expect(plan.steps.map(s => s.provider)).toEqual(['nearintents', 'paycrest']);
+  });
+
+  // ── Anonymous Stellar deposits (treasury collection fallback) ───────────────
+
+  describe('STELLAR_ANONYMOUS_DEPOSITS_ENABLED', () => {
+    const prev = process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED;
+    afterEach(() => {
+      if (prev === undefined) delete process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED;
+      else process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED = prev;
+    });
+
+    it('off (default): anonymous Stellar USDC → NGN is still refused', () => {
+      delete process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED;
+      expect(() =>
+        planRoute({ sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50 }),
+      ).toThrow(/isn't available/);
+    });
+
+    it('on: anonymous Stellar USDC → NGN collects on the treasury, then paycrest', () => {
+      process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED = 'true';
+      const plan = planRoute({ sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50 });
+      expect(plan.steps.map(s => s.provider)).toEqual(['stellar', 'paycrest']);
+      expect(plan.steps[0].toAsset).toBe('crypto:BASE:USDC');
+      expect(plan.steps[1].toAsset).toBe('fiat:NGN');
+    });
+
+    it('on: a named payer still takes lifi, not the treasury fallback', () => {
+      process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED = 'true';
+      const plan = planRoute({
+        sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'fiat:NGN', amount: 50,
+        sourceWallet: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+      });
+      expect(plan.steps[0].provider).toBe('lifi');
+    });
+
+    it('on: crypto destinations are NOT planned (the bridge only forwards to paycrest)', () => {
+      process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED = 'true';
+      expect(() =>
+        planRoute({ sourceAsset: 'crypto:STELLAR:USDC', destAsset: 'crypto:BASE:USDC', amount: 50 }),
+      ).toThrow(/isn't available/);
+    });
+
+    it('on: XLM is still refused (the treasury only takes classic USDC)', () => {
+      process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED = 'true';
+      expect(() =>
+        planRoute({ sourceAsset: 'crypto:STELLAR:XLM', destAsset: 'fiat:NGN', amount: 500 }),
+      ).toThrow(/isn't available/);
+    });
+
+    it('on: other origins are unaffected (Solana still goes through nearintents)', () => {
+      process.env.STELLAR_ANONYMOUS_DEPOSITS_ENABLED = 'true';
+      const plan = planRoute({ sourceAsset: 'crypto:SOLANA:USDC', destAsset: 'fiat:NGN', amount: 50 });
+      expect(plan.steps.map(s => s.provider)).toEqual(['nearintents', 'paycrest']);
+    });
   });
 
   it('USDC(Base) → USDC(Stellar): single nearintents hop', () => {
