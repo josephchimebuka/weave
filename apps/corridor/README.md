@@ -11,6 +11,12 @@
 | **Wallets, identity & Bolivian ramp** | [Pollar](https://pollar.xyz) — `@pollar/react` / `@pollar/core` |
 | **Network** | Stellar (testnet in the demo; the Nigerian leg is live on mainnet) |
 
+> **This repository is a generated mirror.** Corridor is developed in the
+> private Weave monorepo at `apps/corridor`, and published here by
+> `scripts/publish-corridor.sh`, which force-pushes a `git subtree split` of
+> that directory. Commits made directly to this repository are overwritten by
+> the next publish run — make changes in the monorepo instead.
+
 Corridor is the African leg of an Africa ↔ Latin America corridor on Stellar,
 built for the Pollar hackathon. It connects African bank accounts — Nigeria
 today; Kenya, Uganda and Tanzania on the same rail, a switch away — to
@@ -284,6 +290,11 @@ variables as above (with the production origin on the Pollar app), and the
 Weave key of the environment you want the app to start on. Nothing else is
 needed: the Weave API and the Stellar anchor are hosted by Weave at
 `api.paywithweave.com`.
+
+Because this repository is a mirror, a corridor change ships in two steps:
+commit it in the monorepo, then publish with
+`scripts/publish-corridor.sh <this-repo-remote>` to update this repository —
+that push is what triggers the Vercel build.
 
 ## Demo script (3 minutes, testnet)
 
